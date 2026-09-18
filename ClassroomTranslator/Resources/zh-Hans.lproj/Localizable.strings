@@ -91,3 +91,4 @@
 /* 错误 */
 "Invalid audio format" = "音频格式无效";
 "Failed to create recognition request" = "创建识别请求失败";
+"Failed to start the audio engine" = "音频引擎启动失败";

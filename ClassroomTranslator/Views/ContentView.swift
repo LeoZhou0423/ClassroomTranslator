@@ -172,7 +172,7 @@ struct ContentView: View {
                 statusMessage = String(localized: "Starting recording…")
                 let started = await runStep(timeoutSeconds: 20, timeoutMessage: String(localized: "Recording took too long to start. Another app may be using the microphone. Stop it and try again.")) {
                     do {
-                        try speechManager.startRecording()
+                        try await speechManager.startRecording()
                         return true
                     } catch {
                         return false
