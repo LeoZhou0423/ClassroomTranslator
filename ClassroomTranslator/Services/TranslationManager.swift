@@ -58,6 +58,8 @@ final class TranslationManager {
 
     /// 查询翻译模型是否就绪。未就绪时系统会弹出下载授权框（含进度条），
     /// 点同意后在后台继续下载。
+    /// 注：本 SDK 的 TranslationSession 没有 isReady，只能用
+    /// prepareTranslation 是否直接通过来判断（已安装则静默返回）。
     func refreshModelStatus() async {
         #if canImport(Translation)
         if #available(macOS 15, *) {
@@ -65,7 +67,12 @@ final class TranslationManager {
                 modelReady = false
                 return
             }
-            modelReady = await session.isReady
+            do {
+                try await session.prepareTranslation()
+                modelReady = true
+            } catch {
+                modelReady = false
+            }
             return
         }
         #endif
@@ -80,9 +87,8 @@ final class TranslationManager {
             guard let session = sessionStorage as? TranslationSession else { return false }
             do {
                 try await session.prepareTranslation()
-                let ready = await session.isReady
-                modelReady = ready
-                return ready
+                modelReady = true
+                return true
             } catch {
                 print("Model download failed or cancelled: \(error)")
                 modelReady = false

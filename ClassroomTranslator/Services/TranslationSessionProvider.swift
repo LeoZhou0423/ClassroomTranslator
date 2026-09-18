@@ -15,7 +15,7 @@ struct TranslationSessionInjector: ViewModifier {
 
     func body(content: Content) -> some View {
         content.translationTask(configuration) { session in
-            await manager.attach(session: session)
+            manager.attach(session: session)
         }
     }
 }
