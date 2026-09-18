@@ -1,0 +1,67 @@
+name: Build macOS App
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Swift
+      uses: swift-actions/setup-swift@v2
+      
+    - name: Build Release
+      run: swift build -c release
+      
+    - name: Create App Bundle Structure
+      run: |
+        mkdir -p ClassroomTranslator.app/Contents/MacOS
+        mkdir -p ClassroomTranslator.app/Contents/Resources
+        cp .build/release/ClassroomTranslator ClassroomTranslator.app/Contents/MacOS/
+        
+    - name: Create Info.plist
+      run: |
+        cat > ClassroomTranslator.app/Contents/Info.plist << 'EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>CFBundleName</key>
+            <string>ClassroomTranslator</string>
+            <key>CFBundleDisplayName</key>
+            <string>Classroom Translator</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.classroom.translator</string>
+            <key>CFBundleVersion</key>
+            <string>1.0.0</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0.0</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleExecutable</key>
+            <string>ClassroomTranslator</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>14.0</string>
+            <key>NSMicrophoneUsageDescription</key>
+            <string>Classroom Translator needs microphone access to recognize speech.</string>
+            <key>NSSpeechRecognitionUsageDescription</key>
+            <string>Classroom Translator uses speech recognition to transcribe lectures.</string>
+        </dict>
+        </plist>
+        EOF
+        
+    - name: Create DMG
+      run: hdiutil create -volname "ClassroomTranslator" -srcfolder ClassroomTranslator.app -ov -format UDZO ClassroomTranslator.dmg
+        
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ClassroomTranslator-macOS
+        path: ClassroomTranslator.dmg
+        retention-days: 30
