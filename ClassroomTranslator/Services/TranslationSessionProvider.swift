@@ -7,11 +7,19 @@ import Translation
 /// 这是唯一合法的获取方式。
 @available(macOS 15, *)
 struct TranslationSessionInjector: ViewModifier {
-    @State private var configuration = TranslationSession.Configuration(
-        source: Locale.Language(languageCode: .english),
-        target: Locale.Language(languageCode: .chinese)
-    )
+    // 跟随用户在设置里的选择：只申请当前需要的一对语言，
+    // 系统只下载这一对的模型；换目标语言时 configuration 变化，
+    // translationTask 会重新下发 session（只下新需要的那一对）
+    @AppStorage("recognitionLanguage") private var recognitionLanguage = "en-GB"
+    @AppStorage("translationTarget") private var translationTarget = "zh-Hans"
     let manager: TranslationManager
+
+    private var configuration: TranslationSession.Configuration {
+        TranslationSession.Configuration(
+            source: Locale.Language(identifier: recognitionLanguage),
+            target: Locale.Language(identifier: translationTarget)
+        )
+    }
 
     func body(content: Content) -> some View {
         content.translationTask(configuration) { session in
