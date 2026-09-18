@@ -25,6 +25,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showHistory) { HistoryView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .modifier(TranslationSessionCompat(manager: translationManager))
     }
     
     private var headerBar: some View {

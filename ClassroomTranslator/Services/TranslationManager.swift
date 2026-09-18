@@ -9,6 +9,18 @@ final class TranslationManager {
     var translatedText = ""
     var isTranslating = false
 
+    /// 由 SwiftUI `.translationTask` 注入的 TranslationSession。
+    /// TranslationSession 没有公开初始化器，只能由系统提供；
+    /// 用 Any 存放以保证 macOS 14 SDK 下也能编译。
+    private var sessionStorage: Any?
+
+    #if canImport(Translation)
+    @available(macOS 15, *)
+    func attach(session: TranslationSession) {
+        sessionStorage = session
+    }
+    #endif
+
     func translate(_ text: String) async -> String {
         guard !text.isEmpty else { return "" }
 
@@ -16,23 +28,20 @@ final class TranslationManager {
         defer { isTranslating = false }
 
         #if canImport(Translation)
-        if #available(macOS 15.0, *) {
-            do {
-                let source = Locale.Language(languageCode: .english)
-                let target = Locale.Language(languageCode: .chinese)
-                // init(installedSource:target:) 不弹下载框，只用已安装模型；
-                // 需要下载模型的场景请走 SwiftUI .translationTask 拿到的 session
-                let session = TranslationSession(installedSource: source, target: target)
-                let response = try await session.translate(text)
-                return response.targetText
-            } catch {
-                print("Translation failed: \(error)")
-                return text
+        if #available(macOS 15, *) {
+            if let session = sessionStorage as? TranslationSession {
+                do {
+                    let response = try await session.translate(text)
+                    return response.targetText
+                } catch {
+                    print("Translation failed: \(error)")
+                    return text
+                }
             }
         }
         #endif
 
-        // macOS 14 / 无 Translation 框架时的降级：原样返回，保证编译通过
+        // 无可用 session（macOS 14 / 模型未就绪）：原样返回
         return text
     }
 
