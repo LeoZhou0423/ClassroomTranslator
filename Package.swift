@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "ClassroomTranslator",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v14)
     ],
