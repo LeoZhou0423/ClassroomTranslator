@@ -33,11 +33,11 @@ final class TranscriptRecord {
     }
 
     var fullTranscript: String {
-        segments.map { .original }.joined(separator: " ")
+        segments.map { $0.original }.joined(separator: " ")
     }
 
     var fullTranslation: String {
-        segments.map { .translated }.joined(separator: " ")
+        segments.map { $0.translated }.joined(separator: " ")
     }
 
     var bilingualTranscript: String {

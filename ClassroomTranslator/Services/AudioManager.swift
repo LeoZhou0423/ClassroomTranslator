@@ -8,8 +8,6 @@ final class AudioManager {
     var selectedDevice: AudioDevice?
     var inputLevel: Float = 0
     
-    private var audioManager: AVAudioManager?
-    
     struct AudioDevice: Identifiable, Hashable {
         let id: String
         let name: String
@@ -32,11 +30,5 @@ final class AudioManager {
         inputDevices = [
             AudioDevice(id: "default", name: "Default Microphone", isBuiltIn: true)
         ]
-    }
-    
-    func setupAudioSession() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement, options: .defaultToBuiltInMic)
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
     }
 }

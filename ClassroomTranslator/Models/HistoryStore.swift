@@ -1,4 +1,4 @@
-﻿import Foundation
+import Foundation
 import SwiftData
 import SwiftUI
 
@@ -57,7 +57,7 @@ final class HistoryStore {
 
     func deleteRecord(_ record: TranscriptRecord) {
         modelContext?.delete(record)
-        records.removeAll { .id == record.id }
+        records.removeAll { $0.id == record.id }
         save()
     }
 
@@ -72,3 +72,6 @@ final class HistoryStore {
         return formatter.string(from: date)
     }
 }
+
+
+

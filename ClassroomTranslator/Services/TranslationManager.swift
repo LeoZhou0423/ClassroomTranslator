@@ -7,19 +7,19 @@ final class TranslationManager {
     var translatedText = ""
     var isTranslating = false
     
-    private var currentSession: TranslationSession?
-    
     func translate(_ text: String) async -> String {
         guard !text.isEmpty else { return "" }
         
         isTranslating = true
         defer { isTranslating = false }
         
+        let source = Locale.Language(languageCode: .english)
+        let target = Locale.Language(languageCode: .chinese)
+        
         return await withCheckedContinuation { continuation in
-            let session = TranslationSession(source: .init(languageCode: .english), target: .init(languageCode: .chinese))
-            currentSession = session
+            let session = LanguageSession(source: source, target: target)
             
-            let request = TranslationSession.Request(sourceText: text)
+            let request = LanguageSession.Request(sourceText: text)
             session.insert(request)
             
             Task {
