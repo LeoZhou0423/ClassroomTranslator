@@ -60,6 +60,7 @@ final class TranslationManager {
     /// 点同意后在后台继续下载。
     /// 注：本 SDK 的 TranslationSession 没有 isReady，只能用
     /// prepareTranslation 是否直接通过来判断（已安装则静默返回）。
+    /// 全程带 20s 超时：系统下载框卡住也不让“检查中”永远转。
     func refreshModelStatus() async {
         #if canImport(Translation)
         if #available(macOS 15, *) {
@@ -67,12 +68,7 @@ final class TranslationManager {
                 modelReady = false
                 return
             }
-            do {
-                try await session.prepareTranslation()
-                modelReady = true
-            } catch {
-                modelReady = false
-            }
+            modelReady = await prepareSucceeds(session)
             return
         }
         #endif
@@ -80,22 +76,46 @@ final class TranslationManager {
     }
 
     /// 主动触发模型下载（只下模型不翻译），返回下载后是否就绪。
-    /// 用户取消或失败时返回 false。
+    /// 用户取消或失败时返回 false。同样带 20s 超时。
     func downloadModels() async -> Bool {
         #if canImport(Translation)
         if #available(macOS 15, *) {
             guard let session = sessionStorage as? TranslationSession else { return false }
-            do {
-                try await session.prepareTranslation()
-                modelReady = true
-                return true
-            } catch {
-                print("Model download failed or cancelled: \(error)")
-                modelReady = false
-                return false
-            }
+            let ready = await prepareSucceeds(session)
+            modelReady = ready
+            return ready
         }
         #endif
         return false
     }
+
+    #if canImport(Translation)
+    /// 调 prepareTranslation() 判断模型是否就绪：
+    /// 已装则立即成功；未装则弹系统下载框（含进度条）；
+    /// 用户取消/失败/20s 无响应都视为未就绪，避免永远等待。
+    private func prepareSucceeds(_ session: TranslationSession) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let lock = NSLock()
+            var didResume = false
+            func finish(_ value: Bool) {
+                lock.lock()
+                if !didResume { didResume = true; lock.unlock(); continuation.resume(returning: value) }
+                else { lock.unlock() }
+            }
+            let worker = Task {
+                do {
+                    try await session.prepareTranslation()
+                    finish(true)
+                } catch {
+                    finish(false)
+                }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: 20 * 1_000_000_000)
+                worker.cancel()
+                finish(false)
+            }
+        }
+    }
+    #endif
 }

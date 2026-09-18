@@ -22,6 +22,7 @@
 "Speech recognition permission was denied. Please allow it in System Settings → Privacy & Security → Speech Recognition, then try again." = "语音识别权限被拒绝，请在系统设置→隐私与安全性→语音识别中允许后重试。";
 "Microphone permission was denied. Please allow it in System Settings → Privacy & Security → Microphone, then try again." = "麦克风权限被拒绝，请在系统设置→隐私与安全性→麦克风中允许后重试。";
 "Failed to start recording. Please check the microphone and try again." = "录音启动失败，请检查麦克风后重试。";
+"Recording took too long to start. Another app may be using the microphone. Stop it and try again." = "录音启动超时，可能有其他应用正占用麦克风，请关闭后重试。";
 "Recording was interrupted (e.g. screen lock or audio device change). Tap Start to resume." = "录音被系统打断（如锁屏、睡眠或音频设备变化），点“开始”可继续。";
 
 /* 口音名称 */

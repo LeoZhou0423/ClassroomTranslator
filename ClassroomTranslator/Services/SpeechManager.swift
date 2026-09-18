@@ -18,6 +18,8 @@ final class SpeechManager {
     private var recognitionTask: SFSpeechRecognitionTask?
     private let audioEngine = AVAudioEngine()
     private var configObserver: NSObjectProtocol?
+    /// 是否有已安装的输入 tap，防止重复 removeTap 崩溃 / start 挂死
+    private var hasTap = false
     
     /// 当前使用的语言代码
     private(set) var currentLanguageCode: String
@@ -88,6 +90,14 @@ final class SpeechManager {
     func startRecording() throws {
         if isRecording { return }
         
+        // 防御性复位：上次录音被打断（锁屏/睡眠/识别报错）时可能残留
+        // tap/运行中的 engine，直接 start 会挂死，先清干净
+        if hasTap { audioEngine.inputNode.removeTap(onBus: 0); hasTap = false }
+        if audioEngine.isRunning { audioEngine.stop() }
+        recognitionRequest = nil
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
@@ -139,6 +149,7 @@ final class SpeechManager {
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
             recognitionRequest.append(buffer)
         }
+        hasTap = true
         
         audioEngine.prepare()
         try audioEngine.start()
@@ -149,7 +160,7 @@ final class SpeechManager {
         guard isRecording else { return }
         
         audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        if hasTap { audioEngine.inputNode.removeTap(onBus: 0); hasTap = false }
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         

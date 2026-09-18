@@ -168,16 +168,22 @@ struct ContentView: View {
                     statusMessage = String(localized: "Microphone permission was denied. Please allow it in System Settings → Privacy & Security → Microphone, then try again.")
                     return
                 }
-                // 3. 启动
+                // 3. 启动（引擎启动可能因残留状态/麦克风被占用而阻塞，加看门狗）
                 statusMessage = String(localized: "Starting recording…")
-                historyStore.startNewRecord()
-                do {
-                    try speechManager.startRecording()
-                    guard generation == prepareGeneration else { return }
+                let started = await runStep(timeoutSeconds: 20, timeoutMessage: String(localized: "Recording took too long to start. Another app may be using the microphone. Stop it and try again.")) {
+                    do {
+                        try speechManager.startRecording()
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+                guard generation == prepareGeneration else { return }
+                if started {
+                    historyStore.startNewRecord()
                     statusMessage = ""
                     isRecording = true
-                } catch {
-                    guard generation == prepareGeneration else { return }
+                } else {
                     statusMessage = String(localized: "Failed to start recording. Please check the microphone and try again.")
                 }
             }
