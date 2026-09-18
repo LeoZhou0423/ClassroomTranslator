@@ -150,49 +150,53 @@ struct ContentView: View {
                 defer { if generation == prepareGeneration { isPreparing = false } }
                 // 1. 语音识别权限（走苹果服务器，国内慢时这一步最久）
                 statusMessage = String(localized: "Requesting speech recognition permission…")
-                let speechOK = await runStep(timeoutMessage: String(localized: "Speech recognition permission request timed out. Please allow access in System Settings → Privacy & Security → Speech Recognition, then try again.")) {
-                    await speechManager.requestSpeechPermission()
+                let speechErr = await runStep(timeoutMessage: String(localized: "Speech recognition permission request timed out. Please allow access in System Settings → Privacy & Security → Speech Recognition, then try again.")) {
+                    guard await speechManager.requestSpeechPermission() else {
+                        throw SpeechError.permissionDeniedSpeech
+                    }
                 }
                 guard generation == prepareGeneration else { return }
-                guard speechOK else {
-                    statusMessage = String(localized: "Speech recognition permission was denied. Please allow it in System Settings → Privacy & Security → Speech Recognition, then try again.")
+                if let speechErr {
+                    statusMessage = Self.message(for: speechErr, fallback: String(localized: "Speech recognition permission was denied. Please allow it in System Settings → Privacy & Security → Speech Recognition, then try again."))
                     return
                 }
                 // 2. 麦克风权限
                 statusMessage = String(localized: "Requesting microphone permission…")
-                let micOK = await runStep(timeoutMessage: String(localized: "Microphone permission request timed out. Please allow access in System Settings → Privacy & Security → Microphone, then try again.")) {
-                    await speechManager.requestMicPermission()
+                let micErr = await runStep(timeoutMessage: String(localized: "Microphone permission request timed out. Please allow access in System Settings → Privacy & Security → Microphone, then try again.")) {
+                    guard await speechManager.requestMicPermission() else {
+                        throw SpeechError.permissionDeniedMic
+                    }
                 }
                 guard generation == prepareGeneration else { return }
-                guard micOK else {
-                    statusMessage = String(localized: "Microphone permission was denied. Please allow it in System Settings → Privacy & Security → Microphone, then try again.")
+                if let micErr {
+                    statusMessage = Self.message(for: micErr, fallback: String(localized: "Microphone permission was denied. Please allow it in System Settings → Privacy & Security → Microphone, then try again."))
                     return
                 }
                 // 3. 启动（引擎启动可能因残留状态/麦克风被占用而阻塞，加看门狗）
                 statusMessage = String(localized: "Starting recording…")
-                let started = await runStep(timeoutSeconds: 20, timeoutMessage: String(localized: "Recording took too long to start. Another app may be using the microphone. Stop it and try again.")) {
-                    do {
-                        try await speechManager.startRecording()
-                        return true
-                    } catch {
-                        return false
-                    }
+                let startErr = await runStep(timeoutSeconds: 20, timeoutMessage: String(localized: "Recording took too long to start. Another app may be using the microphone. Stop it and try again.")) {
+                    try await speechManager.startRecording()
                 }
                 guard generation == prepareGeneration else { return }
-                if started {
+                if let startErr {
+                    statusMessage = Self.message(for: startErr, fallback: String(localized: "Failed to start recording. Please check the microphone and try again."))
+                } else {
                     historyStore.startNewRecord()
                     statusMessage = ""
                     isRecording = true
-                } else {
-                    statusMessage = String(localized: "Failed to start recording. Please check the microphone and try again.")
                 }
             }
         }
     }
 
+    private static func message(for error: Error, fallback: String) -> String {
+        (error as? SpeechError)?.errorDescription ?? fallback
+    }
+
     /// 跑一步可能卡住的操作。超时只改提示并放开按钮让用户重试，
     /// 不强杀（授权回调丢了的话杀也没用）；用 generation 丢弃过期任务。
-    private func runStep(timeoutSeconds: UInt64 = 25, timeoutMessage: String, operation: () async -> Bool) async -> Bool {
+    /// 返回 nil=成功，否则是具体错误（超时由看门狗单独提示，这里不返回）。
+    private func runStep(timeoutSeconds: UInt64 = 25, timeoutMessage: String, operation: () async throws -> Void) async -> Error? {
         let watchdog = Task {
             try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
             if !Task.isCancelled {
@@ -200,9 +204,14 @@ struct ContentView: View {
                 isPreparing = false
             }
         }
-        let ok = await operation()
-        watchdog.cancel()
-        return ok
+        do {
+            try await operation()
+            watchdog.cancel()
+            return nil
+        } catch {
+            watchdog.cancel()
+            return error
+        }
     }
     
     private func toggleOverlay() {

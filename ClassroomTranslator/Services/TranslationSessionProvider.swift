@@ -9,7 +9,7 @@ import Translation
 @available(macOS 15, *)
 struct TranslationSessionHost<Content: View>: View {
     let manager: TranslationManager
-    @ViewBuilder let content: Content
+    let content: Content
 
     @AppStorage("recognitionLanguage") private var language = "en-GB"
     @AppStorage("translationTarget") private var target = "zh-Hans"

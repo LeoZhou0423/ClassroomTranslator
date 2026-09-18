@@ -87,7 +87,12 @@ final class SpeechManager {
     func startRecording() async throws {
         if isRecording { return }
 
-        // 没有可用输入设备时快速失败，而不是挂着
+        // 没有麦克风/输入设备时直接失败，而不是访问引擎触发异常崩溃
+        guard AVCaptureDevice.default(for: .audio) != nil else {
+            throw SpeechError.noInputDevice
+        }
+
+        // 输入格式异常也快速失败
         let inputNode = driver.engine.inputNode
         guard inputNode.outputFormat(forBus: 0).sampleRate > 0 else {
             throw SpeechError.invalidFormat
@@ -159,6 +164,9 @@ enum SpeechError: LocalizedError {
     case invalidFormat
     case requestCreationFailed
     case engineStartFailed
+    case permissionDeniedSpeech
+    case permissionDeniedMic
+    case noInputDevice
 
     var errorDescription: String? {
         switch self {
@@ -168,6 +176,12 @@ enum SpeechError: LocalizedError {
             return String(localized: "Failed to create recognition request")
         case .engineStartFailed:
             return String(localized: "Failed to start the audio engine")
+        case .permissionDeniedSpeech:
+            return String(localized: "Speech recognition permission was denied.")
+        case .permissionDeniedMic:
+            return String(localized: "Microphone permission was denied.")
+        case .noInputDevice:
+            return String(localized: "No microphone or audio input device was found.")
         }
     }
 }

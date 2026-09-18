@@ -27,7 +27,10 @@ final class AudioEngineDriver {
                     let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                                sampleRate: 16000,
                                                channels: 1,
-                                               interleaved: false)!
+                                               interleaved: false)
+                    guard let format else {
+                        throw AudioEngineError.formatUnavailable
+                    }
                     self._engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                         self?.pump?(buffer)
                     }
@@ -59,4 +62,8 @@ final class AudioEngineDriver {
         // deinit 无法强同步清理，这里再做一次兜底
         if _engine.isRunning { _engine.stop() }
     }
+}
+
+enum AudioEngineError: Error {
+    case formatUnavailable
 }
