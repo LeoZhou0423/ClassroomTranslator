@@ -38,11 +38,15 @@ final class SpeechManager {
     }
     
     func requestPermissions() async -> Bool {
-        await withCheckedContinuation { continuation in
+        let speechGranted = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
                 continuation.resume(returning: status == .authorized)
             }
         }
+        guard speechGranted else { return false }
+        // macOS 上麦克风是独立权限，没有它 audioEngine 拿不到输入，
+        // 必须在 startRecording 之前申请
+        return await AVAudioApplication.requestRecordPermission()
     }
     
     func startRecording() throws {
@@ -130,9 +134,9 @@ enum SpeechError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidFormat:
-            return "Invalid audio format"
+            return String(localized: "Invalid audio format")
         case .requestCreationFailed:
-            return "Failed to create recognition request"
+            return String(localized: "Failed to create recognition request")
         }
     }
 }

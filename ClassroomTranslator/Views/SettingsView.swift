@@ -147,7 +147,7 @@ struct SettingsView: View {
                     HStack {
                         Text("Supported Accents")
                         Spacer()
-                        Text("\(englishAccents.count) accents")
+                        Text("\(englishAccents.count) \(String(localized: "accents"))")
                             .foregroundColor(.secondary)
                     }
                 }

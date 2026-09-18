@@ -24,6 +24,9 @@ jobs:
         mkdir -p ClassroomTranslator.app/Contents/MacOS
         mkdir -p ClassroomTranslator.app/Contents/Resources
         cp .build/release/ClassroomTranslator ClassroomTranslator.app/Contents/MacOS/
+        if [ -d ClassroomTranslator/Resources ]; then
+          cp -R ClassroomTranslator/Resources/*.lproj ClassroomTranslator.app/Contents/Resources/
+        fi
         
     - name: Create Info.plist
       run: |
@@ -48,6 +51,13 @@ jobs:
             <string>ClassroomTranslator</string>
             <key>LSMinimumSystemVersion</key>
             <string>14.0</string>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+            <key>CFBundleLocalizations</key>
+            <array>
+                <string>en</string>
+                <string>zh-Hans</string>
+            </array>
             <key>NSMicrophoneUsageDescription</key>
             <string>This app needs microphone access to recognize speech.</string>
             <key>NSSpeechRecognitionUsageDescription</key>

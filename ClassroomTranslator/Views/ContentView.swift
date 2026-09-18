@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var translationManager = TranslationManager()
     @State private var subtitleWindowController: SubtitleWindowController?
     @State private var isRecording = false
+    @State private var isPreparing = false
+    @State private var statusMessage = ""
     @State private var currentEnglish = ""
     @State private var currentChinese = ""
     @State private var recentSegments: [(original: String, translated: String)] = []
@@ -66,7 +68,7 @@ struct ContentView: View {
                 if !currentEnglish.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(currentEnglish).font(.system(size: 14, weight: .medium)).foregroundColor(.orange)
-                        Text(currentChinese.isEmpty ? "Translating..." : currentChinese).font(.system(size: 13)).foregroundColor(.gray)
+                        Text(currentChinese.isEmpty ? String(localized: "Translating...") : currentChinese).font(.system(size: 13)).foregroundColor(.gray)
                     }.padding(8).background(Color(nsColor: .controlBackgroundColor).opacity(0.5)).cornerRadius(6)
                 }
             }.padding()
@@ -76,14 +78,22 @@ struct ContentView: View {
     private var controlBar: some View {
         HStack(spacing: 20) {
             Button(action: toggleOverlay) {
-                Label(subtitleWindowController?.window?.isVisible == true ? "Hide Overlay" : "Show Overlay",
+                Label(subtitleWindowController?.window?.isVisible == true ? String(localized: "Hide Overlay") : String(localized: "Show Overlay"),
                       systemImage: subtitleWindowController?.window?.isVisible == true ? "eye.slash" : "eye")
             }.buttonStyle(.bordered)
+            if !statusMessage.isEmpty {
+                Text(statusMessage).font(.caption).foregroundColor(.secondary).lineLimit(1).truncationMode(.tail)
+            }
             Spacer()
             Button(action: toggleRecording) {
-                HStack { Image(systemName: isRecording ? "stop.fill" : "mic.fill"); Text(isRecording ? "Stop" : "Start") }
+                HStack {
+                    if isPreparing { ProgressView().controlSize(.small) }
+                    else { Image(systemName: isRecording ? "stop.fill" : "mic.fill") }
+                    Text(isPreparing ? String(localized: "Preparing…") : (isRecording ? String(localized: "Stop") : String(localized: "Start")))
+                }
                     .frame(width: 100)
             }.buttonStyle(.borderedProminent).tint(isRecording ? .red : .accentColor).controlSize(.large)
+            .disabled(isPreparing)
         }.padding(.horizontal, 16).padding(.vertical, 12)
     }
     
@@ -94,7 +104,8 @@ struct ContentView: View {
             "en-ZA": "South African", "zh-Hans": "Chinese",
             "ja-JP": "Japanese", "ko-KR": "Korean", "hi-IN": "Hindi"
         ]
-        return accentMap[recognitionLanguage] ?? recognitionLanguage
+        let name = accentMap[recognitionLanguage] ?? recognitionLanguage
+        return NSLocalizedString(name, comment: "Speech accent display name")
     }
     
     private func setupSubtitleWindow() {
@@ -124,10 +135,24 @@ struct ContentView: View {
         if isRecording {
             speechManager.stopRecording(); historyStore.stopCurrentRecord(); isRecording = false
         } else {
+            // 先亮状态再干活：首次会弹授权框、下语音模型，不再看着像卡死
+            isPreparing = true
+            statusMessage = String(localized: "Preparing speech recognition…")
             Task {
+                defer { isPreparing = false }
                 let granted = await speechManager.requestPermissions()
-                guard granted else { return }
-                historyStore.startNewRecord(); try? speechManager.startRecording(); isRecording = true
+                guard granted else {
+                    statusMessage = String(localized: "Microphone or speech recognition permission was denied. Please allow access in System Settings and try again.")
+                    return
+                }
+                historyStore.startNewRecord()
+                do {
+                    try speechManager.startRecording()
+                    statusMessage = ""
+                    isRecording = true
+                } catch {
+                    statusMessage = String(localized: "Failed to start recording. Please check the microphone and try again.")
+                }
             }
         }
     }

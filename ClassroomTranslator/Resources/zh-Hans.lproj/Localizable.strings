@@ -1,0 +1,71 @@
+/* ClassroomTranslator 简体中文本地化 */
+
+/* 主界面 */
+"Classroom Translator" = "课堂翻译";
+"History" = "历史记录";
+"Settings" = "设置";
+"Ready to Listen" = "准备就绪";
+"Click Start to begin recording" = "点击“开始”即可开始录音";
+"Start" = "开始";
+"Stop" = "停止";
+"Preparing…" = "准备中…";
+"Translating..." = "翻译中…";
+"Show Overlay" = "显示悬浮窗";
+"Hide Overlay" = "隐藏悬浮窗";
+"Preparing speech recognition…" = "正在准备语音识别…";
+"Microphone or speech recognition permission was denied. Please allow access in System Settings and try again." = "未获得麦克风或语音识别权限，请在系统设置中允许后重试。";
+"Failed to start recording. Please check the microphone and try again." = "录音启动失败，请检查麦克风后重试。";
+
+/* 口音名称 */
+"American" = "美式";
+"British" = "英式";
+"Australian" = "澳式";
+"Indian" = "印度式";
+"Irish" = "爱尔兰式";
+"New Zealand" = "新西兰式";
+"South African" = "南非式";
+"Chinese" = "中文";
+"Japanese" = "日语";
+"Korean" = "韩语";
+"Hindi" = "印地语";
+
+/* 历史记录 */
+"Done" = "完成";
+"No Records Yet" = "暂无记录";
+"Your saved transcripts will appear here" = "保存的转写记录会显示在这里";
+"View" = "查看";
+"Export" = "导出";
+"Delete" = "删除";
+
+/* 设置 */
+"Subtitle Display" = "字幕显示";
+"Font Size" = "字号";
+"Overlay Opacity" = "悬浮窗不透明度";
+"Auto Scroll" = "自动滚动";
+"Speech Recognition - Teacher's Accent" = "语音识别 - 老师的口音";
+"Select the accent that matches your teacher's English" = "请选择与老师英语口音最接近的选项";
+"English Accent" = "英语口音";
+"Other Languages" = "其他语言";
+"Or select if teacher speaks another language" = "如果老师讲其他语言请在这里选择";
+"Language" = "语言";
+"Translation" = "翻译";
+"Target Language" = "目标语言";
+"About" = "关于";
+"Version" = "版本";
+"Speech Engine" = "语音引擎";
+"Apple SpeechAnalyzer" = "Apple SpeechAnalyzer";
+"Supported Accents" = "支持的口音";
+"accents" = "个口音";
+
+/* 导出 */
+"Export Transcript" = "导出转写记录";
+"Export Transcripts" = "导出转写记录";
+"Classroom Transcripts Export" = "课堂转写记录导出";
+"Exported:" = "导出时间：";
+"Date:" = "日期：";
+"Title:" = "标题：";
+"Duration:" = "时长：";
+
+/* 错误 */
+"Invalid audio format" = "音频格式无效";
+"Failed to create recognition request" = "创建识别请求失败";
