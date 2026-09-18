@@ -14,6 +14,13 @@
 "Hide Overlay" = "隐藏悬浮窗";
 "Preparing speech recognition…" = "正在准备语音识别…";
 "Microphone or speech recognition permission was denied. Please allow access in System Settings and try again." = "未获得麦克风或语音识别权限，请在系统设置中允许后重试。";
+"Requesting speech recognition permission…" = "正在请求语音识别权限…";
+"Requesting microphone permission…" = "正在请求麦克风权限…";
+"Starting recording…" = "正在启动录音…";
+"Speech recognition permission request timed out. Please allow access in System Settings → Privacy & Security → Speech Recognition, then try again." = "语音识别授权请求长时间无响应，请在系统设置→隐私与安全性→语音识别中手动允许后重试。";
+"Microphone permission request timed out. Please allow access in System Settings → Privacy & Security → Microphone, then try again." = "麦克风授权请求长时间无响应，请在系统设置→隐私与安全性→麦克风中手动允许后重试。";
+"Speech recognition permission was denied. Please allow it in System Settings → Privacy & Security → Speech Recognition, then try again." = "语音识别权限被拒绝，请在系统设置→隐私与安全性→语音识别中允许后重试。";
+"Microphone permission was denied. Please allow it in System Settings → Privacy & Security → Microphone, then try again." = "麦克风权限被拒绝，请在系统设置→隐私与安全性→麦克风中允许后重试。";
 "Failed to start recording. Please check the microphone and try again." = "录音启动失败，请检查麦克风后重试。";
 
 /* 口音名称 */

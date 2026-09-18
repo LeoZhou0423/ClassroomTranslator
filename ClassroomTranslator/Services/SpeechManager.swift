@@ -37,16 +37,28 @@ final class SpeechManager {
         }
     }
     
-    func requestPermissions() async -> Bool {
-        let speechGranted = await withCheckedContinuation { continuation in
+    func requestSpeechPermission() async -> Bool {
+        await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
                 continuation.resume(returning: status == .authorized)
             }
         }
-        guard speechGranted else { return false }
-        // macOS 上麦克风是独立权限，没有它 audioEngine 拿不到输入，
-        // 必须在 startRecording 之前申请
-        return await AVAudioApplication.requestRecordPermission()
+    }
+
+    func requestMicPermission() async -> Bool {
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        switch status {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+        default:
+            return false
+        }
     }
     
     func startRecording() throws {

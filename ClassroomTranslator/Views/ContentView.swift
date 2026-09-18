@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var subtitleWindowController: SubtitleWindowController?
     @State private var isRecording = false
     @State private var isPreparing = false
+    @State private var prepareGeneration = 0
     @State private var statusMessage = ""
     @State private var currentEnglish = ""
     @State private var currentChinese = ""
@@ -136,25 +137,60 @@ struct ContentView: View {
             speechManager.stopRecording(); historyStore.stopCurrentRecord(); isRecording = false
         } else {
             // 先亮状态再干活：首次会弹授权框、下语音模型，不再看着像卡死
+            prepareGeneration += 1
+            let generation = prepareGeneration
             isPreparing = true
-            statusMessage = String(localized: "Preparing speech recognition…")
             Task {
-                defer { isPreparing = false }
-                let granted = await speechManager.requestPermissions()
-                guard granted else {
-                    statusMessage = String(localized: "Microphone or speech recognition permission was denied. Please allow access in System Settings and try again.")
+                defer { if generation == prepareGeneration { isPreparing = false } }
+                // 1. 语音识别权限（走苹果服务器，国内慢时这一步最久）
+                statusMessage = String(localized: "Requesting speech recognition permission…")
+                let speechOK = await runStep(timeoutMessage: String(localized: "Speech recognition permission request timed out. Please allow access in System Settings → Privacy & Security → Speech Recognition, then try again.")) {
+                    await speechManager.requestSpeechPermission()
+                }
+                guard generation == prepareGeneration else { return }
+                guard speechOK else {
+                    statusMessage = String(localized: "Speech recognition permission was denied. Please allow it in System Settings → Privacy & Security → Speech Recognition, then try again.")
                     return
                 }
+                // 2. 麦克风权限
+                statusMessage = String(localized: "Requesting microphone permission…")
+                let micOK = await runStep(timeoutMessage: String(localized: "Microphone permission request timed out. Please allow access in System Settings → Privacy & Security → Microphone, then try again.")) {
+                    await speechManager.requestMicPermission()
+                }
+                guard generation == prepareGeneration else { return }
+                guard micOK else {
+                    statusMessage = String(localized: "Microphone permission was denied. Please allow it in System Settings → Privacy & Security → Microphone, then try again.")
+                    return
+                }
+                // 3. 启动
+                statusMessage = String(localized: "Starting recording…")
                 historyStore.startNewRecord()
                 do {
                     try speechManager.startRecording()
+                    guard generation == prepareGeneration else { return }
                     statusMessage = ""
                     isRecording = true
                 } catch {
+                    guard generation == prepareGeneration else { return }
                     statusMessage = String(localized: "Failed to start recording. Please check the microphone and try again.")
                 }
             }
         }
+    }
+
+    /// 跑一步可能卡住的操作。超时只改提示并放开按钮让用户重试，
+    /// 不强杀（授权回调丢了的话杀也没用）；用 generation 丢弃过期任务。
+    private func runStep(timeoutSeconds: UInt64 = 25, timeoutMessage: String, operation: () async -> Bool) async -> Bool {
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
+            if !Task.isCancelled {
+                statusMessage = timeoutMessage
+                isPreparing = false
+            }
+        }
+        let ok = await operation()
+        watchdog.cancel()
+        return ok
     }
     
     private func toggleOverlay() {

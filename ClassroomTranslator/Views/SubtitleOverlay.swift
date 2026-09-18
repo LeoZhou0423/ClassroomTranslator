@@ -3,6 +3,7 @@ import AppKit
 
 class SubtitleWindowController: NSWindowController {
     private var subtitleView: SubtitleView!
+    private var overlayWasVisible = false
     
     convenience init() {
         let window = NSPanel(
@@ -28,7 +29,29 @@ class SubtitleWindowController: NSWindowController {
         subtitleView = SubtitleView()
         window.contentView = NSHostingView(rootView: subtitleView)
         
+        // 主窗口进全屏前收起悬浮窗（floating panel 会干扰全屏切换），退出后恢复
+        NotificationCenter.default.addObserver(self, selector: #selector(mainWindowWillEnterFullScreen(_:)), name: NSWindow.willEnterFullScreenNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(mainWindowDidExitFullScreen(_:)), name: NSWindow.didExitFullScreenNotification, object: nil)
+        
         window.center()
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    @objc private func mainWindowWillEnterFullScreen(_ note: Notification) {
+        guard let entering = note.object as? NSWindow, entering != window else { return }
+        overlayWasVisible = window?.isVisible == true
+        hideWindow()
+    }
+    
+    @objc private func mainWindowDidExitFullScreen(_ note: Notification) {
+        guard let exiting = note.object as? NSWindow, exiting != window else { return }
+        if overlayWasVisible {
+            overlayWasVisible = false
+            showWindow()
+        }
     }
     
     func updateSegments(_ segments: [(original: String, translated: String)], currentText: String = "") {
