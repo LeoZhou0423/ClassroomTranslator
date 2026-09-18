@@ -9,11 +9,15 @@ final class SpeechManager {
     var currentText = ""
     var finalSegments: [String] = []
     var onSegmentRecognized: ((String, Bool) -> Void)?
+    /// 录音被系统打断（锁屏/睡眠/音频设备变化/识别服务报错）时回调，
+    /// UI 层据此把状态同步回来，避免界面卡在“录音中”
+    var onRecordingInterrupted: (() -> Void)?
     
     private var speechRecognizer: SFSpeechRecognizer
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let audioEngine = AVAudioEngine()
+    private var configObserver: NSObjectProtocol?
     
     /// 当前使用的语言代码
     private(set) var currentLanguageCode: String
@@ -22,6 +26,26 @@ final class SpeechManager {
         let savedLanguage = UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "en-GB"
         currentLanguageCode = savedLanguage
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: savedLanguage)) ?? SFSpeechRecognizer()!
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: audioEngine,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleConfigurationChange()
+        }
+    }
+    
+    deinit {
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+        }
+    }
+    
+    /// 音频配置变化（锁屏/睡眠/插拔设备）时，录音已经没了，收尾并通知 UI
+    private func handleConfigurationChange() {
+        guard isRecording else { return }
+        stopRecording()
+        onRecordingInterrupted?()
     }
     
     /// 切换识别语言（口音）
@@ -102,6 +126,7 @@ final class SpeechManager {
                 
                 if error != nil {
                     self.stopRecording()
+                    self.onRecordingInterrupted?()
                 }
             }
         }

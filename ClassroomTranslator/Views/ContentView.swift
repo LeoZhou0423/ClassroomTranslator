@@ -112,6 +112,12 @@ struct ContentView: View {
     private func setupSubtitleWindow() {
         let controller = SubtitleWindowController()
         subtitleWindowController = controller
+        speechManager.onRecordingInterrupted = {
+            Task { @MainActor in
+                isRecording = false
+                statusMessage = String(localized: "Recording was interrupted (e.g. screen lock or audio device change). Tap Start to resume.")
+            }
+        }
         speechManager.onSegmentRecognized = { text, isFinal in
             Task { @MainActor in
                 if isFinal {
