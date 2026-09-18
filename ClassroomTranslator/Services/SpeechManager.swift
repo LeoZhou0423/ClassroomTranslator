@@ -63,7 +63,7 @@ final class SpeechManager {
         recognitionRequest.shouldReportPartialResults = true
         recognitionRequest.taskHint = .dictation
         
-        // // // var finalText = ""
+        // // // // var finalText = ""
         
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             Task { @MainActor in
@@ -74,7 +74,7 @@ final class SpeechManager {
                     let isFinal = result.isFinal
                     
                     if isFinal {
-                        // // // finalText = text
+                        // // // // finalText = text
                         self.finalSegments.append(text)
                         self.currentText = ""
                         self.onSegmentRecognized?(text, true)
@@ -136,6 +136,7 @@ enum SpeechError: LocalizedError {
         }
     }
 }
+
 
 
 
