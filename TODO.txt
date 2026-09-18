@@ -1,0 +1,34 @@
+==========================================
+  CLASSROOM TRANSLATOR BUILD FIX TODO LIST
+==========================================
+
+[ ] 1. TranscriptRecord.swift - 修复 keypath 简写
+     Problem: segments.map { .translated } won't compile
+     Fix: Use $0.translated keypath syntax
+
+[ ] 2. AudioManager.swift - 移除 iOS-only API
+     Problem: AVAudioManager/AVAudioSession iOS-only
+     Fix: Remove setupAudioSession() method
+
+[ ] 3. TranslationManager.swift - 修复翻译框架
+     Problem: TranslationSession not found
+     Fix: Use LanguageSession for macOS 14
+
+[ ] 4. HistoryStore.swift - 修复 keypath 简写
+     Problem: records.removeAll { .id == record.id }
+     Fix: Use $0.id keypath syntax
+
+[ ] 5. ContentView.swift - 修复 Swift 并发
+     Problem: @MainActor isolation + async issues
+     Fix: Add @MainActor, use local controller
+
+[ ] 6. HistoryView.swift - 修复 Swift 并发
+     Problem: @MainActor isolation issues
+     Fix: Add @MainActor to View structs
+
+[ ] 7. SpeechManager.swift - 清理未使用变量
+     Problem: Unused finalText variable
+     Fix: Comment out unused variable
+
+[ ] 8. Commit + push to GitHub
+==========================================
