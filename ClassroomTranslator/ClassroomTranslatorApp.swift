@@ -1,6 +1,7 @@
 import SwiftUI
 
 @main
+@MainActor
 struct ClassroomTranslatorApp: App {
     @State private var historyStore = HistoryStore()
     

@@ -1,39 +1,41 @@
 import Foundation
+#if canImport(Translation)
 import Translation
+#endif
 
 @MainActor
 @Observable
 final class TranslationManager {
     var translatedText = ""
     var isTranslating = false
-    
+
     func translate(_ text: String) async -> String {
         guard !text.isEmpty else { return "" }
-        
+
         isTranslating = true
         defer { isTranslating = false }
-        
-        let source = Locale.Language(languageCode: .english)
-        let target = Locale.Language(languageCode: .chinese)
-        
-        return await withCheckedContinuation { continuation in
-            let session = LanguageSession(source: source, target: target)
-            
-            let request = LanguageSession.Request(sourceText: text)
-            session.insert(request)
-            
-            Task {
-                for await response in session.responses {
-                    if let translated = response.targetText {
-                        continuation.resume(returning: translated)
-                        return
-                    }
-                }
-                continuation.resume(returning: text)
+
+        #if canImport(Translation)
+        if #available(macOS 15.0, *) {
+            do {
+                let source = Locale.Language(languageCode: .english)
+                let target = Locale.Language(languageCode: .chinese)
+                // init(installedSource:target:) 不弹下载框，只用已安装模型；
+                // 需要下载模型的场景请走 SwiftUI .translationTask 拿到的 session
+                let session = TranslationSession(installedSource: source, target: target)
+                let response = try await session.translate(text)
+                return response.targetText
+            } catch {
+                print("Translation failed: \(error)")
+                return text
             }
         }
+        #endif
+
+        // macOS 14 / 无 Translation 框架时的降级：原样返回，保证编译通过
+        return text
     }
-    
+
     func translateBatch(_ texts: [String]) async -> [String] {
         var results: [String] = []
         for text in texts {
