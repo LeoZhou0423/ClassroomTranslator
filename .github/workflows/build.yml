@@ -56,6 +56,13 @@ jobs:
         </plist>
         PLIST
         
+    - name: Ad-hoc Sign App Bundle
+      run: |
+        chmod +x ClassroomTranslator.app/Contents/MacOS/ClassroomTranslator
+        codesign --force --deep --sign - ClassroomTranslator.app
+        codesign --verify --deep --strict ClassroomTranslator.app
+        codesign -dv ClassroomTranslator.app
+        
     - name: Create DMG
       run: hdiutil create -volname "ClassroomTranslator" -srcfolder ClassroomTranslator.app -ov -format UDZO ClassroomTranslator.dmg
         
