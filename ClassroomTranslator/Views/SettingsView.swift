@@ -205,19 +205,30 @@ struct SettingsView: View {
     }
     
     private func startModelDownload(_ manager: TranslationManager) {
-        // 拿不到系统会话时应用内无法弹下载框，直接指路系统设置/翻译 App
+        // 会话缺失时：先失效重来一份，等系统重新下发，再下载
         guard manager.hasSession else {
-            modelStatusMessage = String(localized: "No translation session is available. Please download the language packs in System Settings or the Translate app.")
+            modelStatusMessage = String(localized: "Getting the translation session…")
+            manager.requestSessionRefresh()
+            Task {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard manager.hasSession else {
+                    modelStatusMessage = String(localized: "Still no translation session. Please download the language packs in System Settings or the Translate app.")
+                    return
+                }
+                await doDownload(manager)
+            }
             return
         }
+        Task { await doDownload(manager) }
+    }
+
+    private func doDownload(_ manager: TranslationManager) async {
         modelStatusMessage = String(localized: "Requesting model download…")
-        Task {
-            let ready = await manager.downloadModels()
-            if ready {
-                modelStatusMessage = String(localized: "Models are ready.")
-            } else {
-                modelStatusMessage = String(localized: "Model download is unavailable. Please download the translation languages in System Settings or the Translate app.")
-            }
+        let ready = await manager.downloadModels()
+        if ready {
+            modelStatusMessage = String(localized: "Models are ready.")
+        } else {
+            modelStatusMessage = String(localized: "Model download is unavailable. Please download the translation languages in System Settings or the Translate app.")
         }
     }
 }

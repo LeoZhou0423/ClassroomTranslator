@@ -10,6 +10,9 @@ final class TranslationManager {
     var isTranslating = false
     /// 翻译模型状态：nil=未检查，true=已就绪，false=未下载
     var modelReady: Bool?
+    /// 自增令牌：Settings 点“下载模型”但会话缺失时 +1，
+    /// 让 translationTask 重新下发会话
+    var sessionRefreshToken = 0
 
     /// 由 SwiftUI `.translationTask` 注入的 TranslationSession。
     /// TranslationSession 没有公开初始化器，只能由系统提供；
@@ -32,6 +35,11 @@ final class TranslationManager {
         }
         #endif
         return false
+    }
+
+    /// 请求重新下发一次翻译会话（会话缺失时用）
+    func requestSessionRefresh() {
+        sessionRefreshToken += 1
     }
 
     func translate(_ text: String) async -> String {

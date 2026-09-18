@@ -2,34 +2,45 @@ import SwiftUI
 #if canImport(Translation)
 import Translation
 
-/// macOS 15+：通过 SwiftUI `.translationTask` 向系统申请 TranslationSession，
-/// 再注入给 TranslationManager。TranslationSession 没有公开初始化器，
-/// 这是唯一合法的获取方式。
+/// macOS 15+：用 `.translationTask` 向系统申请 TranslationSession 并注入
+/// TranslationManager。TranslationSession 没有公开初始化器，这是唯一合法来源。
+/// 会话交付不稳定（尤其临时签名包），提供 invalidate() 强制重新下发：
+/// 点“下载模型”时发现会话缺失就失效重来，而不是直接让用户去系统设置。
 @available(macOS 15, *)
-struct TranslationSessionInjector: ViewModifier {
-    // 跟随用户在设置里的选择：只申请当前需要的一对语言，
-    // 系统只下载这一对的模型；换目标语言时 configuration 变化，
-    // translationTask 会重新下发 session（只下新需要的那一对）
-    @AppStorage("recognitionLanguage") private var recognitionLanguage = "en-GB"
-    @AppStorage("translationTarget") private var translationTarget = "zh-Hans"
+struct TranslationSessionHost<Content: View>: View {
     let manager: TranslationManager
+    @ViewBuilder let content: Content
 
-    private var configuration: TranslationSession.Configuration {
-        TranslationSession.Configuration(
-            source: Locale.Language(identifier: recognitionLanguage),
-            target: Locale.Language(identifier: translationTarget)
-        )
+    @AppStorage("recognitionLanguage") private var language = "en-GB"
+    @AppStorage("translationTarget") private var target = "zh-Hans"
+    @State private var config = TranslationSession.Configuration(
+        source: Locale.Language(identifier: "en-GB"),
+        target: Locale.Language(identifier: "zh-Hans")
+    )
+
+    var body: some View {
+        content
+            .onAppear { syncConfig() }
+            .onChange(of: language) { _, _ in syncConfig() }
+            .onChange(of: target) { _, _ in syncConfig() }
+            .onChange(of: manager.sessionRefreshToken) { _, _ in
+                config.invalidate()
+            }
+            .translationTask(config) { session in
+                manager.attach(session: session)
+            }
     }
 
-    func body(content: Content) -> some View {
-        content.translationTask(configuration) { session in
-            manager.attach(session: session)
-        }
+    private func syncConfig() {
+        config = TranslationSession.Configuration(
+            source: Locale.Language(identifier: language),
+            target: Locale.Language(identifier: target)
+        )
     }
 }
 #endif
 
-/// 全版本兼容外壳：macOS 15 走注入器，macOS 14 直接透传。
+/// 全版本兼容外壳：macOS 15 走 TranslationSessionHost，否则透传。
 struct TranslationSessionCompat: ViewModifier {
     let manager: TranslationManager
 
@@ -37,7 +48,7 @@ struct TranslationSessionCompat: ViewModifier {
         Group {
             #if canImport(Translation)
             if #available(macOS 15, *) {
-                content.modifier(TranslationSessionInjector(manager: manager))
+                TranslationSessionHost(manager: manager, content: content)
             } else {
                 content
             }
