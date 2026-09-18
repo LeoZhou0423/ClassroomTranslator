@@ -23,6 +23,17 @@ final class TranslationManager {
     }
     #endif
 
+    /// 是否已拿到系统下发的翻译会话（macOS 14 恒为 false）。
+    /// 拿不到会话时，应用内无法触发系统下载框，只能走系统设置/翻译 App。
+    var hasSession: Bool {
+        #if canImport(Translation)
+        if #available(macOS 15, *) {
+            return sessionStorage is TranslationSession
+        }
+        #endif
+        return false
+    }
+
     func translate(_ text: String) async -> String {
         guard !text.isEmpty else { return "" }
 
@@ -76,12 +87,12 @@ final class TranslationManager {
     }
 
     /// 主动触发模型下载（只下模型不翻译），返回下载后是否就绪。
-    /// 用户取消或失败时返回 false。同样带 20s 超时。
+    /// 用户取消或失败时返回 false。带 30s 超时。
     func downloadModels() async -> Bool {
         #if canImport(Translation)
         if #available(macOS 15, *) {
             guard let session = sessionStorage as? TranslationSession else { return false }
-            let ready = await prepareSucceeds(session)
+            let ready = await prepareSucceeds(session, timeoutSeconds: 30)
             modelReady = ready
             return ready
         }
@@ -93,7 +104,7 @@ final class TranslationManager {
     /// 调 prepareTranslation() 判断模型是否就绪：
     /// 已装则立即成功；未装则弹系统下载框（含进度条）；
     /// 用户取消/失败/20s 无响应都视为未就绪，避免永远等待。
-    private func prepareSucceeds(_ session: TranslationSession) async -> Bool {
+    private func prepareSucceeds(_ session: TranslationSession, timeoutSeconds: UInt64 = 20) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let lock = NSLock()
             var didResume = false
@@ -111,7 +122,7 @@ final class TranslationManager {
                 }
             }
             Task {
-                try? await Task.sleep(nanoseconds: 20 * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
                 worker.cancel()
                 finish(false)
             }

@@ -73,6 +73,11 @@
 "Checking…" = "检查中…";
 "Download Language Models" = "下载语言模型";
 "Models download in the background. You can also pre-download them in the Translate app." = "模型在后台下载，也可以提前在翻译 App 里下好。";
+"Download Language Packs in System Settings…" = "在系统设置中下载语言包…";
+"No translation session is available. Please download the language packs in System Settings or the Translate app." = "应用内暂无法下载模型，请到系统设置或翻译 App 下载语言包。";
+"Requesting model download…" = "正在请求下载模型…";
+"Models are ready." = "模型已就绪。";
+"Model download is unavailable. Please download the translation languages in System Settings or the Translate app." = "无法通过应用下载模型，请到系统设置或翻译 App 下载语言包。";
 
 /* 导出 */
 "Export Transcript" = "导出转写记录";

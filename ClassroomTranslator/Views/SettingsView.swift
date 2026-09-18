@@ -4,6 +4,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     /// 主窗口传入；App 级 Settings 场景下为 nil，此时隐藏模型状态行
     var translationManager: TranslationManager?
+    /// 下载按钮的即时反馈文案，避免“点了没反应”
+    @State private var modelStatusMessage = ""
     
     @AppStorage("fontSize") private var fontSize: Double = 16
     @AppStorage("overlayOpacity") private var overlayOpacity: Double = 0.85
@@ -139,12 +141,25 @@ struct SettingsView: View {
                         }
                         
                         Button(String(localized: "Download Language Models")) {
-                            Task {
-                                _ = await manager.downloadModels()
-                                await manager.refreshModelStatus()
-                            }
+                            startModelDownload(manager)
                         }
                         .buttonStyle(.bordered)
+                        .disabled(manager.modelReady == true)
+                        
+                        if !manager.hasSession {
+                            Button(String(localized: "Download Language Packs in System Settings…")) {
+                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.localization") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                            .buttonStyle(.link)
+                        }
+                        
+                        if !modelStatusMessage.isEmpty {
+                            Text(modelStatusMessage)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                         
                         Text("Models download in the background. You can also pre-download them in the Translate app.")
                             .font(.caption)
@@ -187,5 +202,22 @@ struct SettingsView: View {
         if ready == true { return String(localized: "Ready") }
         if ready == false { return String(localized: "Not downloaded") }
         return String(localized: "Checking…")
+    }
+    
+    private func startModelDownload(_ manager: TranslationManager) {
+        // 拿不到系统会话时应用内无法弹下载框，直接指路系统设置/翻译 App
+        guard manager.hasSession else {
+            modelStatusMessage = String(localized: "No translation session is available. Please download the language packs in System Settings or the Translate app.")
+            return
+        }
+        modelStatusMessage = String(localized: "Requesting model download…")
+        Task {
+            let ready = await manager.downloadModels()
+            if ready {
+                modelStatusMessage = String(localized: "Models are ready.")
+            } else {
+                modelStatusMessage = String(localized: "Model download is unavailable. Please download the translation languages in System Settings or the Translate app.")
+            }
+        }
     }
 }
