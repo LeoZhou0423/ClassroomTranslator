@@ -17,7 +17,6 @@ final class SpeechManager {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let audioEngine = AVAudioEngine()
-    private var configObserver: NSObjectProtocol?
     /// 是否有已安装的输入 tap，防止重复 removeTap 崩溃 / start 挂死
     private var hasTap = false
     
@@ -28,18 +27,16 @@ final class SpeechManager {
         let savedLanguage = UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "en-GB"
         currentLanguageCode = savedLanguage
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: savedLanguage)) ?? SFSpeechRecognizer()!
-        configObserver = NotificationCenter.default.addObserver(
+        // SpeechManager 与主窗口同生命周期；用 block 观察者 + Task 跳回主 actor，
+        // 避免在非隔离回调里直接碰 MainActor 内容
+        NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: audioEngine,
             queue: .main
         ) { [weak self] _ in
-            self?.handleConfigurationChange()
-        }
-    }
-    
-    deinit {
-        if let configObserver {
-            NotificationCenter.default.removeObserver(configObserver)
+            Task { @MainActor in
+                self?.handleConfigurationChange()
+            }
         }
     }
     

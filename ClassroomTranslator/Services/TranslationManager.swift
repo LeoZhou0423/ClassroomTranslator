@@ -104,6 +104,7 @@ final class TranslationManager {
     /// 调 prepareTranslation() 判断模型是否就绪：
     /// 已装则立即成功；未装则弹系统下载框（含进度条）；
     /// 用户取消/失败/20s 无响应都视为未就绪，避免永远等待。
+    @available(macOS 15, *)
     private func prepareSucceeds(_ session: TranslationSession, timeoutSeconds: UInt64 = 20) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let lock = NSLock()
