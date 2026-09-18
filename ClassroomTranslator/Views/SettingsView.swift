@@ -2,6 +2,8 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    /// 主窗口传入；App 级 Settings 场景下为 nil，此时隐藏模型状态行
+    var translationManager: TranslationManager?
     
     @AppStorage("fontSize") private var fontSize: Double = 16
     @AppStorage("overlayOpacity") private var overlayOpacity: Double = 0.85
@@ -127,6 +129,27 @@ struct SettingsView: View {
                         Text("العربية").tag("ar-SA")
                         Text("Türkçe").tag("tr-TR")
                     }
+                    
+                    if let manager = translationManager {
+                        HStack {
+                            Text("Model Status")
+                            Spacer()
+                            Text(modelStatusText(manager.modelReady))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Button(String(localized: "Download Language Models")) {
+                            Task {
+                                _ = await manager.downloadModels()
+                                await manager.refreshModelStatus()
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        
+                        Text("Models download in the background. You can also pre-download them in the Translate app.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
                 Section("About") {
@@ -155,5 +178,14 @@ struct SettingsView: View {
             .formStyle(.grouped)
         }
         .frame(minWidth: 450, minHeight: 550)
+        .task {
+            await translationManager?.refreshModelStatus()
+        }
+    }
+    
+    private func modelStatusText(_ ready: Bool?) -> String {
+        if ready == true { return String(localized: "Ready") }
+        if ready == false { return String(localized: "Not downloaded") }
+        return String(localized: "Checking…")
     }
 }

@@ -8,6 +8,8 @@ import Translation
 final class TranslationManager {
     var translatedText = ""
     var isTranslating = false
+    /// 翻译模型状态：nil=未检查，true=已就绪，false=未下载
+    var modelReady: Bool?
 
     /// 由 SwiftUI `.translationTask` 注入的 TranslationSession。
     /// TranslationSession 没有公开初始化器，只能由系统提供；
@@ -52,5 +54,42 @@ final class TranslationManager {
             results.append(translated)
         }
         return results
+    }
+
+    /// 查询翻译模型是否就绪。未就绪时系统会弹出下载授权框（含进度条），
+    /// 点同意后在后台继续下载。
+    func refreshModelStatus() async {
+        #if canImport(Translation)
+        if #available(macOS 15, *) {
+            guard let session = sessionStorage as? TranslationSession else {
+                modelReady = false
+                return
+            }
+            modelReady = await session.isReady
+            return
+        }
+        #endif
+        modelReady = false
+    }
+
+    /// 主动触发模型下载（只下模型不翻译），返回下载后是否就绪。
+    /// 用户取消或失败时返回 false。
+    func downloadModels() async -> Bool {
+        #if canImport(Translation)
+        if #available(macOS 15, *) {
+            guard let session = sessionStorage as? TranslationSession else { return false }
+            do {
+                try await session.prepareTranslation()
+                let ready = await session.isReady
+                modelReady = ready
+                return ready
+            } catch {
+                print("Model download failed or cancelled: \(error)")
+                modelReady = false
+                return false
+            }
+        }
+        #endif
+        return false
     }
 }

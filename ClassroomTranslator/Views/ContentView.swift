@@ -27,7 +27,7 @@ struct ContentView: View {
             speechManager.switchLanguage(to: newLanguage)
         }
         .sheet(isPresented: $showHistory) { HistoryView() }
-        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showSettings) { SettingsView(translationManager: translationManager) }
         .modifier(TranslationSessionCompat(manager: translationManager))
     }
     
