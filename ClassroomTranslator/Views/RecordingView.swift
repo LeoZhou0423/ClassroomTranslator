@@ -36,7 +36,7 @@ struct RecordingView: View {
         VStack(spacing: 0) {
             HeaderBarView(
                 courseName: course.name,
-                currentAccentCode: $currentAccentCode,
+                currentAccentCode: currentAccentCode,
                 isRecording: isRecording,
                 isPaused: isPaused,
                 isPreparing: isPreparing,
@@ -317,7 +317,7 @@ struct RecordingView: View {
 
 private struct HeaderBarView: View {
     let courseName: String
-    @Binding var currentAccentCode: String
+    let currentAccentCode: String
     let isRecording: Bool
     let isPaused: Bool
     let isPreparing: Bool
@@ -340,14 +340,9 @@ private struct HeaderBarView: View {
             }
             .buttonStyle(.borderless)
             Text(courseName).font(.headline)
-            Picker("Accent", selection: $currentAccentCode) {
-                ForEach(Self.allAccents, id: \.code) { accent in
-                    Text(LocalizedStringKey(accent.name)).tag(accent.code)
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(width: 200)
-            .disabled(isRecording || isPaused || isPreparing)
+            Text(Self.allAccents.first(where: { $0.code == currentAccentCode })?.name ?? currentAccentCode)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
             Spacer()
             Button(action: onHistory) { Label("History", systemImage: "clock") }.buttonStyle(.borderless)
             Button(action: onSettings) { Label("Settings", systemImage: "gear") }.buttonStyle(.borderless)

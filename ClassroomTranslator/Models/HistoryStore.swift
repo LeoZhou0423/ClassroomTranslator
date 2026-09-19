@@ -1,13 +1,14 @@
 import Foundation
 import SwiftData
 import SwiftUI
+import Observation
 
 @MainActor
 @Observable
 final class HistoryStore {
     var courses: [Course] = []
     var records: [TranscriptRecord] = []
-    var currentRecord: TranscriptRecord?
+    @ObservationIgnored private(set) var currentRecord: TranscriptRecord?
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
     /// 防止 save() → fetchRecords() 同步通知观察者导致布局重入
@@ -75,7 +76,9 @@ final class HistoryStore {
         record.course = course
         currentRecord = record
         modelContext?.insert(record)
-        save()
+        // Keep recording startup free of SwiftData saves and observable array
+        // refreshes. On macOS 26/27 those updates can re-enter the hidden
+        // CourseDetailView while RecordingView is being laid out.
     }
 
     func addSegmentIfNew(_ segment: TranscriptSegment) {
