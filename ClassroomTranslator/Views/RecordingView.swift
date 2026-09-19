@@ -140,8 +140,10 @@ struct RecordingView: View {
             }
             .onChange(of: segments.count) { _, _ in
                 guard autoScroll, let lastID = segments.last?.id else { return }
-                // 不用 withAnimation，避免动画期间布局重入
-                proxy.scrollTo(lastID, anchor: .bottom)
+                // 推迟到下一个 runloop，避免在 flushTransactions/layout 期间同步滚动导致重入
+                Task { @MainActor in
+                    proxy.scrollTo(lastID, anchor: .bottom)
+                }
             }
         }
     }
