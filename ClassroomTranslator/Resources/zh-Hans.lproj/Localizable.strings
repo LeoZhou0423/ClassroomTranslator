@@ -1,7 +1,8 @@
 /* ClassroomTranslator 简体中文本地化 */
 
 /* 主界面 */
-"Classroom Translator" = "课堂翻译";
+"Classroom Translator" = "LingoClass";
+"My Courses" = "我的课程";
 "My Courses" = "我的课程";
 "History" = "历史记录";
 "Settings" = "设置";
