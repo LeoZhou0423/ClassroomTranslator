@@ -25,7 +25,7 @@
 
 /* 录音界面 */
 "Ready to Listen" = "准备就绪";
-"Click Start to begin recording" = "点击"开始"即可开始录音";
+"Click Start to begin recording" = "点击\"开始\"即可开始录音";
 "Start" = "开始";
 "Stop" = "停止";
 "Pause" = "暂停";
@@ -36,7 +36,7 @@
 "Show Overlay" = "显示悬浮窗";
 "Hide Overlay" = "隐藏悬浮窗";
 "Recording paused" = "录音已暂停";
-"Recording interrupted. Tap Start to resume." = "录音被系统打断，点"开始"可继续。";
+"Recording interrupted. Tap Start to resume." = "录音被系统打断，点\"开始\"可继续。";
 "Detecting accent…" = "正在检测口音…";
 "Accent detection timed out." = "口音检测超时。";
 
@@ -86,7 +86,7 @@
 "Microphone permission was denied. Please allow access in System Settings → Privacy & Security → Microphone, then try again." = "麦克风权限被拒绝，请在系统设置→隐私与安全性→麦克风中允许后重试。";
 "Failed to start recording. Please check the microphone and try again." = "录音启动失败，请检查麦克风后重试。";
 "Recording took too long to start. Another app may be using the microphone. Stop it and try again." = "录音启动超时，可能有其他应用正占用麦克风，请关闭后重试。";
-"Recording was interrupted. Tap Start to resume." = "录音被系统打断，点"开始"可继续。";
+"Recording was interrupted. Tap Start to resume." = "录音被系统打断，点\"开始\"可继续。";
 
 /* 设置 */
 "Subtitle Display" = "字幕显示";
