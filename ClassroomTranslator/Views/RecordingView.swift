@@ -125,7 +125,7 @@ struct RecordingView: View {
     private var controlBar: some View {
         HStack(spacing: 16) {
             Button(action: toggleOverlay) {
-                Label(subtitleWindowController?.window?.isVisible == true ? String(localized: "Hide Overlay") : String(localized: "Show Overlay"),
+                Label(subtitleWindowController?.window?.isVisible == true ? "Hide Overlay" : "Show Overlay",
                       systemImage: subtitleWindowController?.window?.isVisible == true ? "eye.slash" : "eye")
             }
             .buttonStyle(.bordered)
@@ -135,34 +135,34 @@ struct RecordingView: View {
             Spacer()
             if isRecording {
                 Button(action: pauseRecording) {
-                    Label(String(localized: "Pause"), systemImage: "pause.fill")
+                    Label("Pause", systemImage: "pause.fill")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
                 Button(action: endRecording) {
-                    Label(String(localized: "End Session"), systemImage: "stop.fill")
+                    Label("End Session", systemImage: "stop.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
                 .controlSize(.large)
             } else if isPreparing {
                 ProgressView().controlSize(.small)
-                Text(String(localized: "Preparing…")).foregroundColor(.secondary)
+                Text("Preparing…").foregroundColor(.secondary)
             } else if isPaused {
                 Button(action: resumeRecording) {
-                    Label(String(localized: "Resume"), systemImage: "mic.fill")
+                    Label("Resume", systemImage: "mic.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 Button(action: endRecording) {
-                    Label(String(localized: "End Session"), systemImage: "stop.fill")
+                    Label("End Session", systemImage: "stop.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
                 .controlSize(.large)
             } else {
                 Button(action: startRecording) {
-                    Label(String(localized: "Start"), systemImage: "mic.fill")
+                    Label("Start", systemImage: "mic.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)

@@ -39,8 +39,10 @@
 
 /* 课程 */
 "Course Name (e.g. MIT 6.034)" = "课程名称（如 MIT 6.034）";
+"Course Info" = "课程信息";
 "Date & Time" = "日期和时间";
 "Professor's Accent" = "教授口音";
+"Accent" = "口音";
 "Select the accent that best matches your professor" = "选择与教授最接近的口音";
 "New Recording" = "新建录音";
 "No recordings yet" = "暂无录音";

@@ -15,7 +15,7 @@ struct HomeView: View {
                     courseList
                 }
             }
-            .navigationTitle(String(localized: "My Courses"))
+            .navigationTitle("My Courses")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: { showNewCourse = true }) {
@@ -49,7 +49,7 @@ struct HomeView: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             Button(action: { showNewCourse = true }) {
-                Label(String(localized: "New Course"), systemImage: "plus.circle.fill")
+                Label("New Course", systemImage: "plus.circle.fill")
             }
             .buttonStyle(.borderedProminent)
         }

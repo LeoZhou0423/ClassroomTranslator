@@ -26,7 +26,7 @@ struct CourseDetailView: View {
                 }
                 Spacer()
                 Button(action: { showRecording = true }) {
-                    Label(String(localized: "New Recording"), systemImage: "mic.fill")
+                    Label("New Recording", systemImage: "mic.fill")
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -61,9 +61,9 @@ struct CourseDetailView: View {
                     Image(systemName: "mic.circle")
                         .font(.system(size: 50))
                         .foregroundColor(.secondary)
-                    Text(String(localized: "No recordings yet"))
+                    Text("No recordings yet")
                         .foregroundColor(.secondary)
-                    Button(String(localized: "Start First Recording")) { showRecording = true }
+                    Button("Start First Recording") { showRecording = true }
                         .buttonStyle(.bordered)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

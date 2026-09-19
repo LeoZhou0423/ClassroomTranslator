@@ -154,14 +154,14 @@ struct SettingsView: View {
                                 .foregroundColor(.secondary)
                         }
                         
-                        Button(String(localized: "Download Language Models")) {
+                        Button("Download Language Models") {
                             startModelDownload(manager)
                         }
                         .buttonStyle(.bordered)
                         .disabled(manager.modelReady == true)
                         
                         if !manager.hasSession {
-                            Button(String(localized: "Download Language Packs in System Settings…")) {
+                            Button("Download Language Packs in System Settings…") {
                                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.localization") {
                                     NSWorkspace.shared.open(url)
                                 }
@@ -199,7 +199,7 @@ struct SettingsView: View {
                     HStack {
                         Text("Supported Accents")
                         Spacer()
-                        Text("\(englishAccents.count) \(String(localized: "accents"))")
+                        Text("\(englishAccents.count) accents")
                             .foregroundColor(.secondary)
                     }
                 }

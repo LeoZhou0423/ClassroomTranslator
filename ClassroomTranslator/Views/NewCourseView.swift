@@ -53,7 +53,7 @@ struct NewCourseView: View {
 
                     Picker("Accent", selection: $accentCode) {
                         ForEach(accents, id: \.code) { accent in
-                            Text(accent.name).tag(accent.code)
+                            Text(LocalizedStringKey(accent.name)).tag(accent.code)
                         }
                     }
                     .pickerStyle(.inline)
