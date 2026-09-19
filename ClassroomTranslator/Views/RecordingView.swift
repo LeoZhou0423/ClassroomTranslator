@@ -238,15 +238,25 @@ struct RecordingView: View {
         }
     }
 
-    /// 从累积全文中提取新句子（去掉已确认的部分）
+    /// 从累积全文中提取新句子（识别器会修正前面的词，不能简单 substring）
     private func extractNewSentence(fullText: String) -> String {
         guard !lastFinalizedFullText.isEmpty else { return fullText }
-        // 找到已确认文本在全文中的结束位置
-        if let range = fullText.range(of: lastFinalizedFullText) {
-            let afterConfirmed = fullText[range.upperBound...]
-            return String(afterConfirmed).trimmingCharacters(in: .whitespaces)
+
+        // 策略1：精确前缀匹配（最常见情况）
+        if fullText.hasPrefix(lastFinalizedFullText) {
+            return String(fullText.dropFirst(lastFinalizedFullText.count)).trimmingCharacters(in: .whitespaces)
         }
-        // 如果找不到（识别器重置了），返回全文
+
+        // 策略2：识别器修正了前面的词，找 lastFinalizedFullText 末尾与 fullText 开头的最大重叠
+        let maxCheck = min(lastFinalizedFullText.count, fullText.count, 100)
+        for offset in (1...maxCheck).reversed() {
+            let suffix = String(lastFinalizedFullText.suffix(offset))
+            if fullText.hasPrefix(suffix) {
+                return String(fullText.dropFirst(suffix.count)).trimmingCharacters(in: .whitespaces)
+            }
+        }
+
+        // 策略3：完全匹配不到（识别器重置了），返回全文
         return fullText
     }
 
