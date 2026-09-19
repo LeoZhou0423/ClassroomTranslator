@@ -74,32 +74,44 @@ final class SubtitleWindowController: NSWindowController {
         guard !original.isEmpty || !translated.isEmpty else { return }
         let fontSize = UserDefaults.standard.double(forKey: "fontSize").clamped(to: 12...36, default: 20)
 
-        // 移除正在显示的 partial（如有）
-        removeCurrentPartial()
-
         let attrString = NSMutableAttributedString()
-        if !textView.string.isEmpty {
-            attrString.append(NSAttributedString(string: "\n\n", attributes: [.foregroundColor: NSColor.clear]))
-        }
         attrString.append(NSAttributedString(string: original, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow)))
         if !translated.isEmpty {
             attrString.append(NSAttributedString(string: "\n" + translated, attributes: subtitleAttrs(fontSize: fontSize, color: .white)))
         }
-        textView.textStorage?.append(attrString)
-        currentPartialRange = nil
+
+        if let range = currentPartialRange, let storage = textView.textStorage,
+           range.location + range.length <= storage.length {
+            storage.replaceCharacters(in: range, with: attrString)
+            currentPartialRange = nil
+        } else {
+            if textView.string.isEmpty {
+                attrString.insert(NSAttributedString(string: "", attributes: [.foregroundColor: NSColor.clear]), at: 0)
+            } else {
+                attrString.insert(NSAttributedString(string: "\n\n", attributes: [.foregroundColor: NSColor.clear]), at: 0)
+            }
+            textView.textStorage?.append(attrString)
+        }
         scrollToBottom()
     }
 
-    func updateCurrentText(_ text: String) {
-        guard !text.isEmpty else {
+    private var lastPartialOriginal = ""
+    private var lastPartialTranslated = ""
+
+    func updateCurrentText(original: String, translated: String) {
+        guard !original.isEmpty else {
             removeCurrentPartial()
             return
         }
         let fontSize = UserDefaults.standard.double(forKey: "fontSize").clamped(to: 12...36, default: 20)
-        let partialAttr = NSAttributedString(string: text, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow))
+        let combined = translated.isEmpty ? original : original + "\n" + translated
 
         if let range = currentPartialRange, let storage = textView.textStorage,
            range.location + range.length <= storage.length {
+            let oldCombined = translated.isEmpty ? lastPartialOriginal : lastPartialOriginal + "\n" + lastPartialTranslated
+            let newCombined = combined
+            if oldCombined == newCombined { return }
+            let partialAttr = NSAttributedString(string: newCombined, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow))
             storage.replaceCharacters(in: range, with: partialAttr)
             currentPartialRange = NSRange(location: range.location, length: partialAttr.length)
         } else {
@@ -107,15 +119,17 @@ final class SubtitleWindowController: NSWindowController {
                 storage.append(NSAttributedString(string: "\n", attributes: [.foregroundColor: NSColor.clear]))
             }
             let startLocation = textView.textStorage?.length ?? 0
+            let partialAttr = NSAttributedString(string: combined, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow))
             textView.textStorage?.append(partialAttr)
             currentPartialRange = NSRange(location: startLocation, length: partialAttr.length)
         }
+        lastPartialOriginal = original
+        lastPartialTranslated = translated
         scrollToBottom()
     }
 
-    func updateCurrentText(original: String, translated: String) {
-        let combined = translated.isEmpty ? original : original + "\n" + translated
-        updateCurrentText(combined)
+    func updateCurrentText(_ text: String) {
+        updateCurrentText(original: text, translated: "")
     }
 
     private func removeCurrentPartial() {
@@ -139,6 +153,8 @@ final class SubtitleWindowController: NSWindowController {
     func clearAll() {
         textView.string = ""
         currentPartialRange = nil
+        lastPartialOriginal = ""
+        lastPartialTranslated = ""
     }
 
     func showWindow() {
