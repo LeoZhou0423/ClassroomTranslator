@@ -23,7 +23,7 @@ struct ClassroomTranslatorApp: App {
     /// macOS 26/27 workaround: NSHostingView.layout() 在 display cycle 期间
     /// flush transactions 时可能触发 _postWindowNeedsUpdateConstraints 重入，
     /// AppKit 抛出 NSException 导致 abort（已知框架 bug，多个项目受影响）。
-    /// 用 ObjC @try/@catch 包装 layout()，吞掉重入异常。
+    /// Swizzle NSHostingView.layout()，用 re-entrancy guard 阻止重入调用。
     private static func installConstraintExceptionGuard() {
         guard let hostingClass = NSClassFromString("SwiftUI.NSHostingView") as? AnyClass,
               let original = class_getInstanceMethod(hostingClass, #selector(NSView.layout)) else {
@@ -31,20 +31,23 @@ struct ClassroomTranslatorApp: App {
         }
 
         let originalIMP = method_getImplementation(original)
+        let sel = #selector(NSView.layout)
 
-        // 替换为带异常捕获的实现，闭包直接捕获 originalIMP
+        // 用 re-entrancy guard 替换 layout：重入时直接跳过
         let newIMP: @convention(block) (AnyObject) -> Void = { host in
-            let ex = __tryCatch {
-                typealias LayoutFn = @convention(c) (AnyObject, Selector) -> Void
-                let fn = unsafeBitCast(originalIMP, to: LayoutFn.self)
-                fn(host, #selector(NSView.layout))
-            }
-            if let ex {
-                print("[LingoClass] Suppressed NSHostingView layout exception: \(ex.name.rawValue)")
-            }
+            guard !Self.isInLayout else { return }
+            Self.isInLayout = true
+            defer { Self.isInLayout = false }
+
+            typealias LayoutFn = @convention(c) (AnyObject, Selector) -> Void
+            let fn = unsafeBitCast(originalIMP, to: LayoutFn.self)
+            fn(host, sel)
         }
         method_setImplementation(original, imp_implementationWithBlock(newIMP))
     }
+
+    /// 主线程 re-entrancy flag：防止 NSHostingView.layout() 重入
+    nonisolated(unsafe) static var isInLayout = false
 
     var body: some Scene {
         WindowGroup {
