@@ -10,6 +10,10 @@ struct ContentView: View {
     @State private var isPreparing = false
     @State private var prepareGeneration = 0
     @State private var statusMessage = ""
+    /// 流式输出：累积已确认文本
+    @State private var accumulatedEnglish = ""
+    @State private var accumulatedChinese = ""
+    /// 当前正在识别的 partial（只显示新增部分）
     @State private var currentEnglish = ""
     @State private var currentChinese = ""
     @State private var recentSegments: [(original: String, translated: String)] = []
@@ -48,7 +52,7 @@ struct ContentView: View {
     
     private var mainContent: some View {
         VStack(spacing: 16) {
-            if recentSegments.isEmpty && currentEnglish.isEmpty { emptyStateView }
+            if accumulatedEnglish.isEmpty && currentEnglish.isEmpty { emptyStateView }
             else { transcriptView }
         }.frame(maxWidth: .infinity, maxHeight: .infinity).padding()
     }
@@ -63,17 +67,22 @@ struct ContentView: View {
     
     private var transcriptView: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                ForEach(Array(recentSegments.enumerated()), id: \.offset) { _, segment in
+            VStack(alignment: .leading, spacing: 12) {
+                // 流式输出：累积的已确认文本
+                if !accumulatedEnglish.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(segment.original).font(.system(size: 14, weight: .medium))
-                        Text(segment.translated).font(.system(size: 13)).foregroundColor(.blue)
+                        Text(accumulatedEnglish).font(.system(size: 14, weight: .medium))
+                        if !accumulatedChinese.isEmpty {
+                            Text(accumulatedChinese).font(.system(size: 13)).foregroundColor(.blue)
+                        }
                     }.padding(8).background(Color(nsColor: .controlBackgroundColor)).cornerRadius(6)
                 }
+                // 当前正在识别的 partial（只显示新增部分）
                 if !currentEnglish.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(currentEnglish).font(.system(size: 14, weight: .medium)).foregroundColor(.orange)
-                        Text(currentChinese.isEmpty ? String(localized: "Translating...") : currentChinese).font(.system(size: 13)).foregroundColor(.gray)
+                        Text(currentChinese.isEmpty ? String(localized: "Translating...") : currentChinese)
+                            .font(.system(size: 13)).foregroundColor(.gray)
                     }.padding(8).background(Color(nsColor: .controlBackgroundColor).opacity(0.5)).cornerRadius(6)
                 }
             }.padding()
@@ -165,18 +174,25 @@ struct ContentView: View {
         speechManager.onSegmentRecognized = { text, isFinal in
             Task { @MainActor in
                 if isFinal {
-                    recentSegments.append((original: text, translated: ""))
-                    if recentSegments.count > maxRecentSegments { recentSegments.removeFirst() }
-                    let translated = await translationManager.translate(text)
-                    if let lastIndex = recentSegments.indices.last {
-                        recentSegments[lastIndex] = (original: text, translated: translated)
+                    // 流式：追加到累积文本
+                    let newText = accumulatedEnglish.isEmpty ? text : text.dropFirst(accumulatedEnglish.count).description
+                    if !newText.isEmpty {
+                        accumulatedEnglish += newText
+                        let translated = await translationManager.translate(newText)
+                        accumulatedChinese += translated
+                        controller.updateSegments([(original: accumulatedEnglish, translated: accumulatedChinese)])
+                        historyStore.addSegment(TranscriptSegment(original: newText, translated: translated))
                     }
-                    controller.updateSegments(recentSegments)
-                    historyStore.addSegment(TranscriptSegment(original: text, translated: translated))
                     currentEnglish = ""; currentChinese = ""
                 } else {
-                    currentEnglish = text
-                    controller.updateSegments(recentSegments, currentText: text)
+                    // 只显示新增部分（partial 是全量文本，取 lastConfirmed 之后的）
+                    let lastLen = accumulatedEnglish.count
+                    if text.count > lastLen {
+                        currentEnglish = String(text.dropFirst(lastLen))
+                    } else {
+                        currentEnglish = text
+                    }
+                    controller.updateSegments([(original: accumulatedEnglish + currentEnglish, translated: accumulatedChinese)], currentText: "")
                 }
             }
         }

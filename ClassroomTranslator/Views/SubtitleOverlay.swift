@@ -76,22 +76,24 @@ struct SubtitleView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                VStack(alignment: .leading, spacing: 12) {
+                    // 流式：累积的已确认文本
+                    if let last = segments.last, !last.original.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(segment.original)
+                            Text(last.original)
                                 .font(.system(size: fontSize, weight: .medium))
                                 .foregroundColor(.white)
                                 .textSelection(.enabled)
-                            
-                            Text(segment.translated)
-                                .font(.system(size: fontSize - 2, weight: .regular))
-                                .foregroundColor(.cyan)
-                                .textSelection(.enabled)
+                            if !last.translated.isEmpty {
+                                Text(last.translated)
+                                    .font(.system(size: fontSize - 2, weight: .regular))
+                                    .foregroundColor(.cyan)
+                                    .textSelection(.enabled)
+                            }
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 4)
-                        .id(index)
+                        .id("accumulated")
                     }
                     
                     if !currentText.isEmpty {
@@ -99,7 +101,6 @@ struct SubtitleView: View {
                             Text(currentText)
                                 .font(.system(size: fontSize, weight: .medium))
                                 .foregroundColor(.yellow)
-                            
                             Text("...")
                                 .font(.system(size: fontSize - 2))
                                 .foregroundColor(.gray)
@@ -112,14 +113,10 @@ struct SubtitleView: View {
                 .padding(.vertical, 12)
             }
             .onChange(of: segments.count) {
-                withAnimation {
-                    proxy.scrollTo(segments.count - 1, anchor: .bottom)
-                }
+                withAnimation { proxy.scrollTo("accumulated", anchor: .bottom) }
             }
             .onChange(of: currentText) {
-                withAnimation {
-                    proxy.scrollTo("current", anchor: .bottom)
-                }
+                withAnimation { proxy.scrollTo("current", anchor: .bottom) }
             }
         }
         .background(Color.black.opacity(opacity))
