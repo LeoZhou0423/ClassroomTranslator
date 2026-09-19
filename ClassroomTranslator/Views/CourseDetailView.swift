@@ -2,23 +2,50 @@ import SwiftUI
 
 struct CourseDetailView: View {
     @Environment(HistoryStore.self) private var historyStore
+    @Environment(\.dismiss) private var dismiss
     let course: Course
 
-    @Environment(\.dismiss) private var dismiss
     @State private var showRecording = false
     @State private var showDeleteConfirm = false
-
-    private var courseRecords: [TranscriptRecord] {
-        historyStore.recordsForCourse(course)
-    }
-
-    private var latestRecord: TranscriptRecord? {
-        courseRecords.first
-    }
+    @State private var recordingTranslationManager = TranslationManager()
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
+        Group {
+            if showRecording {
+                StableRecordingView(
+                    course: course,
+                    historyStore: historyStore,
+                    translationManager: recordingTranslationManager,
+                    onClose: { showRecording = false }
+                )
+                .modifier(TranslationSessionCompat(manager: recordingTranslationManager))
+            } else {
+                courseOverview
+            }
+        }
+        .toolbar {
+            if !showRecording {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(role: .destructive, action: { showDeleteConfirm = true }) {
+                        Image(systemName: "trash")
+                    }
+                }
+            }
+        }
+        .confirmationDialog("Delete Course", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                historyStore.deleteCourse(course)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Are you sure you want to delete this course? All recordings will be removed.")
+        }
+    }
+
+    private var courseOverview: some View {
+        let latestRecord = historyStore.recordsForCourse(course).first
+        return VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(course.name).font(.title2).bold()
@@ -33,23 +60,16 @@ struct CourseDetailView: View {
                 .buttonStyle(.borderedProminent)
             }
             .padding()
-
             Divider()
-
-            // Transcript content
             if let record = latestRecord, !record.segments.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        // 英文全文
                         Text(record.fullTranscript)
-                            .font(.system(size: 15))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12)
                             .background(Color(nsColor: .controlBackgroundColor))
                             .cornerRadius(8)
-                        // 中文全文
                         Text(record.fullTranslation)
-                            .font(.system(size: 15))
                             .foregroundColor(.blue)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12)
@@ -63,38 +83,12 @@ struct CourseDetailView: View {
                     Image(systemName: "mic.circle")
                         .font(.system(size: 50))
                         .foregroundColor(.secondary)
-                    Text("No recordings yet")
-                        .foregroundColor(.secondary)
+                    Text("No recordings yet").foregroundColor(.secondary)
                     Button("Start First Recording") { showRecording = true }
                         .buttonStyle(.bordered)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }
-        .navigationDestination(isPresented: $showRecording) {
-            RecordingView(course: course) {
-                showRecording = false
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(role: .destructive, action: { showDeleteConfirm = true }) {
-                    Image(systemName: "trash")
-                }
-            }
-        }
-        .confirmationDialog(
-            "Delete Course",
-            isPresented: $showDeleteConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
-                historyStore.deleteCourse(course)
-                dismiss()
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Are you sure you want to delete this course? All recordings will be removed.")
         }
     }
 }

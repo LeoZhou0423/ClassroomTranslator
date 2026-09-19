@@ -88,9 +88,8 @@ final class HistoryStore {
         segs.append(segment)
         record.segments = segs
         record.duration = Date().timeIntervalSince(record.date)
-        // 延迟到下一个 runloop，避免 save() → fetchRecords() 同步通知
-        // 观察者导致布局期间 view graph invalidation
-        Task { @MainActor in save() }
+        // Persist once when recording ends. Per-segment saves invalidate the
+        // course view while the recording screen is being laid out.
     }
 
     func addSegment(_ segment: TranscriptSegment) {
