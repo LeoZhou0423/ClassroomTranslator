@@ -1,11 +1,26 @@
-/* ClassroomTranslator 简体中文本地化 */
+/* LingoClass 简体中文本地化 */
 
-/* 主界面 */
+/* APP */
 "Classroom Translator" = "LingoClass";
-"My Courses" = "我的课程";
+
+/* 导航 */
 "My Courses" = "我的课程";
 "History" = "历史记录";
 "Settings" = "设置";
+"Done" = "完成";
+"Cancel" = "取消";
+"Create" = "创建";
+"Export" = "导出";
+"Delete" = "删除";
+"View" = "查看";
+"Back" = "返回";
+
+/* 首页 */
+"No Courses Yet" = "暂无课程";
+"Tap + to create your first course" = "点击 + 创建第一个课程";
+"New Course" = "新建课程";
+
+/* 录音界面 */
 "Ready to Listen" = "准备就绪";
 "Click Start to begin recording" = "点击"开始"即可开始录音";
 "Start" = "开始";
@@ -23,18 +38,20 @@
 "Accent detection timed out." = "口音检测超时。";
 
 /* 课程 */
-"New Course" = "新建课程";
 "Course Name (e.g. MIT 6.034)" = "课程名称（如 MIT 6.034）";
 "Date & Time" = "日期和时间";
 "Professor's Accent" = "教授口音";
 "Select the accent that best matches your professor" = "选择与教授最接近的口音";
-"Cancel" = "取消";
-"Create" = "创建";
 "New Recording" = "新建录音";
 "No recordings yet" = "暂无录音";
 "Start First Recording" = "开始第一次录音";
 "sessions" = "次录音";
 "segments" = "条记录";
+"次录音" = "次录音";
+
+/* 历史记录 */
+"No Records Yet" = "暂无记录";
+"Your saved transcripts will appear here" = "已保存的转写记录会显示在这里";
 
 /* 口音名称 */
 "American" = "美式";
@@ -57,7 +74,7 @@
 "Speech recognition permission request timed out. Please allow access in System Settings → Privacy & Security → Speech Recognition, then try again." = "语音识别授权请求长时间无响应，请在系统设置→隐私与安全性→语音识别中手动允许后重试。";
 "Microphone permission request timed out. Please allow access in System Settings → Privacy & Security → Microphone, then try again." = "麦克风授权请求长时间无响应，请在系统设置→隐私与安全性→麦克风中手动允许后重试。";
 "Speech recognition permission was denied. Please allow it in System Settings → Privacy & Security → Speech Recognition, then try again." = "语音识别权限被拒绝，请在系统设置→隐私与安全性→语音识别中允许后重试。";
-"Microphone permission was denied. Please allow it in System Settings → Privacy & Security → Microphone, then try again." = "麦克风权限被拒绝，请在系统设置→隐私与安全性→麦克风中允许后重试。";
+"Microphone permission was denied. Please allow access in System Settings → Privacy & Security → Microphone, then try again." = "麦克风权限被拒绝，请在系统设置→隐私与安全性→麦克风中允许后重试。";
 "Failed to start recording. Please check the microphone and try again." = "录音启动失败，请检查麦克风后重试。";
 "Recording took too long to start. Another app may be using the microphone. Stop it and try again." = "录音启动超时，可能有其他应用正占用麦克风，请关闭后重试。";
 "Recording was interrupted. Tap Start to resume." = "录音被系统打断，点"开始"可继续。";
@@ -82,6 +99,7 @@
 "Apple SpeechAnalyzer" = "Apple SpeechAnalyzer";
 "Supported Accents" = "支持的口音";
 "accents" = "个口音";
+"English" = "英语";
 
 /* 翻译模型 */
 "Model Status" = "模型状态";
@@ -98,7 +116,13 @@
 "Model download is unavailable. Please download the translation languages in System Settings or the Translate app." = "无法通过应用下载模型，请到系统设置或翻译 App 下载语言包。";
 
 /* 导出 */
-"Export" = "导出";
+"Export Transcript" = "导出转写记录";
+"Export Transcripts" = "导出转写记录";
+"Classroom Transcripts Export" = "课堂转写记录导出";
+"Exported:" = "导出时间：";
+"Date:" = "日期：";
+"Title:" = "标题：";
+"Duration:" = "时长：";
 
 /* 错误 */
 "Invalid audio format" = "音频格式无效";
@@ -111,10 +135,3 @@
 "Microphone permission timed out." = "麦克风权限请求超时。";
 "Recording took too long to start." = "录音启动超时。";
 "Failed to start recording." = "录音启动失败。";
-"Export Transcript" = "导出转写记录";
-"Export Transcripts" = "导出转写记录";
-"Classroom Transcripts Export" = "课堂转写记录导出";
-"Exported:" = "导出时间：";
-"Date:" = "日期：";
-"Title:" = "标题：";
-"Duration:" = "时长：";

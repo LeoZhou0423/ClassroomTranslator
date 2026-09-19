@@ -13,7 +13,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "ClassroomTranslator",
-            path: "ClassroomTranslator"
+            path: "ClassroomTranslator",
+            resources: [
+                .process("Resources")
+            ]
         )
     ]
 )
