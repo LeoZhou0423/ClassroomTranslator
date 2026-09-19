@@ -65,6 +65,11 @@ final class HistoryStore {
     }
 
     func startNewRecord(in course: Course, title: String = "") {
+        // 如果课程已有记录，追加到最新那条（不新建）
+        if let existing = recordsForCourse(course).first {
+            currentRecord = existing
+            return
+        }
         let record = TranscriptRecord(date: Date(), title: title.isEmpty ? formatTitle(Date()) : title)
         record.course = course
         currentRecord = record

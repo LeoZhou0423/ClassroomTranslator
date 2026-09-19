@@ -10,6 +10,7 @@ struct RecordingView: View {
     @State private var translationManager = TranslationManager()
     @State private var subtitleWindowController: SubtitleWindowController?
     @State private var isRecording = false
+    @State private var isPaused = false
     @State private var isPreparing = false
     @State private var prepareGeneration = 0
     @State private var statusMessage = ""
@@ -116,7 +117,7 @@ struct RecordingView: View {
     }
 
     private var controlBar: some View {
-        HStack(spacing: 20) {
+        HStack(spacing: 16) {
             Button(action: toggleOverlay) {
                 Label(subtitleWindowController?.window?.isVisible == true ? String(localized: "Hide Overlay") : String(localized: "Show Overlay"),
                       systemImage: subtitleWindowController?.window?.isVisible == true ? "eye.slash" : "eye")
@@ -126,18 +127,43 @@ struct RecordingView: View {
                 Text(statusMessage).font(.caption).foregroundColor(.secondary).lineLimit(1).truncationMode(.tail)
             }
             Spacer()
-            Button(action: toggleRecording) {
-                HStack {
-                    if isPreparing { ProgressView().controlSize(.small) }
-                    else { Image(systemName: isRecording ? "stop.fill" : "mic.fill") }
-                    Text(isPreparing ? String(localized: "Preparing…") : (isRecording ? String(localized: "Stop") : String(localized: "Start")))
+            if isRecording {
+                // 录音中：显示暂停 + 结束
+                Button(action: pauseRecording) {
+                    Label(String(localized: "Pause"), systemImage: "pause.fill")
                 }
-                .frame(width: 100)
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                Button(action: endRecording) {
+                    Label(String(localized: "End Session"), systemImage: "stop.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.large)
+            } else if isPreparing {
+                ProgressView().controlSize(.small)
+                Text(String(localized: "Preparing…")).foregroundColor(.secondary)
+            } else if isPaused {
+                // 暂停中：显示继续 + 结束
+                Button(action: resumeRecording) {
+                    Label(String(localized: "Resume"), systemImage: "mic.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                Button(action: endRecording) {
+                    Label(String(localized: "End Session"), systemImage: "stop.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.large)
+            } else {
+                // 未开始：显示开始
+                Button(action: startRecording) {
+                    Label(String(localized: "Start"), systemImage: "mic.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(isRecording ? .red : .accentColor)
-            .controlSize(.large)
-            .disabled(isPreparing)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -192,49 +218,80 @@ struct RecordingView: View {
         }
     }
 
-    private func toggleRecording() {
-        if isRecording {
-            speechManager.stopRecording()
-            historyStore.stopCurrentRecord()
-            isRecording = false
-        } else {
-            prepareGeneration += 1
-            let generation = prepareGeneration
-            isPreparing = true
-            Task {
-                defer { if generation == prepareGeneration { isPreparing = false } }
-                statusMessage = String(localized: "Requesting speech recognition permission…")
-                let speechErr = await runStep(timeoutMessage: String(localized: "Speech recognition permission timed out.")) {
-                    guard await speechManager.requestSpeechPermission() else { throw SpeechError.permissionDeniedSpeech }
-                }
-                guard generation == prepareGeneration else { return }
-                if let speechErr {
-                    statusMessage = Self.message(for: speechErr, fallback: String(localized: "Speech recognition permission was denied."))
-                    return
-                }
-                statusMessage = String(localized: "Requesting microphone permission…")
-                let micErr = await runStep(timeoutMessage: String(localized: "Microphone permission timed out.")) {
-                    guard await speechManager.requestMicPermission() else { throw SpeechError.permissionDeniedMic }
-                }
-                guard generation == prepareGeneration else { return }
-                if let micErr {
-                    statusMessage = Self.message(for: micErr, fallback: String(localized: "Microphone permission was denied."))
-                    return
-                }
-                statusMessage = String(localized: "Starting recording…")
-                let startErr = await runStep(timeoutSeconds: 20, timeoutMessage: String(localized: "Recording took too long to start.")) {
-                    try await speechManager.startRecording()
-                }
-                guard generation == prepareGeneration else { return }
-                if let startErr {
-                    statusMessage = Self.message(for: startErr, fallback: String(localized: "Failed to start recording."))
-                } else {
-                    historyStore.startNewRecord(in: course)
-                    statusMessage = ""
-                    isRecording = true
-                }
+    private func startRecording() {
+        prepareGeneration += 1
+        let generation = prepareGeneration
+        isPreparing = true
+        Task {
+            defer { if generation == prepareGeneration { isPreparing = false } }
+            statusMessage = String(localized: "Requesting speech recognition permission…")
+            let speechErr = await runStep(timeoutMessage: String(localized: "Speech recognition permission timed out.")) {
+                guard await speechManager.requestSpeechPermission() else { throw SpeechError.permissionDeniedSpeech }
+            }
+            guard generation == prepareGeneration else { return }
+            if let speechErr {
+                statusMessage = Self.message(for: speechErr, fallback: String(localized: "Speech recognition permission was denied."))
+                return
+            }
+            statusMessage = String(localized: "Requesting microphone permission…")
+            let micErr = await runStep(timeoutMessage: String(localized: "Microphone permission timed out.")) {
+                guard await speechManager.requestMicPermission() else { throw SpeechError.permissionDeniedMic }
+            }
+            guard generation == prepareGeneration else { return }
+            if let micErr {
+                statusMessage = Self.message(for: micErr, fallback: String(localized: "Microphone permission was denied."))
+                return
+            }
+            statusMessage = String(localized: "Starting recording…")
+            let startErr = await runStep(timeoutSeconds: 20, timeoutMessage: String(localized: "Recording took too long to start.")) {
+                try await speechManager.startRecording()
+            }
+            guard generation == prepareGeneration else { return }
+            if let startErr {
+                statusMessage = Self.message(for: startErr, fallback: String(localized: "Failed to start recording."))
+            } else {
+                historyStore.startNewRecord(in: course)
+                statusMessage = ""
+                isRecording = true
+                isPaused = false
             }
         }
+    }
+
+    private func pauseRecording() {
+        speechManager.stopRecording()
+        isRecording = false
+        isPaused = true
+        statusMessage = String(localized: "Recording paused")
+    }
+
+    private func resumeRecording() {
+        prepareGeneration += 1
+        let generation = prepareGeneration
+        isPreparing = true
+        Task {
+            defer { if generation == prepareGeneration { isPreparing = false } }
+            statusMessage = String(localized: "Starting recording…")
+            let startErr = await runStep(timeoutSeconds: 20, timeoutMessage: String(localized: "Recording took too long to start.")) {
+                try await speechManager.startRecording()
+            }
+            guard generation == prepareGeneration else { return }
+            if let startErr {
+                statusMessage = Self.message(for: startErr, fallback: String(localized: "Failed to start recording."))
+            } else {
+                statusMessage = ""
+                isRecording = true
+                isPaused = false
+            }
+        }
+    }
+
+    private func endRecording() {
+        speechManager.stopRecording()
+        historyStore.stopCurrentRecord()
+        isRecording = false
+        isPaused = false
+        dismiss()
     }
 
     private static func message(for error: Error, fallback: String) -> String {
