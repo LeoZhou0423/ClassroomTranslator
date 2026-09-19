@@ -1,4 +1,5 @@
 import SwiftUI
+import ObjectiveC
 
 @main
 @MainActor
@@ -10,7 +11,6 @@ struct ClassroomTranslatorApp: App {
         Self.installConstraintExceptionGuard()
     }
 
-    /// App 内语言：默认中文，跟系统语言脱钩（改完需重启生效）
     static func applyAppLanguage() {
         let pref = UserDefaults.standard.string(forKey: "appLanguage") ?? "zh-Hans"
         if pref == "system" {
@@ -20,36 +20,30 @@ struct ClassroomTranslatorApp: App {
         }
     }
 
-    /// macOS 27 workaround: NSHostingView.layout() 在 display cycle 期间 flush
-    /// transactions 时可能触发 _postWindowNeedsUpdateConstraints 重入，
-    /// AppKit 抛出 NSException 导致 abort。Swift 无法捕获 ObjC 异常，
-    /// 只能在 AppKit 层面 swizzle layout() 用 try-catch 兜底。
+    /// macOS 26/27 workaround: NSHostingView.layout() 在 display cycle 期间
+    /// flush transactions 时可能触发 _postWindowNeedsUpdateConstraints 重入，
+    /// AppKit 抛出 NSException 导致 abort（已知框架 bug，多个项目受影响）。
+    /// 用 ObjC @try/@catch 包装 layout()，吞掉重入异常。
     private static func installConstraintExceptionGuard() {
-        guard let hostingViewClass = NSClassFromString("SwiftUI.NSHostingView") as? AnyClass,
-              let originalMethod = class_getInstanceMethod(hostingViewClass, #selector(NSView.layout)),
-              let swizzleMethod = class_getInstanceMethod(
-                ClassroomTranslatorApp.self,
-                #selector(ClassroomTranslatorApp.swizzledLayout)
-              ) else { return }
-
-        method_exchangeImplementations(originalMethod, swizzleMethod)
-    }
-
-    @objc func swizzledLayout() {
-        // swizzle 后这里调的是原始 NSHostingView.layout()
-        // 用 ObjC 异常捕获包装，抑制 _postWindowNeedsUpdateConstraints 崩溃
-        let exception = Self.__try { [self] in
-            self.swizzledLayout()
+        guard let hostingClass = NSClassFromString("SwiftUI.NSHostingView") as? AnyClass,
+              let original = class_getInstanceMethod(hostingClass, #selector(NSView.layout)) else {
+            return
         }
-        if let exception {
-            // 吞掉约束更新重入异常，让 display cycle 继续
-            print("Suppressed NSHostingView layout exception: \(exception.name.rawValue) - \(exception.reason ?? "unknown")")
-        }
-    }
 
-    /// ObjC 异常捕获桥接（Swift 本身不支持 @try/@catch）
-    private static func __try(_ block: () -> Void) -> NSException? {
-        return __tryCatch(block)
+        let originalIMP = method_getImplementation(original)
+
+        // 替换为带异常捕获的实现，闭包直接捕获 originalIMP
+        let newIMP: @convention(block) (AnyObject) -> Void = { host in
+            let ex = __tryCatch {
+                typealias LayoutFn = @convention(c) (AnyObject, Selector) -> Void
+                let fn = unsafeBitCast(originalIMP, to: LayoutFn.self)
+                fn(host, #selector(NSView.layout))
+            }
+            if let ex {
+                print("[LingoClass] Suppressed NSHostingView layout exception: \(ex.name.rawValue)")
+            }
+        }
+        method_setImplementation(original, imp_implementationWithBlock(newIMP))
     }
 
     var body: some Scene {
