@@ -83,20 +83,24 @@ final class SubtitleWindowController: NSWindowController {
         if let range = currentPartialRange, let storage = textView.textStorage,
            range.location + range.length <= storage.length {
             storage.replaceCharacters(in: range, with: attrString)
-            currentPartialRange = nil
         } else {
-            if textView.string.isEmpty {
-                attrString.insert(NSAttributedString(string: "", attributes: [.foregroundColor: NSColor.clear]), at: 0)
-            } else {
+            if !textView.string.isEmpty {
                 attrString.insert(NSAttributedString(string: "\n\n", attributes: [.foregroundColor: NSColor.clear]), at: 0)
             }
             textView.textStorage?.append(attrString)
         }
+        currentPartialRange = nil
+        partialEnglishRange = nil
+        partialChineseRange = nil
+        lastPartialOriginal = ""
+        lastPartialTranslated = ""
         scrollToBottom()
     }
 
     private var lastPartialOriginal = ""
     private var lastPartialTranslated = ""
+    private var partialEnglishRange: NSRange?
+    private var partialChineseRange: NSRange?
 
     func updateCurrentText(original: String, translated: String) {
         guard !original.isEmpty else {
@@ -104,41 +108,66 @@ final class SubtitleWindowController: NSWindowController {
             return
         }
         let fontSize = UserDefaults.standard.double(forKey: "fontSize").clamped(to: 12...36, default: 20)
-        let combined = translated.isEmpty ? original : original + "\n" + translated
+        let englishChanged = original != lastPartialOriginal
+        let chineseChanged = translated != lastPartialTranslated
+        guard englishChanged || chineseChanged else { return }
 
-        if let range = currentPartialRange, let storage = textView.textStorage,
-           range.location + range.length <= storage.length {
-            let oldCombined = translated.isEmpty ? lastPartialOriginal : lastPartialOriginal + "\n" + lastPartialTranslated
-            let newCombined = combined
-            if oldCombined == newCombined { return }
-            let partialAttr = NSAttributedString(string: newCombined, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow))
-            storage.replaceCharacters(in: range, with: partialAttr)
-            currentPartialRange = NSRange(location: range.location, length: partialAttr.length)
+        guard let storage = textView.textStorage else { return }
+
+        if let eRange = partialEnglishRange, eRange.location + eRange.length <= storage.length {
+            if englishChanged {
+                let engAttr = NSAttributedString(string: original, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow))
+                let delta = engAttr.length - eRange.length
+                storage.replaceCharacters(in: eRange, with: engAttr)
+                partialEnglishRange = NSRange(location: eRange.location, length: engAttr.length)
+                if let cRange = partialChineseRange {
+                    partialChineseRange = NSRange(location: cRange.location + delta, length: cRange.length)
+                }
+            }
+            if chineseChanged, let cRange = partialChineseRange, cRange.location + cRange.length <= storage.length {
+                if translated.isEmpty {
+                    storage.replaceCharacters(in: cRange, with: NSAttributedString())
+                    partialChineseRange = nil
+                } else {
+                    let chinAttr = NSAttributedString(string: "\n" + translated, attributes: subtitleAttrs(fontSize: fontSize, color: .white))
+                    storage.replaceCharacters(in: cRange, with: chinAttr)
+                    partialChineseRange = NSRange(location: cRange.location, length: chinAttr.length)
+                }
+            }
         } else {
-            if let storage = textView.textStorage, storage.length > 0 {
+            if storage.length > 0 {
                 storage.append(NSAttributedString(string: "\n", attributes: [.foregroundColor: NSColor.clear]))
             }
-            let startLocation = textView.textStorage?.length ?? 0
-            let partialAttr = NSAttributedString(string: combined, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow))
-            textView.textStorage?.append(partialAttr)
-            currentPartialRange = NSRange(location: startLocation, length: partialAttr.length)
+            let start = storage.length
+            let engAttr = NSAttributedString(string: original, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow))
+            storage.append(engAttr)
+            partialEnglishRange = NSRange(location: start, length: engAttr.length)
+            if !translated.isEmpty {
+                let chinAttr = NSAttributedString(string: "\n" + translated, attributes: subtitleAttrs(fontSize: fontSize, color: .white))
+                storage.append(chinAttr)
+                partialChineseRange = NSRange(location: start + engAttr.length, length: chinAttr.length)
+            }
         }
+
+        currentPartialRange = NSRange(location: partialEnglishRange?.location ?? 0,
+                                      length: (partialEnglishRange?.length ?? 0) + (partialChineseRange?.length ?? 0))
         lastPartialOriginal = original
         lastPartialTranslated = translated
         scrollToBottom()
     }
 
     func updateCurrentText(_ text: String) {
-        updateCurrentText(original: text, translated: "")
+        updateCurrentText(original: text, translated: lastPartialTranslated)
     }
 
     private func removeCurrentPartial() {
         guard let range = currentPartialRange, let storage = textView.textStorage,
               range.location + range.length <= storage.length else {
             currentPartialRange = nil
+            partialEnglishRange = nil
+            partialChineseRange = nil
             return
         }
-        // 也删除 partial 前的分隔换行符
         var removeRange = range
         if range.location > 0 {
             let before = NSRange(location: range.location - 1, length: 1)
@@ -148,11 +177,15 @@ final class SubtitleWindowController: NSWindowController {
         }
         storage.deleteCharacters(in: removeRange)
         currentPartialRange = nil
+        partialEnglishRange = nil
+        partialChineseRange = nil
     }
 
     func clearAll() {
         textView.string = ""
         currentPartialRange = nil
+        partialEnglishRange = nil
+        partialChineseRange = nil
         lastPartialOriginal = ""
         lastPartialTranslated = ""
     }
