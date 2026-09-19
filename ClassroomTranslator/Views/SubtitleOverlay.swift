@@ -1,8 +1,15 @@
 import SwiftUI
 import AppKit
 
+/// 共享数据源：controller 和 SwiftUI view 都引用同一个实例，修改实时反映到 UI
+@MainActor
+final class SubtitleState: ObservableObject {
+    @Published var segments: [(original: String, translated: String)] = []
+    @Published var currentText: String = ""
+}
+
 class SubtitleWindowController: NSWindowController {
-    private var subtitleView: SubtitleView!
+    private let state = SubtitleState()
     private var overlayWasVisible = false
     
     convenience init() {
@@ -26,10 +33,9 @@ class SubtitleWindowController: NSWindowController {
         
         self.init(window: window)
         
-        subtitleView = SubtitleView()
+        let subtitleView = SubtitleView(state: state)
         window.contentView = NSHostingView(rootView: subtitleView)
         
-        // 主窗口进全屏前收起悬浮窗（floating panel 会干扰全屏切换），退出后恢复
         NotificationCenter.default.addObserver(self, selector: #selector(mainWindowWillEnterFullScreen(_:)), name: NSWindow.willEnterFullScreenNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(mainWindowDidExitFullScreen(_:)), name: NSWindow.didExitFullScreenNotification, object: nil)
         
@@ -55,7 +61,8 @@ class SubtitleWindowController: NSWindowController {
     }
     
     func updateSegments(_ segments: [(original: String, translated: String)], currentText: String = "") {
-        subtitleView.updateSegments(segments, currentText: currentText)
+        state.segments = segments
+        state.currentText = currentText
     }
     
     func showWindow() {
@@ -68,8 +75,7 @@ class SubtitleWindowController: NSWindowController {
 }
 
 struct SubtitleView: View {
-    @State private var segments: [(original: String, translated: String)] = []
-    @State private var currentText: String = ""
+    @ObservedObject var state: SubtitleState
     @State private var fontSize: CGFloat = 16
     @State private var opacity: Double = 0.85
     
@@ -77,8 +83,7 @@ struct SubtitleView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    // 流式：累积的已确认文本
-                    if let last = segments.last, !last.original.isEmpty {
+                    if let last = state.segments.last, !last.original.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(last.original)
                                 .font(.system(size: fontSize, weight: .medium))
@@ -96,9 +101,9 @@ struct SubtitleView: View {
                         .id("accumulated")
                     }
                     
-                    if !currentText.isEmpty {
+                    if !state.currentText.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(currentText)
+                            Text(state.currentText)
                                 .font(.system(size: fontSize, weight: .medium))
                                 .foregroundColor(.yellow)
                             Text("...")
@@ -112,18 +117,13 @@ struct SubtitleView: View {
                 }
                 .padding(.vertical, 12)
             }
-            .onChange(of: segments.count) {
+            .onChange(of: state.segments.count) {
                 withAnimation { proxy.scrollTo("accumulated", anchor: .bottom) }
             }
-            .onChange(of: currentText) {
+            .onChange(of: state.currentText) {
                 withAnimation { proxy.scrollTo("current", anchor: .bottom) }
             }
         }
         .background(Color.black.opacity(opacity))
-    }
-    
-    func updateSegments(_ newSegments: [(original: String, translated: String)], currentText: String = "") {
-        self.segments = newSegments
-        self.currentText = currentText
     }
 }
