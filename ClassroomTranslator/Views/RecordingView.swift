@@ -184,7 +184,7 @@ struct RecordingView: View {
                 return
             }
             if currentAccentCode == "auto" {
-                statusMessage = String(localized: "Detecting accent…")
+                statusMessage = String(localized: "Starting recording…")
                 let detectErr = await runStep(timeoutSeconds: 30, timeoutMessage: String(localized: "Accent detection timed out.")) {
                     try await speechManager.startAutoDetectRecording()
                 }

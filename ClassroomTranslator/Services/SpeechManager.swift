@@ -56,10 +56,6 @@ final class SpeechManager {
     /// 当前使用的语言代码
     private(set) var currentLanguageCode: String
 
-    // MARK: - 多口音并行识别（自动检测）
-    private var parallelRecognizers: [String: (recognizer: SFSpeechRecognizer, request: SFSpeechAudioBufferRecognitionRequest, task: SFSpeechRecognitionTask)] = [:]
-    private var bestLocale: String?
-
     init() {
         var savedLanguage = UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "en-GB"
         // "auto" 不是合法 locale，绝不能拿去建识别器（之前这里 force unwrap 会崩）
@@ -306,7 +302,7 @@ final class SpeechManager {
                     self.handleConfigurationChange()
                 }
             }) { [weak request] buffer in
-                request?.append(buffer)
+                request?.appendAudioSampleBuffer(buffer)
             }
         } catch {
             stopRecording()
@@ -327,12 +323,6 @@ final class SpeechManager {
         recognitionTask?.cancel()
         recognitionRequest = nil
         recognitionTask = nil
-        for entry in parallelRecognizers.values {
-            entry.request.endAudio()
-            entry.task.cancel()
-        }
-        parallelRecognizers.removeAll()
-        bestLocale = nil
         isRecording = false
     }
 
@@ -341,108 +331,25 @@ final class SpeechManager {
         currentText = ""
     }
 
-    // MARK: - 多口音并行自动检测
+    // MARK: - Auto language compatibility
 
-    /// 自动检测口音：并行跑多个识别器5秒，选输出最好的那个
-    static let detectLocales = ["en-US", "en-GB", "en-AU", "en-NZ", "en-IE", "en-ZA", "en-CA", "en-IN"]
-
+    /// macOS Speech does not expose safe live locale detection. Running several
+    /// SFSpeechRecognitionTasks against one microphone can deadlock speech services
+    /// on macOS 26/27, so Auto deliberately uses one stable English recognizer.
     func startAutoDetectRecording() async throws {
-        guard !isStarting else { throw SpeechError.startInProgress }
-        if isRecording { return }
-        isStarting = true
-        recordingGeneration += 1
-        let generation = recordingGeneration
-        defer { isStarting = false }
-        guard AVCaptureDevice.default(for: .audio) != nil else {
-            throw SpeechError.noInputDevice
+        let locale = Self.safeAutomaticEnglishLocale()
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)) else {
+            throw SpeechError.recognizerUnavailable
         }
-
-        // 清理旧的并行识别器（如果有的话）
-        for (_, entry) in parallelRecognizers {
-            entry.request.endAudio()
-            entry.task.cancel()
-        }
-        parallelRecognizers.removeAll()
-        bestLocale = nil
-
-        // 创建多口音识别器
-        var scores: [String: Int] = [:]
-        var texts: [String: String] = [:]
-
-        for code in Self.detectLocales {
-            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: code)),
-                  recognizer.isAvailable else { continue }
-            let request = SFSpeechAudioBufferRecognitionRequest()
-            request.shouldReportPartialResults = true
-
-            let task = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, _ in
-                guard let result else { return }
-                let text = result.bestTranscription.formattedString
-                Task { @MainActor in
-                    guard let self, self.recordingGeneration == generation else { return }
-                    texts[code] = text
-                    scores[code] = text.split(separator: " ").count
-                }
-            }
-
-            parallelRecognizers[code] = (recognizer, request, task)
-        }
-
-        guard !parallelRecognizers.isEmpty else {
-            throw SpeechError.engineStartFailed
-        }
-
-        // Capture an immutable request list: the audio thread must never read actor state.
-        let requests = parallelRecognizers.values.map { $0.request }
-        do {
-            try await driver.start(onInterruption: { [weak self] in
-                Task { @MainActor in
-                    guard let self, self.recordingGeneration == generation else { return }
-                    self.handleConfigurationChange()
-                }
-            }) { buffer in
-                for request in requests { request.append(buffer) }
-            }
-            guard recordingGeneration == generation else { throw CancellationError() }
-            isRecording = true
-            onLanguageModelStatusChanged?("检测口音中…")
-            try await Task.sleep(nanoseconds: 5_000_000_000)
-            guard recordingGeneration == generation else { throw CancellationError() }
-        } catch {
-            stopRecording()
-            throw error
-        }
-
-        // 选最佳
-        let winner = scores.max(by: { $0.value < $1.value })?.key ?? "en-US"
-        let winnerText = texts[winner] ?? ""
-
-        bestLocale = winner
-        currentLanguageCode = winner
-        onLanguageModelStatusChanged?("")
-        isRecording = false
-
-        // 停掉所有并行识别器并清理（重要！避免旧回调干扰）
-        for entry in parallelRecognizers.values {
-            entry.request.endAudio()
-            entry.task.cancel()
-        }
-        parallelRecognizers.removeAll()
-        bestLocale = nil
-        driver.stop()
-
-        // 用最佳口音重新开始单识别器录音
-        if let bestRecognizer = SFSpeechRecognizer(locale: Locale(identifier: winner)) {
-            speechRecognizer = bestRecognizer
-        }
-        isStarting = false
+        speechRecognizer = recognizer
+        currentLanguageCode = locale
         try await startRecording()
+    }
 
-        // 如果评估期间有文本，把它发出去
-        if !winnerText.isEmpty {
-            currentText = winnerText
-            onSegmentRecognized?(winnerText, false)
-        }
+    private static func safeAutomaticEnglishLocale() -> String {
+        let region = Locale.current.region?.identifier ?? "US"
+        let candidate = "en-\(region)"
+        return allEnglishLocales.contains(candidate) ? candidate : "en-US"
     }
 
     func stopAutoDetectRecording() {
