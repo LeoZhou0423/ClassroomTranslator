@@ -97,7 +97,7 @@ final class StableRecordingViewController: NSViewController {
         transcriptView.minSize = NSSize(width: 0, height: 240)
         transcriptView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         transcriptView.textContainer?.widthTracksTextView = true
-        transcriptView.textContainer?.containerSize = NSSize(width: 0, height: .greatestFiniteMagnitude)
+        transcriptView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         transcriptView.font = .systemFont(ofSize: 15)
         transcriptView.textColor = .labelColor
         transcriptView.backgroundColor = .textBackgroundColor
