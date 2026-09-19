@@ -17,6 +17,8 @@ struct SessionDetailView: View {
     @State private var title: String
     @State private var drafts: [DraftSegment]
     @State private var feedback = ""
+    @State private var translationManager = TranslationManager()
+    @State private var isFillingTranslations = false
 
     init(record: TranscriptRecord) {
         self.record = record
@@ -76,11 +78,23 @@ struct SessionDetailView: View {
                 Spacer()
                 Button { exportWord() } label: { Label("Export Word", systemImage: "doc.richtext") }
                     .buttonStyle(.borderedProminent).disabled(isEditing)
+                if drafts.contains(where: { $0.translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                    Button { Task { await translateMissingSegments() } } label: {
+                        Label(isFillingTranslations ? "Translating…" : "Translate Missing", systemImage: "character.bubble")
+                    }
+                    .disabled(isFillingTranslations || isEditing)
+                }
                 Button { ExportManager.exportSingle(record: record) } label: { Label("Export Text", systemImage: "doc.plaintext") }
                     .buttonStyle(.bordered).disabled(isEditing)
             }.padding()
         }
         .frame(minWidth: 620, minHeight: 480)
+        .modifier(TranslationSessionCompat(manager: translationManager))
+        .task {
+            if drafts.contains(where: { $0.translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                await translateMissingSegments()
+            }
+        }
     }
 
     private func saveChanges() {
@@ -108,5 +122,31 @@ struct SessionDetailView: View {
             case .failure(let error): feedback = error.localizedDescription
             }
         }
+    }
+
+    private func translateMissingSegments() async {
+        guard !isFillingTranslations else { return }
+        isFillingTranslations = true
+        feedback = String(localized: "Translating missing text…")
+        if !translationManager.hasSession {
+            translationManager.requestSessionRefresh()
+            for _ in 0..<10 where !translationManager.hasSession {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        guard translationManager.hasSession else {
+            isFillingTranslations = false
+            feedback = String(localized: "Translation service is not ready. Try again.")
+            return
+        }
+        for index in drafts.indices where drafts[index].translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            drafts[index].translated = await translationManager.translate(drafts[index].original)
+        }
+        record.segments = drafts.map {
+            TranscriptSegment(id: $0.id, original: $0.original, translated: $0.translated, timestamp: $0.timestamp, isFinal: $0.isFinal)
+        }
+        historyStore.save()
+        isFillingTranslations = false
+        feedback = String(localized: "Translations updated")
     }
 }

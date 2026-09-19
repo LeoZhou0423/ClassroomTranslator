@@ -54,6 +54,7 @@ final class StableRecordingViewController: NSViewController {
     private var partialText = ""
     private var partialTranslation = ""
     private var partialTranslationTask: Task<Void, Never>?
+    private var finalTranslationTasks: [Task<Void, Never>] = []
     private var partialRevision = 0
     private var generation = 0
     private var timer: Timer?
@@ -90,13 +91,23 @@ final class StableRecordingViewController: NSViewController {
 
         transcriptView.isEditable = false
         transcriptView.isSelectable = true
+        transcriptView.isVerticallyResizable = true
+        transcriptView.isHorizontallyResizable = false
+        transcriptView.autoresizingMask = [.width]
+        transcriptView.minSize = NSSize(width: 0, height: 240)
+        transcriptView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        transcriptView.textContainer?.widthTracksTextView = true
+        transcriptView.textContainer?.containerSize = NSSize(width: 0, height: .greatestFiniteMagnitude)
         transcriptView.font = .systemFont(ofSize: 15)
+        transcriptView.textColor = .labelColor
+        transcriptView.backgroundColor = .textBackgroundColor
         transcriptView.textContainerInset = NSSize(width: 12, height: 12)
         transcriptView.string = String(localized: "Ready to Listen")
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         scroll.documentView = transcriptView
+        transcriptView.frame = NSRect(x: 0, y: 0, width: 640, height: 240)
 
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
@@ -225,17 +236,26 @@ final class StableRecordingViewController: NSViewController {
         generation += 1
         speechManager.stopRecording()
         accumulateElapsed()
-        partialTranslationTask?.cancel()
-        partialTranslationTask = nil
         subtitleWindow.hideWindow()
-        if !partialText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            historyStore.addSegmentIfNew(TranscriptSegment(original: partialText.trimmingCharacters(in: .whitespacesAndNewlines)))
-            partialText = ""
-        }
-        historyStore.stopCurrentRecord()
-        statusLabel.stringValue = String(localized: "Saved")
         renderState()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.onClose() }
+        statusLabel.stringValue = String(localized: "Finishing translation and saving…")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for task in finalTranslationTasks { await task.value }
+            let remainder = partialText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !remainder.isEmpty {
+                let translated = await translationManager.translate(remainder)
+                historyStore.addSegmentIfNew(TranscriptSegment(original: remainder, translated: translated))
+                finalizedText += "\n\n\(remainder)\n\(translated)"
+                partialText = ""
+                partialTranslation = ""
+                refreshTranscript()
+            }
+            historyStore.stopCurrentRecord()
+            statusLabel.stringValue = String(localized: "Saved")
+            try? await Task.sleep(for: .milliseconds(450))
+            onClose()
+        }
     }
 
     func shutDown() {
@@ -274,7 +294,8 @@ final class StableRecordingViewController: NSViewController {
             guard let self else { return }
             if isFinal {
                 partialRevision += 1
-                Task { @MainActor in
+                let task = Task { @MainActor [weak self] in
+                    guard let self else { return }
                     let punctuated = await PunctuationService.punctuate(text)
                     let translated = await self.translationManager.translate(punctuated)
                     self.finalizedText += "\n\n\(punctuated)\n\(translated)"
@@ -284,6 +305,7 @@ final class StableRecordingViewController: NSViewController {
                     self.subtitleWindow.appendSegment(original: punctuated, translated: translated)
                     self.refreshTranscript()
                 }
+                finalTranslationTasks.append(task)
             } else {
                 self.partialText = text
                 self.partialTranslation = ""
@@ -308,7 +330,7 @@ final class StableRecordingViewController: NSViewController {
             try? await Task.sleep(for: .milliseconds(350))
             guard let self, !Task.isCancelled, revision == partialRevision else { return }
             let translated = await translationManager.translate(text)
-            guard !Task.isCancelled, revision == partialRevision, partialText == text else { return }
+            guard !Task.isCancelled, revision == partialRevision, partialText == text, state == .recording else { return }
             partialTranslation = translated
             refreshTranscript()
             subtitleWindow.updateCurrentText(original: text, translated: translated)
