@@ -239,8 +239,8 @@ final class SpeechManager {
         } else {
             currentText = text
             onSegmentRecognized?(text, false)
-            if !committedText.isEmpty {
-                tryMidUtteranceCommit(fullText: fullText, segments: result.bestTranscription.segments)
+            if !committedText.isEmpty, tryMidUtteranceCommit(fullText: fullText, segments: result.bestTranscription.segments) {
+                return
             }
             scheduleAutomaticSentenceBreak(fullText: fullText, visibleText: text)
         }
@@ -255,8 +255,9 @@ final class SpeechManager {
         return i
     }
 
-    private func tryMidUtteranceCommit(fullText: String, segments: [SFTranscriptionSegment]) {
-        guard segments.count >= 2, !committedText.isEmpty else { return }
+    @discardableResult
+    private func tryMidUtteranceCommit(fullText: String, segments: [SFTranscriptionSegment]) -> Bool {
+        guard segments.count >= 2, !committedText.isEmpty else { return false }
         for i in (1..<segments.count).reversed() {
             let prevEnd = segments[i - 1].timestamp + segments[i - 1].duration
             let gap = segments[i].timestamp - prevEnd
@@ -274,8 +275,9 @@ final class SpeechManager {
             finalSegments.append(newSentence)
             onSegmentRecognized?(newSentence, true)
             currentText = afterGap
-            return
+            return true
         }
+        return false
     }
 
     private func scheduleAutomaticSentenceBreak(fullText: String, visibleText: String) {
