@@ -71,18 +71,19 @@ final class SubtitleWindowController: NSWindowController {
     }
 
     func appendSegment(original: String, translated: String) {
-        guard !translated.isEmpty else { return }
+        guard !original.isEmpty || !translated.isEmpty else { return }
         let fontSize = UserDefaults.standard.double(forKey: "fontSize").clamped(to: 12...36, default: 20)
 
         // 移除正在显示的 partial（如有）
         removeCurrentPartial()
 
         let attrString = NSMutableAttributedString()
-        if textView.string.isEmpty {
-            attrString.append(NSAttributedString(string: translated, attributes: subtitleAttrs(fontSize: fontSize, color: .white)))
-        } else {
+        if !textView.string.isEmpty {
             attrString.append(NSAttributedString(string: "\n\n", attributes: [.foregroundColor: NSColor.clear]))
-            attrString.append(NSAttributedString(string: translated, attributes: subtitleAttrs(fontSize: fontSize, color: .white)))
+        }
+        attrString.append(NSAttributedString(string: original, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow)))
+        if !translated.isEmpty {
+            attrString.append(NSAttributedString(string: "\n" + translated, attributes: subtitleAttrs(fontSize: fontSize, color: .white)))
         }
         textView.textStorage?.append(attrString)
         currentPartialRange = nil
@@ -105,6 +106,11 @@ final class SubtitleWindowController: NSWindowController {
         textView.textStorage?.append(partialAttr)
         currentPartialRange = NSRange(location: startLocation, length: partialAttr.length)
         scrollToBottom()
+    }
+
+    func updateCurrentText(original: String, translated: String) {
+        let combined = translated.isEmpty ? original : original + "\n" + translated
+        updateCurrentText(combined)
     }
 
     private func removeCurrentPartial() {

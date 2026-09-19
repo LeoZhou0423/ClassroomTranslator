@@ -38,6 +38,7 @@ final class StableRecordingViewController: NSViewController {
     private let translationManager: TranslationManager
     private let onClose: () -> Void
     private let speechManager = SpeechManager()
+    private let subtitleWindow = SubtitleWindowController()
 
     private let transcriptView = NSTextView()
     private let statusLabel = NSTextField(labelWithString: "")
@@ -51,6 +52,9 @@ final class StableRecordingViewController: NSViewController {
     private var state: State = .idle
     private var finalizedText = ""
     private var partialText = ""
+    private var partialTranslation = ""
+    private var partialTranslationTask: Task<Void, Never>?
+    private var partialRevision = 0
     private var generation = 0
     private var timer: Timer?
     private var startedAt: Date?
@@ -178,6 +182,8 @@ final class StableRecordingViewController: NSViewController {
                 state = .recording
                 startedAt = Date()
                 startTimer()
+                subtitleWindow.clearAll()
+                subtitleWindow.showWindow()
                 statusLabel.stringValue = String(localized: "Recording · speak now")
                 renderState()
             } catch {
@@ -190,6 +196,7 @@ final class StableRecordingViewController: NSViewController {
         guard generation == self.generation else { return }
         speechManager.stopRecording()
         accumulateElapsed()
+        subtitleWindow.hideWindow()
         state = .idle
         statusLabel.stringValue = message
         renderState()
@@ -218,6 +225,9 @@ final class StableRecordingViewController: NSViewController {
         generation += 1
         speechManager.stopRecording()
         accumulateElapsed()
+        partialTranslationTask?.cancel()
+        partialTranslationTask = nil
+        subtitleWindow.hideWindow()
         if !partialText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             historyStore.addSegmentIfNew(TranscriptSegment(original: partialText.trimmingCharacters(in: .whitespacesAndNewlines)))
             partialText = ""
@@ -231,6 +241,9 @@ final class StableRecordingViewController: NSViewController {
     func shutDown() {
         generation += 1
         speechManager.stopRecording()
+        partialTranslationTask?.cancel()
+        partialTranslationTask = nil
+        subtitleWindow.hideWindow()
         timer?.invalidate()
         timer = nil
         speechManager.onSegmentRecognized = nil
@@ -260,25 +273,47 @@ final class StableRecordingViewController: NSViewController {
         speechManager.onSegmentRecognized = { [weak self] text, isFinal in
             guard let self else { return }
             if isFinal {
+                partialRevision += 1
                 Task { @MainActor in
                     let punctuated = await PunctuationService.punctuate(text)
                     let translated = await self.translationManager.translate(punctuated)
                     self.finalizedText += "\n\n\(punctuated)\n\(translated)"
                     self.partialText = ""
+                    self.partialTranslation = ""
                     self.historyStore.addSegmentIfNew(TranscriptSegment(original: punctuated, translated: translated))
+                    self.subtitleWindow.appendSegment(original: punctuated, translated: translated)
                     self.refreshTranscript()
                 }
             } else {
                 self.partialText = text
+                self.partialTranslation = ""
                 self.refreshTranscript()
+                self.subtitleWindow.updateCurrentText(original: text, translated: "")
+                self.translatePartial(text)
             }
         }
     }
 
     private func refreshTranscript() {
         let full = finalizedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        transcriptView.string = partialText.isEmpty ? full : "\(full)\(full.isEmpty ? "" : "\n\n")\(partialText)"
+        let live = partialTranslation.isEmpty ? partialText : "\(partialText)\n\(partialTranslation)"
+        transcriptView.string = live.isEmpty ? full : "\(full)\(full.isEmpty ? "" : "\n\n")\(live)"
         transcriptView.scrollToEndOfDocument(nil)
+    }
+
+    private func translatePartial(_ text: String) {
+        partialRevision += 1
+        let revision = partialRevision
+        partialTranslationTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, !Task.isCancelled, revision == partialRevision else { return }
+            let translated = await translationManager.translate(text)
+            guard !Task.isCancelled, revision == partialRevision, partialText == text else { return }
+            partialTranslation = translated
+            refreshTranscript()
+            subtitleWindow.updateCurrentText(original: text, translated: translated)
+            statusLabel.stringValue = String(localized: "Recording · live translation")
+        }
     }
 
     private func renderState() {

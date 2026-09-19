@@ -23,6 +23,7 @@ final class TranslationManager {
     @available(macOS 15, *)
     func attach(session: TranslationSession) {
         sessionStorage = session
+        modelReady = nil
     }
     #endif
 
@@ -52,10 +53,16 @@ final class TranslationManager {
         if #available(macOS 15, *) {
             if let session = sessionStorage as? TranslationSession {
                 do {
+                    if modelReady == nil {
+                        try await session.prepareTranslation()
+                        modelReady = true
+                    }
+                    guard modelReady == true else { return text }
                     let response = try await session.translate(text)
                     return response.targetText
                 } catch {
                     print("Translation failed: \(error)")
+                    modelReady = false
                     return text
                 }
             }
