@@ -214,9 +214,12 @@ struct RecordingView: View {
                         return
                     }
 
-                    // 翻译新句子
-                    let translated = await translationManager.translate(newEnglish)
-                    let trimmed = newEnglish.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // 先加标点，再翻译
+                    let punctuated = await withCheckedContinuation { cont in
+                        PunctuationService.punctuate(newEnglish) { cont.resume(returning: $0) }
+                    }
+                    let translated = await translationManager.translate(punctuated)
+                    let trimmed = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
 
                     // 去重
                     if segments.last?.english != trimmed {
@@ -229,7 +232,6 @@ struct RecordingView: View {
                     // partial 也是累积全文，diff 出当前新部分
                     let newPart = extractNewSentence(fullText: fullText)
                     currentPartialNew = newPart
-                    // overlay 显示当前新部分
                     controller.updateCurrentText(newPart)
                 }
             }

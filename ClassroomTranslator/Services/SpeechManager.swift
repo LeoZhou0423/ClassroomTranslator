@@ -246,13 +246,12 @@ final class SpeechManager {
                                 threshold = max(self.minInterval * 2, self.emaInterval * k)
                             }
 
-                            // ---- 停顿检测：必须有句末标点才真正断句 ----
+                            // ---- 停顿检测：有句末标点时断句 ----
                             let pauseDetected: Bool
-                            let forceBreak = text.count > 150  // 安全网：超长文本强制断句
                             if self.lastPartialTime > 0, self.intervalCount >= self.warmupThreshold {
-                                pauseDetected = (gap > threshold && Self.hasSentenceEnding(text)) || forceBreak
+                                pauseDetected = gap > threshold && Self.hasSentenceEnding(text)
                             } else {
-                                pauseDetected = (self.lastPartialTime > 0 && gap > self.warmupPause && Self.hasSentenceEnding(text)) || forceBreak
+                                pauseDetected = self.lastPartialTime > 0 && gap > self.warmupPause && Self.hasSentenceEnding(text)
                             }
 
                             if pauseDetected && text.count >= 3 {
