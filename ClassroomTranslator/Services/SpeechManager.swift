@@ -229,11 +229,11 @@ final class SpeechManager {
                 resetPauseModel()
                 return
             }
-            committedText = fullText
             finalSegments.append(text)
             onSegmentRecognized?(text, true)
             currentText = ""
             resetPauseModel()
+            committedText = fullText  // 必须在 resetPauseModel 之后设置，否则被清空
         } else {
             let text: String
             if !committedText.isEmpty {
@@ -252,12 +252,13 @@ final class SpeechManager {
     }
 
     private func isDuplicate(_ text: String) -> Bool {
-        guard let last = finalSegments.last else { return false }
         let lower = text.lowercased()
-        let lastLower = last.lowercased()
-        if lower == lastLower { return true }
-        if lower.hasSuffix(lastLower), lower.count - lastLower.count < 15 { return true }
-        if lastLower.hasSuffix(lower), lastLower.count - lower.count < 15 { return true }
+        for segment in finalSegments {
+            let segLower = segment.lowercased()
+            if lower == segLower { return true }
+            if lower.hasSuffix(segLower), lower.count - segLower.count < 15 { return true }
+            if segLower.hasSuffix(lower), segLower.count - lower.count < 15 { return true }
+        }
         return false
     }
 
