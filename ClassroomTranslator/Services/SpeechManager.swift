@@ -128,8 +128,14 @@ final class SpeechManager {
                 // 触发系统下载（创建实例即可，系统自动开始）
                 _ = recognizer
                 onLanguageModelStatusChanged?("Downloading \(code)… (\(ready + 1)/\(total))")
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                if recognizer.supportsOnDeviceRecognition { ready += 1 }
+                // 等待模型下载完成（最多15秒）
+                for _ in 0..<15 {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if recognizer.supportsOnDeviceRecognition {
+                        ready += 1
+                        break
+                    }
+                }
             }
         }
         onLanguageModelStatusChanged?("\(ready)/\(total) English models ready.")
@@ -308,6 +314,14 @@ final class SpeechManager {
             throw SpeechError.noInputDevice
         }
 
+        // 清理旧的并行识别器（如果有的话）
+        for (_, entry) in parallelRecognizers {
+            entry.request.endAudio()
+            entry.task.cancel()
+        }
+        parallelRecognizers.removeAll()
+        bestLocale = nil
+
         // 创建多口音识别器
         var scores: [String: Int] = [:]
         var texts: [String: String] = [:]
@@ -325,12 +339,7 @@ final class SpeechManager {
                 texts[code] = text
                 scores[code] = text.split(separator: " ").count + (recognizer.supportsOnDeviceRecognition ? 2 : 0)
                 lock.unlock()
-                if let best = self?.bestLocale, code == best {
-                    Task { @MainActor in
-                        self?.currentText = text
-                        self?.onSegmentRecognized?(text, result.isFinal)
-                    }
-                }
+                // 评估期间不转发到主窗口（避免重复显示）
             }
 
             parallelRecognizers[code] = (recognizer, request, task)
@@ -363,13 +372,15 @@ final class SpeechManager {
         bestLocale = winner
         currentLanguageCode = winner
         onLanguageModelStatusChanged?("")
+        isRecording = false
 
-        // 停掉所有并行识别器
+        // 停掉所有并行识别器并清理（重要！避免旧回调干扰）
         for (code, entry) in parallelRecognizers {
             entry.request.endAudio()
             entry.task.cancel()
-            parallelRecognizers.removeValue(forKey: code)
         }
+        parallelRecognizers.removeAll()
+        bestLocale = nil
         driver.stop()
 
         // 用最佳口音重新开始单识别器录音

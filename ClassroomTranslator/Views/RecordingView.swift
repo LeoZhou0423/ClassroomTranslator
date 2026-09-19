@@ -14,11 +14,11 @@ struct RecordingView: View {
     @State private var isPreparing = false
     @State private var prepareGeneration = 0
     @State private var statusMessage = ""
-    /// 流式输出：累积已确认文本
-    @State private var accumulatedEnglish = ""
-    @State private var accumulatedChinese = ""
-    /// 当前正在识别的 partial
+    /// 已确认的翻译段落（只存中文）
+    @State private var translatedSegments: [String] = []
+    /// 当前正在识别的 partial 英文（overlay 显示用）
     @State private var currentEnglish = ""
+    /// 当前 partial 的翻译
     @State private var currentChinese = ""
     @State private var showHistory = false
     @State private var showSettings = false
@@ -32,7 +32,6 @@ struct RecordingView: View {
             .frame(minWidth: 400, minHeight: 300)
             .background(Color(nsColor: .windowBackgroundColor))
             .onAppear {
-                // 用课程设置的口音，设置页的 Auto/手动选项只影响下载
                 currentAccentCode = course.accentCode
                 speechManager.switchLanguage(to: course.accentCode)
                 setupSubtitleWindow()
@@ -49,7 +48,6 @@ struct RecordingView: View {
             }
             .buttonStyle(.borderless)
             Text(course.name).font(.headline)
-            // 口音切换：Auto 模式下可快速切换
             if recognitionLanguage == "auto" {
                 Picker("Accent", selection: $currentAccentCode) {
                     ForEach(quickAccents, id: \.self) { code in
@@ -74,7 +72,7 @@ struct RecordingView: View {
 
     private var mainContent: some View {
         VStack(spacing: 16) {
-            if accumulatedEnglish.isEmpty && currentEnglish.isEmpty { emptyStateView }
+            if translatedSegments.isEmpty && currentEnglish.isEmpty { emptyStateView }
             else { transcriptView }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -90,31 +88,39 @@ struct RecordingView: View {
     }
 
     private var transcriptView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if !accumulatedEnglish.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(accumulatedEnglish).font(.system(size: 14, weight: .medium))
-                        if !accumulatedChinese.isEmpty {
-                            Text(accumulatedChinese).font(.system(size: 13)).foregroundColor(.blue)
-                        }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    // 已确认的翻译段落（只显示中文）
+                    ForEach(Array(translatedSegments.enumerated()), id: \.offset) { index, chinese in
+                        Text(chinese)
+                            .font(.system(size: 15))
+                            .foregroundColor(.primary)
+                            .padding(10)
+                            .background(Color(nsColor: .controlBackgroundColor))
+                            .cornerRadius(8)
+                            .id(index)
                     }
-                    .padding(8)
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    .cornerRadius(6)
-                }
-                if !currentEnglish.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(currentEnglish).font(.system(size: 14, weight: .medium))
+                    // 当前 partial 的翻译（实时）
+                    if !currentChinese.isEmpty {
+                        Text(currentChinese)
+                            .font(.system(size: 15))
+                            .foregroundColor(.blue)
+                            .padding(10)
+                            .background(Color.blue.opacity(0.08))
+                            .cornerRadius(8)
+                            .id("current")
                     }
-                    .padding(8)
-                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                    .cornerRadius(6)
                 }
+                .padding()
             }
-            .padding()
+            .onChange(of: translatedSegments.count) { _, _ in
+                if autoScroll { withAnimation { proxy.scrollTo(translatedSegments.count - 1, anchor: .bottom) } }
+            }
         }
     }
+
+    @AppStorage("autoScroll") private var autoScroll: Bool = true
 
     private var controlBar: some View {
         HStack(spacing: 16) {
@@ -128,7 +134,6 @@ struct RecordingView: View {
             }
             Spacer()
             if isRecording {
-                // 录音中：显示暂停 + 结束
                 Button(action: pauseRecording) {
                     Label(String(localized: "Pause"), systemImage: "pause.fill")
                 }
@@ -144,7 +149,6 @@ struct RecordingView: View {
                 ProgressView().controlSize(.small)
                 Text(String(localized: "Preparing…")).foregroundColor(.secondary)
             } else if isPaused {
-                // 暂停中：显示继续 + 结束
                 Button(action: resumeRecording) {
                     Label(String(localized: "Resume"), systemImage: "mic.fill")
                 }
@@ -157,7 +161,6 @@ struct RecordingView: View {
                 .tint(.red)
                 .controlSize(.large)
             } else {
-                // 未开始：显示开始
                 Button(action: startRecording) {
                     Label(String(localized: "Start"), systemImage: "mic.fill")
                 }
@@ -172,10 +175,11 @@ struct RecordingView: View {
     // MARK: - Actions
 
     private func stopAndDismiss() {
-        if isRecording {
+        if isRecording || isPaused {
             speechManager.stopRecording()
             historyStore.stopCurrentRecord()
             isRecording = false
+            isPaused = false
         }
         dismiss()
     }
@@ -186,6 +190,7 @@ struct RecordingView: View {
         speechManager.onRecordingInterrupted = {
             Task { @MainActor in
                 isRecording = false
+                isPaused = false
                 statusMessage = String(localized: "Recording was interrupted. Tap Start to resume.")
             }
         }
@@ -197,22 +202,22 @@ struct RecordingView: View {
         speechManager.onSegmentRecognized = { text, isFinal in
             Task { @MainActor in
                 if isFinal {
-                    // 累积完整 final 文本，不截取不 diff（识别器会修正前面的词）
-                    accumulatedEnglish = text
-                    // 整句翻译，不拼接（避免碎片翻译导致乱码）
+                    // 整句翻译
                     let translated = await translationManager.translate(text)
-                    accumulatedChinese = translated
-                    // 悬浮窗：只显示这一句
-                    controller.updateSegments([(original: text, translated: translated)])
-                    // 保存到历史
-                    historyStore.addSegment(TranscriptSegment(original: text, translated: translated))
-                    currentEnglish = ""; currentChinese = ""
-                } else {
-                    // partial 直接全量显示（识别器每次返回从头开始的全文）
-                    currentEnglish = text
+                    // 去重：如果最后一段和当前一样就不追加
+                    if translatedSegments.last != translated {
+                        translatedSegments.append(translated)
+                    }
+                    // 保存到历史（去重）
+                    historyStore.addSegmentIfNew(TranscriptSegment(original: text, translated: translated))
+                    // overlay 追加
+                    controller.appendSegment(original: text, translated: translated)
+                    currentEnglish = ""
                     currentChinese = ""
-                    // 悬浮窗：显示 partial 原文（不翻译 partial，等 final 再翻）
-                    controller.updateSegments([], currentText: text)
+                } else {
+                    currentEnglish = text
+                    // partial 不翻译，直接用英文原文在 overlay 显示
+                    controller.updateCurrentText(text)
                 }
             }
         }
@@ -243,7 +248,6 @@ struct RecordingView: View {
                 return
             }
 
-            // Auto 模式：并行检测口音
             if currentAccentCode == "auto" {
                 statusMessage = String(localized: "Detecting accent…")
                 let detectErr = await runStep(timeoutSeconds: 30, timeoutMessage: String(localized: "Accent detection timed out.")) {
@@ -253,7 +257,6 @@ struct RecordingView: View {
                 if let detectErr {
                     statusMessage = Self.message(for: detectErr, fallback: String(localized: "Failed to start recording."))
                 } else {
-                    // 检测完成后更新显示的口音
                     currentAccentCode = speechManager.currentLanguageCode
                     historyStore.startNewRecord(in: course)
                     statusMessage = ""
@@ -261,7 +264,6 @@ struct RecordingView: View {
                     isPaused = false
                 }
             } else {
-                // 手动模式：直接用选定口音
                 statusMessage = String(localized: "Starting recording…")
                 let startErr = await runStep(timeoutSeconds: 20, timeoutMessage: String(localized: "Recording took too long to start.")) {
                     try await speechManager.startRecording()
@@ -313,9 +315,22 @@ struct RecordingView: View {
         } else {
             speechManager.stopRecording()
         }
+        // 翻译最后一段 partial（如果有）
+        if !currentEnglish.isEmpty {
+            Task {
+                let translated = await translationManager.translate(currentEnglish)
+                if translatedSegments.last != translated {
+                    translatedSegments.append(translated)
+                }
+                historyStore.addSegmentIfNew(TranscriptSegment(original: currentEnglish, translated: translated))
+                subtitleWindowController?.appendSegment(original: currentEnglish, translated: translated)
+            }
+        }
         historyStore.stopCurrentRecord()
         isRecording = false
         isPaused = false
+        currentEnglish = ""
+        currentChinese = ""
         dismiss()
     }
 

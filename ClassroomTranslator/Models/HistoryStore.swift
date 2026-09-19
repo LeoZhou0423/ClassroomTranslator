@@ -77,13 +77,19 @@ final class HistoryStore {
         save()
     }
 
-    func addSegment(_ segment: TranscriptSegment) {
+    func addSegmentIfNew(_ segment: TranscriptSegment) {
         guard let record = currentRecord else { return }
         var segs = record.segments
+        // 去重：最后一段原文相同就不追加
+        if let last = segs.last, last.original == segment.original { return }
         segs.append(segment)
         record.segments = segs
         record.duration = Date().timeIntervalSince(record.date)
         save()
+    }
+
+    func addSegment(_ segment: TranscriptSegment) {
+        addSegmentIfNew(segment)
     }
 
     func stopCurrentRecord() {
