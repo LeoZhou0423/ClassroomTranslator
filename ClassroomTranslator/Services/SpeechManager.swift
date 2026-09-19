@@ -214,36 +214,51 @@ final class SpeechManager {
         let fullText = result.bestTranscription.formattedString
         guard fullText != lastPartialText || result.isFinal else { return }
         lastPartialText = fullText
-        let text: String
-        if !committedText.isEmpty {
-            let commonLen = Self.commonPrefixLength(committedText, fullText)
-            if commonLen > 0 {
-                text = String(fullText.dropFirst(commonLen)).trimmingCharacters(in: .whitespacesAndNewlines)
-            } else {
-                text = fullText
-            }
-        } else {
-            text = fullText
-        }
-        guard !text.isEmpty || result.isFinal else { return }
 
         if result.isFinal {
             debounceWorkItem?.cancel()
             debounceWorkItem = nil
-            if !text.isEmpty {
-                finalSegments.append(text)
-                onSegmentRecognized?(text, true)
+            let text = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else {
+                currentText = ""
+                resetPauseModel()
+                return
             }
+            if isDuplicate(text) {
+                currentText = ""
+                resetPauseModel()
+                return
+            }
+            committedText = fullText
+            finalSegments.append(text)
+            onSegmentRecognized?(text, true)
             currentText = ""
             resetPauseModel()
         } else {
+            let text: String
+            if !committedText.isEmpty {
+                let commonLen = Self.commonPrefixLength(committedText, fullText)
+                text = commonLen > 0
+                    ? String(fullText.dropFirst(commonLen)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    : fullText
+            } else {
+                text = fullText
+            }
+            guard !text.isEmpty else { return }
             currentText = text
             onSegmentRecognized?(text, false)
-            if !committedText.isEmpty, tryMidUtteranceCommit(fullText: fullText, segments: result.bestTranscription.segments) {
-                return
-            }
-            scheduleAutomaticSentenceBreak(fullText: fullText, visibleText: text)
+            scheduleFallbackCommit(fullText: fullText, visibleText: text)
         }
+    }
+
+    private func isDuplicate(_ text: String) -> Bool {
+        guard let last = finalSegments.last else { return false }
+        let lower = text.lowercased()
+        let lastLower = last.lowercased()
+        if lower == lastLower { return true }
+        if lower.hasSuffix(lastLower), lower.count - lastLower.count < 15 { return true }
+        if lastLower.hasSuffix(lower), lastLower.count - lower.count < 15 { return true }
+        return false
     }
 
     private static func commonPrefixLength(_ a: String, _ b: String) -> Int {
@@ -255,46 +270,19 @@ final class SpeechManager {
         return i
     }
 
-    @discardableResult
-    private func tryMidUtteranceCommit(fullText: String, segments: [SFTranscriptionSegment]) -> Bool {
-        guard segments.count >= 2, !committedText.isEmpty else { return false }
-        for i in (1..<segments.count).reversed() {
-            let prevEnd = segments[i - 1].timestamp + segments[i - 1].duration
-            let gap = segments[i].timestamp - prevEnd
-            guard gap >= 0.5 else { continue }
-            let splitPos = segments[i].substringRange.location
-            guard splitPos > 0, splitPos < fullText.count else { continue }
-            let beforeGap = String(fullText.prefix(splitPos)).trimmingCharacters(in: .whitespaces)
-            let afterGap = String(fullText.dropFirst(splitPos)).trimmingCharacters(in: .whitespaces)
-            guard beforeGap.count > committedText.count else { continue }
-            let newSentence = String(beforeGap.dropFirst(committedText.count)).trimmingCharacters(in: .whitespaces)
-            guard !newSentence.isEmpty else { continue }
-            debounceWorkItem?.cancel()
-            debounceWorkItem = nil
-            committedText = beforeGap
-            finalSegments.append(newSentence)
-            onSegmentRecognized?(newSentence, true)
-            currentText = afterGap
-            return true
-        }
-        return false
-    }
-
-    private func scheduleAutomaticSentenceBreak(fullText: String, visibleText: String) {
+    /// 只在长时间无新结果时才提交（fallback），正常情况靠 isFinal 提交
+    private func scheduleFallbackCommit(fullText: String, visibleText: String) {
         debounceWorkItem?.cancel()
-        let delay: TimeInterval = {
-            if Self.hasSentenceEnding(visibleText) { return 0.4 }
-            if visibleText.count >= 80 { return 0.5 }
-            if visibleText.count >= 40 { return 0.7 }
-            return 0.9
-        }()
+        let delay: TimeInterval = Self.hasSentenceEnding(visibleText) ? 2.0 : 5.0
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self, self.isRecording, self.lastPartialText == fullText else { return }
+                let committed = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !committed.isEmpty, !self.isDuplicate(committed) else { return }
                 self.committedText = fullText
                 self.currentText = ""
-                self.finalSegments.append(visibleText)
-                self.onSegmentRecognized?(visibleText, true)
+                self.finalSegments.append(committed)
+                self.onSegmentRecognized?(committed, true)
             }
         }
         debounceWorkItem = item

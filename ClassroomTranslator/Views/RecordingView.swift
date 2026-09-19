@@ -121,24 +121,11 @@ struct RecordingView: View {
                         return
                     }
                     let punctuated = await PunctuationService.punctuate(trimmed)
-                    let finalText = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                    if let lastIdx = self.segments.indices.last,
-                       !Self.hasSentenceEnding(self.segments[lastIdx].english),
-                       self.segments[lastIdx].english.count < 20 {
-                        let mergedText = self.segments[lastIdx].english + finalText
-                        let punctuatedMerged = await PunctuationService.punctuate(mergedText)
-                        let translated = await self.translationManager.translate(punctuatedMerged)
-                        var mergedSeg = Segment(english: punctuatedMerged, chinese: translated)
-                        mergedSeg.id = self.segments[lastIdx].id
-                        self.segments[lastIdx] = mergedSeg
-                        self.historyStore.addSegmentIfNew(TranscriptSegment(original: punctuatedMerged, translated: translated))
-                        self.subtitleWindowController?.appendSegment(original: punctuatedMerged, translated: translated)
-                    } else {
-                        let translated = await self.translationManager.translate(finalText)
-                        self.segments.append(Segment(english: finalText, chinese: translated))
-                        self.historyStore.addSegmentIfNew(TranscriptSegment(original: finalText, translated: translated))
-                        self.subtitleWindowController?.appendSegment(original: finalText, translated: translated)
+                    let sentences = Self.splitIntoSentences(punctuated)
+                    for sentence in sentences {
+                        let s = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !s.isEmpty, s.count > 3 else { continue }
+                        await self.commitSentence(s)
                     }
                     self.currentPartialNew = ""
                 } else {
@@ -147,6 +134,51 @@ struct RecordingView: View {
                     self.subtitleWindowController?.updateCurrentText(text)
                 }
             }
+        }
+    }
+
+    /// 用 NLP 标点分割句子，而不是靠时间间隔
+    private static func splitIntoSentences(_ text: String) -> [String] {
+        var sentences: [String] = []
+        var current = ""
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            current.append(c)
+            if ".!?。！？".contains(c) {
+                let nextIsSpaceOrEnd = (i + 1 >= chars.count) || chars[i + 1].isWhitespace
+                let prevIsUpper = i > 0 && chars[i - 1].isUppercase
+                let isAbbreviation = c == "." && prevIsUpper && (i + 1 < chars.count) && chars[i + 1].isLowercase
+                if nextIsSpaceOrEnd && !isAbbreviation {
+                    sentences.append(current)
+                    current = ""
+                }
+            }
+            i += 1
+        }
+        if !current.trimmingCharacters(in: .whitespaces).isEmpty {
+            sentences.append(current)
+        }
+        return sentences
+    }
+
+    /// 提交一个句子：合并前一个未标点片段，翻译完整句子
+    private func commitSentence(_ sentence: String) async {
+        if let lastIdx = segments.indices.last,
+           !Self.hasSentenceEnding(segments[lastIdx].english) {
+            let mergedText = segments[lastIdx].english + " " + sentence
+            let translated = await translationManager.translate(mergedText)
+            var mergedSeg = Segment(english: mergedText, chinese: translated)
+            mergedSeg.id = segments[lastIdx].id
+            segments[lastIdx] = mergedSeg
+            historyStore.addSegmentIfNew(TranscriptSegment(original: mergedText, translated: translated))
+            subtitleWindowController?.appendSegment(original: mergedText, translated: translated)
+        } else {
+            let translated = await translationManager.translate(sentence)
+            segments.append(Segment(english: sentence, chinese: translated))
+            historyStore.addSegmentIfNew(TranscriptSegment(original: sentence, translated: translated))
+            subtitleWindowController?.appendSegment(original: sentence, translated: translated)
         }
     }
 

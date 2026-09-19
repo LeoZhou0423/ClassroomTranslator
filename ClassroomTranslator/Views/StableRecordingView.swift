@@ -301,25 +301,11 @@ final class StableRecordingViewController: NSViewController {
                 let task = Task { @MainActor [weak self] in
                     guard let self else { return }
                     let punctuated = await PunctuationService.punctuate(text)
-                    let finalText = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                    if !self.lastCommittedEnglish.isEmpty,
-                       !Self.hasSentenceEnding(self.lastCommittedEnglish),
-                       self.lastCommittedEnglish.count < 20 {
-                        let merged = self.lastCommittedEnglish + finalText
-                        let punctuatedMerged = await PunctuationService.punctuate(merged)
-                        let translated = await self.translationManager.translate(punctuatedMerged)
-                        self.removeLastFinalizedSegment()
-                        self.finalizedText += "\n\n\(punctuatedMerged)\n\(translated)"
-                        self.lastCommittedEnglish = punctuatedMerged
-                        self.historyStore.addSegmentIfNew(TranscriptSegment(original: punctuatedMerged, translated: translated))
-                        self.subtitleWindow.appendSegment(original: punctuatedMerged, translated: translated)
-                    } else {
-                        let translated = await self.translationManager.translate(finalText)
-                        self.finalizedText += "\n\n\(finalText)\n\(translated)"
-                        self.lastCommittedEnglish = finalText
-                        self.historyStore.addSegmentIfNew(TranscriptSegment(original: finalText, translated: translated))
-                        self.subtitleWindow.appendSegment(original: finalText, translated: translated)
+                    let sentences = Self.splitIntoSentences(punctuated)
+                    for sentence in sentences {
+                        let s = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !s.isEmpty, s.count > 3 else { continue }
+                        await self.commitSentence(s)
                     }
                     self.partialText = ""
                     self.partialTranslation = ""
@@ -333,6 +319,50 @@ final class StableRecordingViewController: NSViewController {
                 self.subtitleWindow.updateCurrentText(original: text, translated: "")
                 self.translatePartial(text)
             }
+        }
+    }
+
+    private static func splitIntoSentences(_ text: String) -> [String] {
+        var sentences: [String] = []
+        var current = ""
+        let chars = Array(text)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            current.append(c)
+            if ".!?。！？".contains(c) {
+                let nextIsSpaceOrEnd = (i + 1 >= chars.count) || chars[i + 1].isWhitespace
+                let prevIsUpper = i > 0 && chars[i - 1].isUppercase
+                let isAbbreviation = c == "." && prevIsUpper && (i + 1 < chars.count) && chars[i + 1].isLowercase
+                if nextIsSpaceOrEnd && !isAbbreviation {
+                    sentences.append(current)
+                    current = ""
+                }
+            }
+            i += 1
+        }
+        if !current.trimmingCharacters(in: .whitespaces).isEmpty {
+            sentences.append(current)
+        }
+        return sentences
+    }
+
+    private func commitSentence(_ sentence: String) async {
+        if !lastCommittedEnglish.isEmpty,
+           !Self.hasSentenceEnding(lastCommittedEnglish) {
+            let mergedText = lastCommittedEnglish + " " + sentence
+            let translated = await translationManager.translate(mergedText)
+            removeLastFinalizedSegment()
+            finalizedText += "\n\n\(mergedText)\n\(translated)"
+            lastCommittedEnglish = mergedText
+            historyStore.addSegmentIfNew(TranscriptSegment(original: mergedText, translated: translated))
+            subtitleWindow.appendSegment(original: mergedText, translated: translated)
+        } else {
+            let translated = await translationManager.translate(sentence)
+            finalizedText += "\n\n\(sentence)\n\(translated)"
+            lastCommittedEnglish = sentence
+            historyStore.addSegmentIfNew(TranscriptSegment(original: sentence, translated: translated))
+            subtitleWindow.appendSegment(original: sentence, translated: translated)
         }
     }
 
