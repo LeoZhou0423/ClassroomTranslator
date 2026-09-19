@@ -108,6 +108,32 @@ final class SpeechManager {
         }
     }
 
+    /// Auto 模式：批量下载所有英语口音模型
+    static let allEnglishLocales = [
+        "en-US", "en-GB", "en-AU", "en-NZ", "en-IE", "en-ZA", "en-CA", "en-IN"
+    ]
+
+    func downloadAllEnglishModels() async -> (ready: Int, total: Int) {
+        var ready = 0
+        let total = Self.allEnglishLocales.count
+        for code in Self.allEnglishLocales {
+            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: code)) else { continue }
+            if recognizer.supportsOnDeviceRecognition {
+                ready += 1
+            } else {
+                // 触发系统下载（创建实例即可，系统自动开始）
+                _ = recognizer
+                onLanguageModelStatusChanged?("Downloading \(code)… (\(ready + 1)/\(total))")
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if recognizer.supportsOnDeviceRecognition { ready += 1 }
+            }
+        }
+        onLanguageModelStatusChanged?("\(ready)/\(total) English models ready.")
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        onLanguageModelStatusChanged?("")
+        return (ready, total)
+    }
+
     func requestSpeechPermission() async -> Bool {
         await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in

@@ -9,13 +9,16 @@ struct SettingsView: View {
     
     @AppStorage("fontSize") private var fontSize: Double = 16
     @AppStorage("overlayOpacity") private var overlayOpacity: Double = 0.85
-    @AppStorage("recognitionLanguage") private var recognitionLanguage: String = "en-US"
+    @AppStorage("recognitionLanguage") private var recognitionLanguage: String = "auto"
     @AppStorage("translationTarget") private var translationTarget: String = "zh-Hans"
     @AppStorage("autoScroll") private var autoScroll: Bool = true
     
-    /// English accent options - comprehensive list
+    @State private var isDownloadingAll = false
+    @State private var downloadProgress = ""
+    
+    /// English accent options
     private let englishAccents: [(name: String, code: String)] = [
-        // 英语母语国家
+        ("Auto (detect while recording)", "auto"),
         ("🇺🇸 English (US) - American", "en-US"),
         ("🇬🇧 English (UK) - British", "en-GB"),
         ("🇦🇺 English (AU) - Australian", "en-AU"),
@@ -98,7 +101,7 @@ struct SettingsView: View {
                 }
                 
                 Section("Speech Recognition - Teacher's Accent") {
-                    Text("Select the accent that matches your teacher's English")
+                    Text("Auto mode tries all English accents while recording")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     
@@ -106,6 +109,17 @@ struct SettingsView: View {
                         ForEach(englishAccents, id: \.code) { accent in
                             Text(accent.name).tag(accent.code)
                         }
+                    }
+                    
+                    if recognitionLanguage == "auto" {
+                        Button(action: downloadAllSpeechModels) {
+                            HStack {
+                                if isDownloadingAll { ProgressView().controlSize(.small) }
+                                Text(isDownloadingAll ? downloadProgress : "Download All English Models")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isDownloadingAll)
                     }
                 }
                 
@@ -204,6 +218,24 @@ struct SettingsView: View {
         return String(localized: "Checking…")
     }
     
+    private func downloadAllSpeechModels() {
+        isDownloadingAll = true
+        downloadProgress = "Preparing…"
+        Task {
+            // 先请求权限
+            let sm = SpeechManager()
+            _ = await sm.requestSpeechPermission()
+            _ = await sm.requestMicPermission()
+            
+            downloadProgress = "Downloading models…"
+            let result = await sm.downloadAllEnglishModels()
+            downloadProgress = "\(result.ready)/\(result.total) models ready."
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            isDownloadingAll = false
+            downloadProgress = ""
+        }
+    }
+
     private func startModelDownload(_ manager: TranslationManager) {
         // 会话缺失时：先失效重来一份，等系统重新下发，再下载
         guard manager.hasSession else {

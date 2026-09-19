@@ -11,7 +11,7 @@ struct TranslationSessionHost<Content: View>: View {
     let manager: TranslationManager
     let content: Content
 
-    @AppStorage("recognitionLanguage") private var language = "en-US"
+    @AppStorage("recognitionLanguage") private var language = "auto"
     @AppStorage("translationTarget") private var target = "zh-Hans"
     @State private var config = TranslationSession.Configuration(
         source: Locale.Language(identifier: "en"),
@@ -32,8 +32,10 @@ struct TranslationSessionHost<Content: View>: View {
     }
 
     private func syncConfig() {
+        // auto → en（翻译源语言始终是英语）
+        let src = language == "auto" ? "en" : language
         config = TranslationSession.Configuration(
-            source: Locale.Language(identifier: language),
+            source: Locale.Language(identifier: src),
             target: Locale.Language(identifier: target)
         )
     }

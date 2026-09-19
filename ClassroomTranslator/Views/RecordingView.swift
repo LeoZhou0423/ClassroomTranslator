@@ -21,13 +21,23 @@ struct RecordingView: View {
     @State private var currentChinese = ""
     @State private var showHistory = false
     @State private var showSettings = false
+    @State private var currentAccentCode = "en-GB"
+    @AppStorage("recognitionLanguage") private var recognitionLanguage: String = "auto"
+
+    private let quickAccents = ["en-US", "en-GB", "en-AU", "en-IN", "zh-Hans"]
 
     var body: some View {
         VStack(spacing: 0) { headerBar; Divider(); mainContent; Divider(); controlBar }
             .frame(minWidth: 400, minHeight: 300)
             .background(Color(nsColor: .windowBackgroundColor))
             .onAppear {
-                speechManager.switchLanguage(to: course.accentCode)
+                // Auto 模式默认英音，手动模式用设置的口音
+                if recognitionLanguage == "auto" {
+                    currentAccentCode = "en-GB"
+                } else {
+                    currentAccentCode = recognitionLanguage
+                }
+                speechManager.switchLanguage(to: currentAccentCode)
                 setupSubtitleWindow()
             }
             .sheet(isPresented: $showHistory) { HistoryView() }
@@ -42,7 +52,21 @@ struct RecordingView: View {
             }
             .buttonStyle(.borderless)
             Text(course.name).font(.headline)
-            Text("(\(course.accentName))").font(.caption).foregroundColor(.secondary)
+            // 口音切换：Auto 模式下可快速切换
+            if recognitionLanguage == "auto" {
+                Picker("Accent", selection: $currentAccentCode) {
+                    ForEach(quickAccents, id: \.self) { code in
+                        Text(shortAccentName(code)).tag(code)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 260)
+                .onChange(of: currentAccentCode) { _, newCode in
+                    speechManager.switchLanguage(to: newCode)
+                }
+            } else {
+                Text("(\(course.accentName))").font(.caption).foregroundColor(.secondary)
+            }
             Spacer()
             Button(action: { showHistory = true }) { Label("History", systemImage: "clock") }.buttonStyle(.borderless)
             Button(action: { showSettings = true }) { Label("Settings", systemImage: "gear") }.buttonStyle(.borderless)
@@ -247,5 +271,10 @@ struct RecordingView: View {
     private func toggleOverlay() {
         if subtitleWindowController?.window?.isVisible == true { subtitleWindowController?.hideWindow() }
         else { subtitleWindowController?.showWindow() }
+    }
+
+    private func shortAccentName(_ code: String) -> String {
+        let map = ["en-US": "US", "en-GB": "UK", "en-AU": "AU", "en-IN": "IN", "zh-Hans": "中"]
+        return map[code] ?? code
     }
 }
