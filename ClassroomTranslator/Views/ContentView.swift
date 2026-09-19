@@ -171,6 +171,11 @@ struct ContentView: View {
                 statusMessage = String(localized: "Recording was interrupted (e.g. screen lock or audio device change). Tap Start to resume.")
             }
         }
+        speechManager.onLanguageModelStatusChanged = { message in
+            Task { @MainActor in
+                statusMessage = message
+            }
+        }
         speechManager.onSegmentRecognized = { text, isFinal in
             Task { @MainActor in
                 if isFinal {

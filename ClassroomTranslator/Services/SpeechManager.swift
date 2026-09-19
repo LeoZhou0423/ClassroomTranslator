@@ -10,8 +10,10 @@ final class SpeechManager {
     var finalSegments: [String] = []
     var onSegmentRecognized: ((String, Bool) -> Void)?
     /// 录音被系统打断（锁屏/睡眠/音频设备变化/识别服务报错）时回调，
-    /// UI 层据此把状态同步回来，避免界面卡在“录音中”
+    /// UI 层据此把状态同步回来，避免界面卡在"录音中"
     var onRecordingInterrupted: (() -> Void)?
+    /// 语言模型状态变化回调（UI 显示"正在下载模型..."等提示）
+    var onLanguageModelStatusChanged: ((String) -> Void)?
 
     private var speechRecognizer: SFSpeechRecognizer
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -68,7 +70,7 @@ final class SpeechManager {
         lastPartialText = ""
     }
 
-    /// 切换识别语言（口音）
+    /// 切换识别语言（口音）。系统会自动下载对应模型，这里加提示。
     func switchLanguage(to languageCode: String) {
         guard languageCode != currentLanguageCode else { return }
 
@@ -76,8 +78,33 @@ final class SpeechManager {
             speechRecognizer = newRecognizer
             currentLanguageCode = languageCode
             print("Switched speech recognizer to: \(languageCode)")
+
+            // 检查模型是否就绪，未就绪时通知 UI 显示下载提示
+            Task {
+                await checkAndNotifyModelStatus(newRecognizer, languageCode: languageCode)
+            }
         } else {
             print("Warning: Cannot create recognizer for \(languageCode)")
+            onLanguageModelStatusChanged?("Speech recognition is not available for this language.")
+        }
+    }
+
+    /// 检查模型状态并通知 UI
+    private func checkAndNotifyModelStatus(_ recognizer: SFSpeechRecognizer, languageCode: String) async {
+        // supportsOnDeviceRecognition = false 说明模型未下载
+        if recognizer.supportsOnDeviceRecognition {
+            onLanguageModelStatusChanged?("")  // 就绪，清空提示
+        } else {
+            onLanguageModelStatusChanged?("Downloading \(languageCode) speech model…")
+            // 等几秒让系统开始下载，再检查一次
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if recognizer.supportsOnDeviceRecognition {
+                onLanguageModelStatusChanged?("\(languageCode) model ready.")
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                onLanguageModelStatusChanged?("")
+            } else {
+                onLanguageModelStatusChanged?("\(languageCode) model is downloading in the background. You can start recording — it will work once the model finishes.")
+            }
         }
     }
 
