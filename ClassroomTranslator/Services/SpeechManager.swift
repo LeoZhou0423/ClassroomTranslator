@@ -38,6 +38,10 @@ final class SpeechManager {
     /// 当前使用的语言代码
     private(set) var currentLanguageCode: String
 
+    // MARK: - 多口音并行识别（自动检测）
+    private var parallelRecognizers: [String: (recognizer: SFSpeechRecognizer, request: SFSpeechAudioBufferRecognitionRequest, task: SFSpeechRecognitionTask)] = [:]
+    private var bestLocale: String?
+
     init() {
         let savedLanguage = UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "en-GB"
         currentLanguageCode = savedLanguage
@@ -291,6 +295,108 @@ final class SpeechManager {
     func clearSegments() {
         finalSegments.removeAll()
         currentText = ""
+    }
+
+    // MARK: - 多口音并行自动检测
+
+    /// 自动检测口音：并行跑多个识别器5秒，选输出最好的那个
+    static let detectLocales = ["en-US", "en-GB", "en-AU"]
+
+    func startAutoDetectRecording() async throws {
+        if isRecording { return }
+        guard AVCaptureDevice.default(for: .audio) != nil else {
+            throw SpeechError.noInputDevice
+        }
+
+        // 创建多口音识别器
+        var scores: [String: Int] = [:]
+        var texts: [String: String] = [:]
+        let lock = NSLock()
+
+        for code in Self.detectLocales {
+            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: code)) else { continue }
+            let request = SFSpeechAudioBufferRecognitionRequest()
+            request.shouldReportPartialResults = true
+
+            let task = recognizer.recognitionTask(with: request) { [weak self] result, _ in
+                guard let result else { return }
+                let text = result.bestTranscription.formattedString
+                lock.lock()
+                texts[code] = text
+                scores[code] = text.split(separator: " ").count + (recognizer.supportsOnDeviceRecognition ? 2 : 0)
+                lock.unlock()
+                // 把最佳结果回调出去
+                if let best = self?.bestLocale, code == best {
+                    Task { @MainActor in
+                        self?.currentText = text
+                        self?.onSegmentRecognized?(text, result.isFinal)
+                    }
+                }
+            }
+
+            parallelRecognizers[code] = (recognizer, request, task)
+
+            // 安装 audio tap
+            let nativeFormat = driver.engine.inputNode.outputFormat(forBus: 0)
+            driver.engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nativeFormat) { [weak request] buffer, _ in
+                request?.append(buffer)
+            }
+        }
+
+        guard !parallelRecognizers.isEmpty else {
+            throw SpeechError.engineStartFailed
+        }
+
+        try driver.start { _ in } // tap 已安装，这里只需要启动引擎
+        isRecording = true
+        currentLanguageCode = "auto-detect"
+
+        // 评估5秒
+        onLanguageModelStatusChanged?("检测口音中…")
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
+
+        // 选最佳
+        lock.lock()
+        let winner = scores.max(by: { $0.value < $1.value })?.key ?? "en-US"
+        let winnerText = texts[winner] ?? ""
+        lock.unlock()
+
+        bestLocale = winner
+        currentLanguageCode = winner
+        onLanguageModelStatusChanged?("")
+
+        // 停掉所有并行识别器
+        for (code, entry) in parallelRecognizers {
+            entry.request.endAudio()
+            entry.task.cancel()
+            driver.engine.inputNode.removeTap(onBus: 0)
+            parallelRecognizers.removeValue(forKey: code)
+        }
+        driver.stop()
+
+        // 用最佳口音重新开始单识别器录音
+        if let bestRecognizer = SFSpeechRecognizer(locale: Locale(identifier: winner)) {
+            speechRecognizer = bestRecognizer
+        }
+        try await startRecording()
+
+        // 如果评估期间有文本，把它作为第一段
+        if !winnerText.isEmpty {
+            currentText = winnerText
+            onSegmentRecognized?(winnerText, false)
+        }
+    }
+
+    func stopAutoDetectRecording() {
+        for (_, entry) in parallelRecognizers {
+            entry.request.endAudio()
+            entry.task.cancel()
+        }
+        parallelRecognizers.removeAll()
+        bestLocale = nil
+        driver.engine.inputNode.removeTap(onBus: 0)
+        driver.stop()
+        isRecording = false
     }
 }
 

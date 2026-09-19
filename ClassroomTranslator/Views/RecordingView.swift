@@ -242,18 +242,39 @@ struct RecordingView: View {
                 statusMessage = Self.message(for: micErr, fallback: String(localized: "Microphone permission was denied."))
                 return
             }
-            statusMessage = String(localized: "Starting recording…")
-            let startErr = await runStep(timeoutSeconds: 20, timeoutMessage: String(localized: "Recording took too long to start.")) {
-                try await speechManager.startRecording()
-            }
-            guard generation == prepareGeneration else { return }
-            if let startErr {
-                statusMessage = Self.message(for: startErr, fallback: String(localized: "Failed to start recording."))
+
+            // Auto 模式：并行检测口音
+            if currentAccentCode == "auto" {
+                statusMessage = String(localized: "Detecting accent…")
+                let detectErr = await runStep(timeoutSeconds: 30, timeoutMessage: String(localized: "Accent detection timed out.")) {
+                    try await speechManager.startAutoDetectRecording()
+                }
+                guard generation == prepareGeneration else { return }
+                if let detectErr {
+                    statusMessage = Self.message(for: detectErr, fallback: String(localized: "Failed to start recording."))
+                } else {
+                    // 检测完成后更新显示的口音
+                    currentAccentCode = speechManager.currentLanguageCode
+                    historyStore.startNewRecord(in: course)
+                    statusMessage = ""
+                    isRecording = true
+                    isPaused = false
+                }
             } else {
-                historyStore.startNewRecord(in: course)
-                statusMessage = ""
-                isRecording = true
-                isPaused = false
+                // 手动模式：直接用选定口音
+                statusMessage = String(localized: "Starting recording…")
+                let startErr = await runStep(timeoutSeconds: 20, timeoutMessage: String(localized: "Recording took too long to start.")) {
+                    try await speechManager.startRecording()
+                }
+                guard generation == prepareGeneration else { return }
+                if let startErr {
+                    statusMessage = Self.message(for: startErr, fallback: String(localized: "Failed to start recording."))
+                } else {
+                    historyStore.startNewRecord(in: course)
+                    statusMessage = ""
+                    isRecording = true
+                    isPaused = false
+                }
             }
         }
     }
@@ -287,7 +308,11 @@ struct RecordingView: View {
     }
 
     private func endRecording() {
-        speechManager.stopRecording()
+        if speechManager.currentLanguageCode == "auto-detect" {
+            speechManager.stopAutoDetectRecording()
+        } else {
+            speechManager.stopRecording()
+        }
         historyStore.stopCurrentRecord()
         isRecording = false
         isPaused = false
