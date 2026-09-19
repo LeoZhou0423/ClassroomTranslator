@@ -300,7 +300,7 @@ final class SpeechManager {
     // MARK: - 多口音并行自动检测
 
     /// 自动检测口音：并行跑多个识别器5秒，选输出最好的那个
-    static let detectLocales = ["en-US", "en-GB", "en-AU"]
+    static let detectLocales = ["en-US", "en-GB", "en-AU", "en-NZ", "en-IE", "en-ZA", "en-CA", "en-IN"]
 
     func startAutoDetectRecording() async throws {
         if isRecording { return }
