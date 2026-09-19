@@ -30,51 +30,42 @@ jobs:
         if [ -f ClassroomTranslator/Resources/AppIcon.png ]; then
           mkdir -p LingoClass.app/Contents/Resources/AppIcon.appiconset
           cp ClassroomTranslator/Resources/AppIcon.png LingoClass.app/Contents/Resources/AppIcon.appiconset/AppIcon.png
-          cat > LingoClass.app/Contents/Resources/AppIcon.appiconset/Contents.json << 'ICON'
-          {
-            "images" : [{"idiom" : "mac", "scale" : "1x", "size" : "16x16"}, {"idiom" : "mac", "scale" : "2x", "size" : "16x16"}, {"idiom" : "mac", "scale" : "1x", "size" : "32x32"}, {"idiom" : "mac", "scale" : "2x", "size" : "32x32"}, {"idiom" : "mac", "scale" : "1x", "size" : "128x128"}, {"idiom" : "mac", "scale" : "2x", "size" : "128x128"}, {"idiom" : "mac", "scale" : "1x", "size" : "256x256"}, {"idiom" : "mac", "scale" : "2x", "size" : "256x256"}, {"idiom" : "mac", "scale" : "1x", "size" : "512x512"}, {"idiom" : "mac", "scale" : "2x", "size" : "512x512"}],
-            "info" : {"author" : "xcode", "version" : 1}
-          }
-          ICON
+          python3 -c "
+        import json
+        imgs = []
+        for s in ['16x16','32x32','128x128','256x256','512x512']:
+            imgs.append({'idiom':'mac','scale':'1x','size':s})
+            imgs.append({'idiom':'mac','scale':'2x','size':s})
+        data = {'images':imgs,'info':{'author':'xcode','version':1}}
+        with open('LingoClass.app/Contents/Resources/AppIcon.appiconset/Contents.json','w') as f:
+            json.dump(data,f,indent=2)
+        "
         fi
         
     - name: Create Info.plist
       run: |
-        cat > LingoClass.app/Contents/Info.plist << 'PLIST'
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
+        python3 -c "
+        plist = '''<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+        <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+        <plist version=\"1.0\">
         <dict>
-            <key>CFBundleName</key>
-            <string>LingoClass</string>
-            <key>CFBundleDisplayName</key>
-            <string>LingoClass</string>
-            <key>CFBundleIdentifier</key>
-            <string>com.user.lingoclass</string>
-            <key>CFBundleVersion</key>
-            <string>1.0.0</string>
-            <key>CFBundleShortVersionString</key>
-            <string>1.0.0</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>CFBundleExecutable</key>
-            <string>LingoClass</string>
-            <key>LSMinimumSystemVersion</key>
-            <string>14.0</string>
-            <key>CFBundleDevelopmentRegion</key>
-            <string>en</string>
-            <key>CFBundleLocalizations</key>
-            <array>
-                <string>en</string>
-                <string>zh-Hans</string>
-            </array>
-            <key>NSMicrophoneUsageDescription</key>
-            <string>This app needs microphone access to recognize speech.</string>
-            <key>NSSpeechRecognitionUsageDescription</key>
-            <string>This app uses speech recognition to transcribe lectures.</string>
+            <key>CFBundleName</key><string>LingoClass</string>
+            <key>CFBundleDisplayName</key><string>LingoClass</string>
+            <key>CFBundleIdentifier</key><string>com.user.lingoclass</string>
+            <key>CFBundleVersion</key><string>1.0.0</string>
+            <key>CFBundleShortVersionString</key><string>1.0.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleExecutable</key><string>LingoClass</string>
+            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <key>CFBundleDevelopmentRegion</key><string>en</string>
+            <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string></array>
+            <key>NSMicrophoneUsageDescription</key><string>This app needs microphone access to recognize speech.</string>
+            <key>NSSpeechRecognitionUsageDescription</key><string>This app uses speech recognition to transcribe lectures.</string>
         </dict>
-        </plist>
-        PLIST
+        </plist>'''
+        with open('LingoClass.app/Contents/Info.plist','w') as f:
+            f.write(plist.strip())
+        "
         
     - name: Ad-hoc Sign App Bundle
       run: |
