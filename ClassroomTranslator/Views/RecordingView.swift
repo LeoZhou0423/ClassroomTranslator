@@ -129,7 +129,8 @@ struct RecordingView: View {
                 } else {
                     guard text != self.currentPartialNew else { return }
                     self.currentPartialNew = text
-                    self.subtitleWindowController?.updateCurrentText(text)
+                    let lastChinese = self.segments.last?.chinese ?? ""
+                    self.subtitleWindowController?.updateCurrentText(original: text, translated: lastChinese)
                 }
             }
         }
