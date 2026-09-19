@@ -4,8 +4,8 @@ import SwiftUI
 
 private struct Segment: Identifiable, Hashable {
     let id = UUID()
-    let english: String
-    let chinese: String
+    var english: String
+    var chinese: String
 }
 
 // MARK: - RecordingView (Parent)
@@ -121,9 +121,18 @@ struct RecordingView: View {
                         return
                     }
                     let punctuated = await PunctuationService.punctuate(trimmed)
-                    let translated = await self.translationManager.translate(punctuated)
                     let finalText = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if self.segments.last?.english != finalText {
+
+                    if let lastIdx = self.segments.indices.last,
+                       !Self.hasSentenceEnding(self.segments[lastIdx].english) {
+                        let merged = self.segments[lastIdx].english + finalText
+                        let punctuatedMerged = await PunctuationService.punctuate(merged)
+                        let translated = await self.translationManager.translate(punctuatedMerged)
+                        self.segments[lastIdx] = Segment(id: self.segments[lastIdx].id, english: punctuatedMerged, chinese: translated)
+                        self.historyStore.addSegmentIfNew(TranscriptSegment(original: punctuatedMerged, translated: translated))
+                        self.subtitleWindowController?.appendSegment(original: punctuatedMerged, translated: translated)
+                    } else {
+                        let translated = await self.translationManager.translate(finalText)
                         self.segments.append(Segment(english: finalText, chinese: translated))
                         self.historyStore.addSegmentIfNew(TranscriptSegment(original: finalText, translated: translated))
                         self.subtitleWindowController?.appendSegment(original: finalText, translated: translated)
@@ -136,6 +145,14 @@ struct RecordingView: View {
                 }
             }
         }
+    }
+
+    private static let sentenceEndingPunctuation: Set<Character> = [".", "!", "?", "。", "！", "？", "…", ")", "]", "」", "』", "\"", "'", "\u{201D}", "\u{2019}"]
+
+    private static func hasSentenceEnding(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard let last = trimmed.last else { return false }
+        return sentenceEndingPunctuation.contains(last)
     }
 
     private func startRecording() {

@@ -51,6 +51,7 @@ final class StableRecordingViewController: NSViewController {
 
     private var state: State = .idle
     private var finalizedText = ""
+    private var lastCommittedEnglish = ""
     private var partialText = ""
     private var partialTranslation = ""
     private var partialTranslationTask: Task<Void, Never>?
@@ -192,6 +193,7 @@ final class StableRecordingViewController: NSViewController {
                 }
                 state = .recording
                 startedAt = Date()
+                lastCommittedEnglish = ""
                 startTimer()
                 subtitleWindow.clearAll()
                 subtitleWindow.showWindow()
@@ -236,6 +238,7 @@ final class StableRecordingViewController: NSViewController {
         generation += 1
         speechManager.stopRecording()
         accumulateElapsed()
+        lastCommittedEnglish = ""
         subtitleWindow.hideWindow()
         renderState()
         statusLabel.stringValue = String(localized: "Finishing translation and saving…")
@@ -263,6 +266,7 @@ final class StableRecordingViewController: NSViewController {
         speechManager.stopRecording()
         partialTranslationTask?.cancel()
         partialTranslationTask = nil
+        lastCommittedEnglish = ""
         subtitleWindow.hideWindow()
         timer?.invalidate()
         timer = nil
@@ -297,12 +301,27 @@ final class StableRecordingViewController: NSViewController {
                 let task = Task { @MainActor [weak self] in
                     guard let self else { return }
                     let punctuated = await PunctuationService.punctuate(text)
-                    let translated = await self.translationManager.translate(punctuated)
-                    self.finalizedText += "\n\n\(punctuated)\n\(translated)"
+                    let finalText = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    if !self.lastCommittedEnglish.isEmpty,
+                       !Self.hasSentenceEnding(self.lastCommittedEnglish) {
+                        let merged = self.lastCommittedEnglish + finalText
+                        let punctuatedMerged = await PunctuationService.punctuate(merged)
+                        let translated = await self.translationManager.translate(punctuatedMerged)
+                        self.removeLastFinalizedSegment()
+                        self.finalizedText += "\n\n\(punctuatedMerged)\n\(translated)"
+                        self.lastCommittedEnglish = punctuatedMerged
+                        self.historyStore.addSegmentIfNew(TranscriptSegment(original: punctuatedMerged, translated: translated))
+                        self.subtitleWindow.appendSegment(original: punctuatedMerged, translated: translated)
+                    } else {
+                        let translated = await self.translationManager.translate(finalText)
+                        self.finalizedText += "\n\n\(finalText)\n\(translated)"
+                        self.lastCommittedEnglish = finalText
+                        self.historyStore.addSegmentIfNew(TranscriptSegment(original: finalText, translated: translated))
+                        self.subtitleWindow.appendSegment(original: finalText, translated: translated)
+                    }
                     self.partialText = ""
                     self.partialTranslation = ""
-                    self.historyStore.addSegmentIfNew(TranscriptSegment(original: punctuated, translated: translated))
-                    self.subtitleWindow.appendSegment(original: punctuated, translated: translated)
                     self.refreshTranscript()
                 }
                 finalTranslationTasks.append(task)
@@ -321,6 +340,22 @@ final class StableRecordingViewController: NSViewController {
         let live = partialTranslation.isEmpty ? partialText : "\(partialText)\n\(partialTranslation)"
         transcriptView.string = live.isEmpty ? full : "\(full)\(full.isEmpty ? "" : "\n\n")\(live)"
         transcriptView.scrollToEndOfDocument(nil)
+    }
+
+    private func removeLastFinalizedSegment() {
+        if let range = finalizedText.range(of: "\n\n", options: .backwards) {
+            finalizedText = String(finalizedText[..<range.lowerBound])
+        } else {
+            finalizedText = ""
+        }
+    }
+
+    private static let sentenceEndingPunctuation: Set<Character> = [".", "!", "?", "。", "！", "？", "…", ")", "]", "」", "』", "\"", "'", "\u{201D}", "\u{2019}"]
+
+    private static func hasSentenceEnding(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard let last = trimmed.last else { return false }
+        return sentenceEndingPunctuation.contains(last)
     }
 
     private func translatePartial(_ text: String) {
