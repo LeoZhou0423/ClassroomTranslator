@@ -110,36 +110,44 @@ struct RecordingView: View {
     }
 
     private var transcriptView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(segments) { seg in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(seg.english)
-                            .font(.system(size: 14, weight: .medium))
-                        Text(seg.chinese)
-                            .font(.system(size: 14))
-                            .foregroundColor(.blue)
-                    }
-                    .padding(10)
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    .cornerRadius(8)
-                }
-                // 当前 partial 的新部分
-                if !currentPartialNew.isEmpty {
-                    Text(currentPartialNew)
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundColor(.secondary)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(segments) { seg in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(seg.english)
+                                .font(.system(size: 14, weight: .medium))
+                            Text(seg.chinese)
+                                .font(.system(size: 14))
+                                .foregroundColor(.blue)
+                        }
                         .padding(10)
-                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                        .background(Color(nsColor: .controlBackgroundColor))
                         .cornerRadius(8)
-                        .id("current")
+                    }
+                    // 当前 partial 的新部分
+                    if !currentPartialNew.isEmpty {
+                        Text(currentPartialNew)
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundColor(.secondary)
+                            .padding(10)
+                            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                            .cornerRadius(8)
+                            .id("current")
+                    }
                 }
+                .padding()
             }
-            .padding()
+            .onChange(of: segments.count) { _, _ in
+                guard autoScroll, let lastID = segments.last?.id else { return }
+                // 不用 withAnimation，避免动画期间布局重入
+                proxy.scrollTo(lastID, anchor: .bottom)
+            }
         }
-        .defaultScrollAnchor(.bottom)
     }
 
+
+    @AppStorage("autoScroll") private var autoScroll: Bool = true
 
     private var controlBar: some View {
         HStack(spacing: 16) {
