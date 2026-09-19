@@ -37,19 +37,22 @@ struct CourseDetailView: View {
             // Transcript content
             if let record = latestRecord, !record.segments.isEmpty {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(record.segments) { segment in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(segment.original)
-                                    .font(.system(size: 14, weight: .medium))
-                                Text(segment.translated)
-                                    .font(.system(size: 13))
-                                    .foregroundColor(.blue)
-                            }
-                            .padding(8)
+                    VStack(alignment: .leading, spacing: 16) {
+                        // 英文全文
+                        Text(record.fullTranscript)
+                            .font(.system(size: 15))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
                             .background(Color(nsColor: .controlBackgroundColor))
-                            .cornerRadius(6)
-                        }
+                            .cornerRadius(8)
+                        // 中文全文
+                        Text(record.fullTranslation)
+                            .font(.system(size: 15))
+                            .foregroundColor(.blue)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(Color.blue.opacity(0.05))
+                            .cornerRadius(8)
                     }
                     .padding()
                 }
