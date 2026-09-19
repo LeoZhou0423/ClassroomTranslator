@@ -13,8 +13,8 @@ private struct Segment: Identifiable, Hashable {
 @MainActor
 struct RecordingView: View {
     @Environment(HistoryStore.self) private var historyStore
-    @Environment(\.dismiss) private var dismiss
     let course: Course
+    let onClose: () -> Void
 
     @State private var speechManager = SpeechManager()
     @State private var translationManager = TranslationManager()
@@ -97,7 +97,7 @@ struct RecordingView: View {
             isRecording = false
             isPaused = false
         }
-        dismiss()
+        onClose()
     }
 
     private func setupCallbacks() {
@@ -260,7 +260,7 @@ struct RecordingView: View {
         currentPartialNew = ""
         lastFinalizedFullText = ""
         if pendingPartial.isEmpty {
-            dismiss()
+            onClose()
         } else {
             Task { @MainActor in
                 let translated = await translationManager.translate(pendingPartial)
@@ -270,7 +270,7 @@ struct RecordingView: View {
                     subtitleWindowController?.appendSegment(original: pendingPartial, translated: translated)
                 }
                 await Task.yield()
-                dismiss()
+                onClose()
             }
         }
     }

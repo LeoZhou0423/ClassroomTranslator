@@ -6,6 +6,18 @@ on:
   workflow_dispatch:
 
 jobs:
+  compatibility:
+    name: Verify macOS 26
+    runs-on: macos-26
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build and test with the current SDK
+      run: |
+        sw_vers
+        swift --version
+        swift build -c release
+        swift test
+
   build:
     runs-on: macos-15
     

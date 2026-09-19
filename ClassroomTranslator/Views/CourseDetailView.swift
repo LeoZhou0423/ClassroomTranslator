@@ -72,7 +72,10 @@ struct CourseDetailView: View {
             }
         }
         .navigationDestination(isPresented: $showRecording) {
-            RecordingView(course: course)
+            RecordingHost(course: course, historyStore: historyStore) {
+                showRecording = false
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
