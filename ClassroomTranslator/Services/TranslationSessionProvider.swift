@@ -32,12 +32,18 @@ struct TranslationSessionHost<Content: View>: View {
     }
 
     private func syncConfig() {
-        // auto → en（翻译源语言始终是英语）
-        let src = language == "auto" ? "en" : language
-        config = TranslationSession.Configuration(
-            source: Locale.Language(identifier: src),
-            target: Locale.Language(identifier: target)
-        )
+        // auto → en-US（翻译源语言始终是英语；用完整 locale identifier 避免系统断言）
+        let src = language == "auto" ? "en-US" : language
+        let tgt = target
+        let newSource = Locale.Language(identifier: src)
+        let newTarget = Locale.Language(identifier: tgt)
+        // 只在真正变化时才更新，避免频繁 invalidate 触发系统断言
+        if config.source != newSource || config.target != newTarget {
+            config = TranslationSession.Configuration(
+                source: newSource,
+                target: newTarget
+            )
+        }
     }
 }
 #endif
