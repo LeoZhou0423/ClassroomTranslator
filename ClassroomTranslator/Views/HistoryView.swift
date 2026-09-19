@@ -51,25 +51,18 @@ struct RecordRow: View {
                 }
                 Spacer()
                 Menu {
-                    Button(action: { showDetail = true }) { Label("View", systemImage: "eye") }
-                    Button(action: { ExportManager.exportSingle(record: record) }) { Label("Export", systemImage: "square.and.arrow.up") }
+                    Button(action: { showDetail = true }) { Label("View or Edit", systemImage: "pencil") }
+                    Button(action: { ExportManager.exportWord(record: record) }) { Label("Export Word", systemImage: "doc.richtext") }
+                    Button(action: { ExportManager.exportSingle(record: record) }) { Label("Export Text", systemImage: "doc.plaintext") }
                     Divider()
                     Button(role: .destructive) { historyStore.deleteRecord(record) } label: { Label("Delete", systemImage: "trash") }
                 } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton)
             }
-            if showDetail {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(record.segments) { segment in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(segment.original).font(.subheadline)
-                                Text(segment.translated).font(.caption).foregroundColor(.blue)
-                            }.padding(.vertical, 2)
-                        }
-                    }
-                }.frame(maxHeight: 300).padding(8).background(Color(nsColor: .controlBackgroundColor)).cornerRadius(6)
-            }
-        }.padding(.vertical, 4).onTapGesture { withAnimation { showDetail.toggle() } }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture { showDetail = true }
+        .sheet(isPresented: $showDetail) { SessionDetailView(record: record) }
     }
     
     private func formatDuration(_ duration: TimeInterval) -> String {

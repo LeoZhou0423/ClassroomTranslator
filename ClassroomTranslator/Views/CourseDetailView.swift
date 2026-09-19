@@ -8,6 +8,7 @@ struct CourseDetailView: View {
     @State private var showRecording = false
     @State private var showDeleteConfirm = false
     @State private var recordingTranslationManager = TranslationManager()
+    @State private var selectedRecord: TranscriptRecord?
 
     var body: some View {
         Group {
@@ -41,6 +42,9 @@ struct CourseDetailView: View {
         } message: {
             Text("Are you sure you want to delete this course? All recordings will be removed.")
         }
+        .sheet(item: $selectedRecord) { record in
+            SessionDetailView(record: record)
+        }
     }
 
     private var courseOverview: some View {
@@ -62,7 +66,15 @@ struct CourseDetailView: View {
             .padding()
             Divider()
             if let record = latestRecord, !record.segments.isEmpty {
-                ScrollView {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Latest recording").font(.headline)
+                        Spacer()
+                        Button { selectedRecord = record } label: { Label("Edit", systemImage: "pencil") }
+                        Button { ExportManager.exportWord(record: record) } label: { Label("Export Word", systemImage: "doc.richtext") }
+                            .buttonStyle(.borderedProminent)
+                    }.padding()
+                    ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         Text(record.fullTranscript)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -77,6 +89,7 @@ struct CourseDetailView: View {
                             .cornerRadius(8)
                     }
                     .padding()
+                    }
                 }
             } else {
                 VStack(spacing: 16) {

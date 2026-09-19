@@ -27,8 +27,9 @@ struct HomeView: View {
             }
             .navigationDestination(isPresented: $showNewCourse) {
                 NewCourseView(onCreate: { course in
+                    showNewCourse = false
                     selectedCourse = course
-                    navigateToCourse = true
+                    Task { @MainActor in navigateToCourse = true }
                 })
             }
             .navigationDestination(isPresented: $navigateToCourse) {

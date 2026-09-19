@@ -55,8 +55,8 @@ struct TranscriptSegment: Codable, Identifiable, Sendable {
     let timestamp: Date
     let isFinal: Bool
 
-    init(original: String, translated: String = "", timestamp: Date = Date(), isFinal: Bool = true) {
-        self.id = UUID()
+    init(id: UUID = UUID(), original: String, translated: String = "", timestamp: Date = Date(), isFinal: Bool = true) {
+        self.id = id
         self.original = original
         self.translated = translated
         self.timestamp = timestamp

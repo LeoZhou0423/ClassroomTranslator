@@ -14,6 +14,7 @@ final class SpeechManager {
     var onRecordingInterrupted: (() -> Void)?
     /// 语言模型状态变化回调（UI 显示"正在下载模型..."等提示）
     var onLanguageModelStatusChanged: ((String) -> Void)?
+    var onAudioLevelChanged: ((Float) -> Void)?
 
     /// 音频引擎全部在后台队列跑，避免 start() 阻塞主线程
     /// （那是"正在启动录音…"假死、全屏黑屏的根因）
@@ -182,6 +183,10 @@ final class SpeechManager {
                 Task { @MainActor in
                     guard let self, self.recordingGeneration == generation else { return }
                     self.handleConfigurationChange()
+                }
+            }, onAudioLevel: { [weak self] level in
+                Task { @MainActor in
+                    self?.onAudioLevelChanged?(level)
                 }
             }, onRecognition: { [weak self] result, error in
                 Task { @MainActor in

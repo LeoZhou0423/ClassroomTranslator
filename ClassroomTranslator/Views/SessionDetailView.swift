@@ -1,65 +1,111 @@
 import SwiftUI
 
+@MainActor
 struct SessionDetailView: View {
+    private struct DraftSegment: Identifiable {
+        let id: UUID
+        var original: String
+        var translated: String
+        let timestamp: Date
+        let isFinal: Bool
+    }
+
+    @Environment(HistoryStore.self) private var historyStore
     @Environment(\.dismiss) private var dismiss
     let record: TranscriptRecord
+    @State private var isEditing = false
+    @State private var title: String
+    @State private var drafts: [DraftSegment]
+    @State private var feedback = ""
+
+    init(record: TranscriptRecord) {
+        self.record = record
+        _title = State(initialValue: record.title)
+        _drafts = State(initialValue: record.segments.map {
+            DraftSegment(id: $0.id, original: $0.original, translated: $0.translated, timestamp: $0.timestamp, isFinal: $0.isFinal)
+        })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(record.title).font(.headline)
+            HStack(spacing: 12) {
+                if isEditing {
+                    TextField("Course title", text: $title).font(.headline)
+                } else {
+                    Text(record.title).font(.headline)
+                }
                 Spacer()
                 Text(record.date.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption).foregroundColor(.secondary)
-                Button("Done") { dismiss() }
-                    .buttonStyle(.bordered)
-            }
-            .padding()
+                if isEditing {
+                    Button("Cancel", action: cancelEditing)
+                    Button("Save", action: saveChanges).buttonStyle(.borderedProminent)
+                } else {
+                    Button("Edit") { isEditing = true }
+                    Button("Done") { dismiss() }.buttonStyle(.bordered)
+                }
+            }.padding()
 
             Divider()
-
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(record.segments) { segment in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(segment.original)
-                                .font(.system(size: 14, weight: .medium))
-                            Text(segment.translated)
-                                .font(.system(size: 13))
-                                .foregroundColor(.blue)
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach($drafts) { $segment in
+                        VStack(alignment: .leading, spacing: 7) {
+                            if isEditing {
+                                Text("Original").font(.caption).foregroundColor(.secondary)
+                                TextEditor(text: $segment.original).frame(minHeight: 58)
+                                Text("Translation").font(.caption).foregroundColor(.secondary)
+                                TextEditor(text: $segment.translated).frame(minHeight: 58)
+                            } else {
+                                Text(segment.original).font(.system(size: 14, weight: .medium))
+                                Text(segment.translated).font(.system(size: 13)).foregroundColor(.blue)
+                            }
                         }
-                        .padding(8)
+                        .padding(10)
                         .background(Color(nsColor: .controlBackgroundColor))
-                        .cornerRadius(6)
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
                     }
-                }
-                .padding()
+                    if drafts.isEmpty { ContentUnavailableView("No Transcript", systemImage: "text.quote") }
+                }.padding()
             }
 
             Divider()
-
             HStack {
-                Text("\(record.segments.count) segments")
-                    .font(.caption).foregroundColor(.secondary)
+                Text(feedback.isEmpty ? "\(drafts.count) segments" : feedback)
+                    .font(.caption).foregroundColor(feedback.isEmpty ? .secondary : .green)
                 Spacer()
-                Button(action: exportTranscript) {
-                    Label("Export", systemImage: "square.and.arrow.up")
-                }
-                .buttonStyle(.bordered)
-            }
-            .padding()
+                Button { exportWord() } label: { Label("Export Word", systemImage: "doc.richtext") }
+                    .buttonStyle(.borderedProminent).disabled(isEditing)
+                Button { ExportManager.exportSingle(record: record) } label: { Label("Export Text", systemImage: "doc.plaintext") }
+                    .buttonStyle(.bordered).disabled(isEditing)
+            }.padding()
         }
-        .frame(minWidth: 500, minHeight: 400)
+        .frame(minWidth: 620, minHeight: 480)
     }
 
-    private func exportTranscript() {
-        let content = record.bilingualTranscript
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText]
-        panel.nameFieldStringValue = "\(record.title).txt"
-        panel.begin { result in
-            if result == .OK, let url = panel.url {
-                try? content.write(to: url, atomically: true, encoding: .utf8)
+    private func saveChanges() {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        record.title = cleanTitle.isEmpty ? record.title : cleanTitle
+        record.segments = drafts.map {
+            TranscriptSegment(id: $0.id, original: $0.original, translated: $0.translated, timestamp: $0.timestamp, isFinal: $0.isFinal)
+        }
+        historyStore.save()
+        isEditing = false
+        feedback = String(localized: "Changes saved")
+    }
+
+    private func cancelEditing() {
+        title = record.title
+        drafts = record.segments.map { DraftSegment(id: $0.id, original: $0.original, translated: $0.translated, timestamp: $0.timestamp, isFinal: $0.isFinal) }
+        isEditing = false
+    }
+
+    private func exportWord() {
+        feedback = String(localized: "Choose where to save…")
+        ExportManager.exportWord(record: record) { result in
+            switch result {
+            case .success: feedback = String(localized: "Word document exported")
+            case .failure(let error): feedback = error.localizedDescription
             }
         }
     }

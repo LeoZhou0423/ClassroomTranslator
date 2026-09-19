@@ -41,6 +41,8 @@ final class StableRecordingViewController: NSViewController {
 
     private let transcriptView = NSTextView()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let elapsedLabel = NSTextField(labelWithString: "00:00")
+    private let levelIndicator = NSProgressIndicator()
     private let startButton = NSButton(title: String(localized: "Start"), target: nil, action: nil)
     private let pauseButton = NSButton(title: String(localized: "Pause"), target: nil, action: nil)
     private let endButton = NSButton(title: String(localized: "End Session"), target: nil, action: nil)
@@ -50,6 +52,9 @@ final class StableRecordingViewController: NSViewController {
     private var finalizedText = ""
     private var partialText = ""
     private var generation = 0
+    private var timer: Timer?
+    private var startedAt: Date?
+    private var elapsedBeforePause: TimeInterval = 0
 
     init(course: Course, historyStore: HistoryStore, translationManager: TranslationManager, onClose: @escaping () -> Void) {
         self.course = course
@@ -91,6 +96,13 @@ final class StableRecordingViewController: NSViewController {
 
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
+        elapsedLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        levelIndicator.style = .bar
+        levelIndicator.minValue = 0
+        levelIndicator.maxValue = 1
+        levelIndicator.doubleValue = 0
+        levelIndicator.toolTip = String(localized: "Microphone input level")
+        levelIndicator.widthAnchor.constraint(equalToConstant: 96).isActive = true
 
         startButton.target = self
         startButton.action = #selector(startPressed)
@@ -103,7 +115,7 @@ final class StableRecordingViewController: NSViewController {
         endButton.action = #selector(endPressed)
         endButton.bezelStyle = .rounded
 
-        let controls = NSStackView(views: [statusLabel, startButton, pauseButton, endButton])
+        let controls = NSStackView(views: [statusLabel, levelIndicator, elapsedLabel, startButton, pauseButton, endButton])
         controls.orientation = .horizontal
         controls.spacing = 12
         statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -134,7 +146,7 @@ final class StableRecordingViewController: NSViewController {
         generation += 1
         let currentGeneration = generation
         state = .starting
-        statusLabel.stringValue = String(localized: "Starting recording…")
+        statusLabel.stringValue = String(localized: "Requesting speech recognition permission…")
         renderState()
 
         Task { @MainActor [weak self] in
@@ -143,10 +155,12 @@ final class StableRecordingViewController: NSViewController {
                 failStart(String(localized: "Speech recognition permission was denied."), generation: currentGeneration)
                 return
             }
+            statusLabel.stringValue = String(localized: "Requesting microphone permission…")
             guard await speechManager.requestMicPermission() else {
                 failStart(String(localized: "Microphone permission was denied."), generation: currentGeneration)
                 return
             }
+            statusLabel.stringValue = String(localized: "Connecting microphone…")
             do {
                 if course.accentCode == "auto" {
                     try await speechManager.startAutoDetectRecording()
@@ -162,7 +176,9 @@ final class StableRecordingViewController: NSViewController {
                     historyStore.startNewRecord(in: course)
                 }
                 state = .recording
-                statusLabel.stringValue = String(localized: "Recording")
+                startedAt = Date()
+                startTimer()
+                statusLabel.stringValue = String(localized: "Recording · speak now")
                 renderState()
             } catch {
                 failStart(error.localizedDescription, generation: currentGeneration)
@@ -173,6 +189,7 @@ final class StableRecordingViewController: NSViewController {
     private func failStart(_ message: String, generation: Int) {
         guard generation == self.generation else { return }
         speechManager.stopRecording()
+        accumulateElapsed()
         state = .idle
         statusLabel.stringValue = message
         renderState()
@@ -200,19 +217,36 @@ final class StableRecordingViewController: NSViewController {
         state = .ended
         generation += 1
         speechManager.stopRecording()
+        accumulateElapsed()
+        if !partialText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            historyStore.addSegmentIfNew(TranscriptSegment(original: partialText.trimmingCharacters(in: .whitespacesAndNewlines)))
+            partialText = ""
+        }
         historyStore.stopCurrentRecord()
-        onClose()
+        statusLabel.stringValue = String(localized: "Saved")
+        renderState()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.onClose() }
     }
 
     func shutDown() {
         generation += 1
         speechManager.stopRecording()
+        timer?.invalidate()
+        timer = nil
         speechManager.onSegmentRecognized = nil
         speechManager.onRecordingInterrupted = nil
         speechManager.onLanguageModelStatusChanged = nil
+        speechManager.onAudioLevelChanged = nil
     }
 
     private func configureCallbacks() {
+        speechManager.onAudioLevelChanged = { [weak self] level in
+            guard let self, state == .recording else { return }
+            levelIndicator.doubleValue = Double(level)
+            if level > 0.03 && partialText.isEmpty {
+                statusLabel.stringValue = String(localized: "Sound detected · recognizing…")
+            }
+        }
         speechManager.onRecordingInterrupted = { [weak self] in
             guard let self, state != .ended else { return }
             state = .idle
@@ -253,5 +287,27 @@ final class StableRecordingViewController: NSViewController {
         pauseButton.isEnabled = state == .recording
         endButton.isEnabled = state == .recording || state == .paused || state == .starting
         closeButton.isEnabled = state != .ended
+    }
+
+    private func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshElapsed() }
+        }
+        refreshElapsed()
+    }
+
+    private func accumulateElapsed() {
+        if let startedAt { elapsedBeforePause += Date().timeIntervalSince(startedAt) }
+        startedAt = nil
+        timer?.invalidate()
+        timer = nil
+        levelIndicator.doubleValue = 0
+        refreshElapsed()
+    }
+
+    private func refreshElapsed() {
+        let total = elapsedBeforePause + (startedAt.map { Date().timeIntervalSince($0) } ?? 0)
+        elapsedLabel.stringValue = String(format: "%02d:%02d", Int(total) / 60, Int(total) % 60)
     }
 }

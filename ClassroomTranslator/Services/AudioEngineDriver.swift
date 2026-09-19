@@ -18,6 +18,7 @@ final class AudioEngineDriver: @unchecked Sendable {
     func start(
         localeIdentifier: String,
         onInterruption: @escaping @Sendable () -> Void,
+        onAudioLevel: @escaping @Sendable (Float) -> Void,
         onRecognition: @escaping @Sendable (SFSpeechRecognitionResult?, Error?) -> Void
     ) async throws {
         try await withCheckedThrowingContinuation { continuation in
@@ -47,6 +48,13 @@ final class AudioEngineDriver: @unchecked Sendable {
                     }
                     input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable [weak request] buffer, _ in
                         request?.append(buffer)
+                        guard let channel = buffer.floatChannelData?.pointee else { return }
+                        let count = Int(buffer.frameLength)
+                        guard count > 0 else { return }
+                        var sum: Float = 0
+                        for index in 0..<count { sum += channel[index] * channel[index] }
+                        let rms = sqrt(sum / Float(count))
+                        onAudioLevel(min(1, max(0, rms * 8)))
                     }
                     self.tapInstalled = true
 
