@@ -11,10 +11,10 @@ struct TranslationSessionHost<Content: View>: View {
     let manager: TranslationManager
     let content: Content
 
-    @AppStorage("recognitionLanguage") private var language = "en-GB"
+    @AppStorage("recognitionLanguage") private var language = "auto"
     @AppStorage("translationTarget") private var target = "zh-Hans"
     @State private var config = TranslationSession.Configuration(
-        source: Locale.Language(identifier: "en-GB"),
+        source: Locale.Language(identifier: "en"),
         target: Locale.Language(identifier: "zh-Hans")
     )
 
@@ -31,9 +31,18 @@ struct TranslationSessionHost<Content: View>: View {
             }
     }
 
+    /// "auto" → 系统语言，否则原样返回；保证传给系统的一定是合法 locale
+    private func resolvedSource() -> Locale.Language {
+        if language == "auto" {
+            let sysLang = Locale.preferredLanguages.first ?? "en"
+            return Locale.Language(identifier: sysLang)
+        }
+        return Locale.Language(identifier: language)
+    }
+
     private func syncConfig() {
         config = TranslationSession.Configuration(
-            source: Locale.Language(identifier: language),
+            source: resolvedSource(),
             target: Locale.Language(identifier: target)
         )
     }
