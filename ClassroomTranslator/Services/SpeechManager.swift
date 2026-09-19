@@ -143,17 +143,15 @@ final class SpeechManager {
                         let now = ProcessInfo.processInfo.systemUptime
 
                         if text != self.lastPartialText {
+                            let gap = now - self.lastPartialTime
                             // ---- 更新 EMA 模型 ----
                             if self.lastPartialTime > 0 {
-                                let gap = now - self.lastPartialTime
                                 if self.intervalCount == 0 {
-                                    // 第一个间隔：直接赋值
                                     self.emaInterval = gap
                                 } else {
                                     self.emaInterval = self.emaAlpha * gap + (1 - self.emaAlpha) * self.emaInterval
                                 }
                                 self.intervalCount += 1
-                                // 动态最小间隔 = EMA 的 30%（容错下限）
                                 self.minInterval = max(0.2, self.emaInterval * 0.3)
                             }
                             self.lastPartialTime = now
@@ -162,10 +160,8 @@ final class SpeechManager {
                             // ---- 计算停顿阈值 ----
                             let threshold: Double
                             if self.intervalCount < self.warmupThreshold {
-                                // 冷启动：数据不够，用保守值
                                 threshold = 2.0
                             } else {
-                                // 稳态：K 随置信度收紧，容错率自适应
                                 let confidence = min(1.0, Double(self.intervalCount - self.warmupThreshold) / 20.0)
                                 let k = self.kBase - (self.kBase - self.kMin) * confidence
                                 threshold = max(self.minInterval * 2, self.emaInterval * k)
@@ -173,11 +169,10 @@ final class SpeechManager {
 
                             // ---- 停顿检测 ----
                             let pauseDetected: Bool
-                            if self.intervalCount >= self.warmupThreshold {
+                            if self.lastPartialTime > 0, self.intervalCount >= self.warmupThreshold {
                                 pauseDetected = gap > threshold
                             } else {
-                                // 冷启动：只靠文本稳定判断
-                                pauseDetected = gap > 2.0 && text == self.lastPartialText
+                                pauseDetected = self.lastPartialTime > 0 && gap > 2.0
                             }
 
                             if pauseDetected && text.count >= 3 {
