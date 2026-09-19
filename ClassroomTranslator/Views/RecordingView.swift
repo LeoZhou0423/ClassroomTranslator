@@ -95,6 +95,7 @@ struct RecordingView: View {
     private var transcriptView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                // 已确认的累积文本
                 if !accumulatedEnglish.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(accumulatedEnglish).font(.system(size: 14, weight: .medium))
@@ -106,15 +107,17 @@ struct RecordingView: View {
                     .background(Color(nsColor: .controlBackgroundColor))
                     .cornerRadius(6)
                 }
+                // 当前 partial：只显示超出 accumulated 的部分
                 if !currentEnglish.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(currentEnglish).font(.system(size: 14, weight: .medium)).foregroundColor(.orange)
-                        Text(currentChinese.isEmpty ? String(localized: "Translating...") : currentChinese)
-                            .font(.system(size: 13)).foregroundColor(.gray)
+                    let diff = currentEnglish.dropFirst(min(accumulatedEnglish.count, currentEnglish.count))
+                    if !diff.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(String(diff)).font(.system(size: 14, weight: .medium)).foregroundColor(.orange)
+                        }
+                        .padding(8)
+                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                        .cornerRadius(6)
                     }
-                    .padding(8)
-                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                    .cornerRadius(6)
                 }
             }
             .padding()
@@ -177,25 +180,22 @@ struct RecordingView: View {
         speechManager.onSegmentRecognized = { text, isFinal in
             Task { @MainActor in
                 if isFinal {
-                    let newText = accumulatedEnglish.isEmpty ? text : String(text.dropFirst(accumulatedEnglish.count))
-                    if !newText.isEmpty {
-                        accumulatedEnglish += newText
-                        let translated = await translationManager.translate(newText)
-                        accumulatedChinese += translated
-                        // 悬浮窗只显示最新一句话
-                        controller.updateSegments([(original: newText, translated: translated)])
-                        historyStore.addSegment(TranscriptSegment(original: newText, translated: translated))
-                    }
+                    // 累积完整 final 文本，不截取不 diff（识别器会修正前面的词）
+                    accumulatedEnglish = text
+                    // 整句翻译，不拼接（避免碎片翻译导致乱码）
+                    let translated = await translationManager.translate(text)
+                    accumulatedChinese = translated
+                    // 悬浮窗：只显示这一句
+                    controller.updateSegments([(original: text, translated: translated)])
+                    // 保存到历史
+                    historyStore.addSegment(TranscriptSegment(original: text, translated: translated))
                     currentEnglish = ""; currentChinese = ""
                 } else {
-                    let lastLen = accumulatedEnglish.count
-                    if text.count > lastLen {
-                        currentEnglish = String(text.dropFirst(lastLen))
-                    } else {
-                        currentEnglish = text
-                    }
-                    // 悬浮窗：最新一句话的 partial
-                    controller.updateSegments([], currentText: currentEnglish)
+                    // partial 直接全量显示（识别器每次返回从头开始的全文）
+                    currentEnglish = text
+                    currentChinese = ""
+                    // 悬浮窗：显示 partial 原文（不翻译 partial，等 final 再翻）
+                    controller.updateSegments([], currentText: text)
                 }
             }
         }
