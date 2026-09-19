@@ -226,9 +226,8 @@ struct RecordingView: View {
                 statusMessage = message
             }
         }
-        speechManager.onSegmentRecognized = { [weak self] fullText, isFinal in
+        speechManager.onSegmentRecognized = { fullText, isFinal in
             Task { @MainActor in
-                guard let self else { return }
                 if isFinal {
                     // fullText 是累积全文，diff 出新句子
                     let newEnglish = self.extractNewSentence(fullText: fullText)
