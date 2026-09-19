@@ -9,13 +9,12 @@ struct SettingsView: View {
     
     @AppStorage("fontSize") private var fontSize: Double = 16
     @AppStorage("overlayOpacity") private var overlayOpacity: Double = 0.85
-    @AppStorage("recognitionLanguage") private var recognitionLanguage: String = "auto"
+    @AppStorage("recognitionLanguage") private var recognitionLanguage: String = "en-US"
     @AppStorage("translationTarget") private var translationTarget: String = "zh-Hans"
     @AppStorage("autoScroll") private var autoScroll: Bool = true
     
     /// English accent options - comprehensive list
     private let englishAccents: [(name: String, code: String)] = [
-        ("Auto (System Locale)", "auto"),
         // 英语母语国家
         ("🇺🇸 English (US) - American", "en-US"),
         ("🇬🇧 English (UK) - British", "en-GB"),

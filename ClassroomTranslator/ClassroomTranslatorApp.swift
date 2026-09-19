@@ -4,14 +4,14 @@ import SwiftUI
 @MainActor
 struct ClassroomTranslatorApp: App {
     @State private var historyStore = HistoryStore()
-    
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            HomeView()
                 .environment(historyStore)
         }
-        .defaultSize(width: 600, height: 500)
-        
+        .defaultSize(width: 700, height: 500)
+
         Settings {
             SettingsView()
         }

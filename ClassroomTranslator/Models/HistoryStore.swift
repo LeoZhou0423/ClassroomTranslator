@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 @Observable
 final class HistoryStore {
+    var courses: [Course] = []
     var records: [TranscriptRecord] = []
     var currentRecord: TranscriptRecord?
     private var modelContainer: ModelContainer?
@@ -17,13 +18,38 @@ final class HistoryStore {
     private func setupContainer() {
         let config = ModelConfiguration(isStoredInMemoryOnly: false)
         do {
-            modelContainer = try ModelContainer(for: TranscriptRecord.self, configurations: config)
+            modelContainer = try ModelContainer(for: Course.self, TranscriptRecord.self, configurations: config)
             modelContext = modelContainer?.mainContext
+            fetchCourses()
             fetchRecords()
         } catch {
             print("Failed to setup model container: \(error)")
         }
     }
+
+    // MARK: - Course
+
+    func fetchCourses() {
+        let descriptor = FetchDescriptor<Course>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        do {
+            courses = try modelContext?.fetch(descriptor) ?? []
+        } catch {
+            print("Failed to fetch courses: \(error)")
+        }
+    }
+
+    func addCourse(_ course: Course) {
+        modelContext?.insert(course)
+        save()
+    }
+
+    func deleteCourse(_ course: Course) {
+        modelContext?.delete(course)
+        courses.removeAll { $0.id == course.id }
+        save()
+    }
+
+    // MARK: - Record
 
     func fetchRecords() {
         let descriptor = FetchDescriptor<TranscriptRecord>(sortBy: [SortDescriptor(\.date, order: .reverse)])
@@ -34,8 +60,13 @@ final class HistoryStore {
         }
     }
 
-    func startNewRecord(title: String = "") {
+    func recordsForCourse(_ course: Course) -> [TranscriptRecord] {
+        records.filter { $0.course?.id == course.id }
+    }
+
+    func startNewRecord(in course: Course, title: String = "") {
         let record = TranscriptRecord(date: Date(), title: title.isEmpty ? formatTitle(Date()) : title)
+        record.course = course
         currentRecord = record
         modelContext?.insert(record)
         save()
@@ -63,6 +94,7 @@ final class HistoryStore {
 
     func save() {
         try? modelContext?.save()
+        fetchCourses()
         fetchRecords()
     }
 
@@ -72,12 +104,3 @@ final class HistoryStore {
         return formatter.string(from: date)
     }
 }
-
-
-
-
-
-
-
-
-

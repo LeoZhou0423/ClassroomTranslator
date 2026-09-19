@@ -8,6 +8,7 @@ final class TranscriptRecord {
     var title: String
     var segmentsData: Data
     var duration: TimeInterval
+    var course: Course?
 
     var segments: [TranscriptSegment] {
         get {

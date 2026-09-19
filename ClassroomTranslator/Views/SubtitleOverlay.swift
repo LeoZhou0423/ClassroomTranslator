@@ -76,54 +76,34 @@ class SubtitleWindowController: NSWindowController {
 
 struct SubtitleView: View {
     @ObservedObject var state: SubtitleState
-    @State private var fontSize: CGFloat = 16
+    @State private var fontSize: CGFloat = 20
     @State private var opacity: Double = 0.85
     
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if let last = state.segments.last, !last.original.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(last.original)
-                                .font(.system(size: fontSize, weight: .medium))
-                                .foregroundColor(.white)
-                                .textSelection(.enabled)
-                            if !last.translated.isEmpty {
-                                Text(last.translated)
-                                    .font(.system(size: fontSize - 2, weight: .regular))
-                                    .foregroundColor(.cyan)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 4)
-                        .id("accumulated")
-                    }
-                    
-                    if !state.currentText.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(state.currentText)
-                                .font(.system(size: fontSize, weight: .medium))
-                                .foregroundColor(.yellow)
-                            Text("...")
-                                .font(.system(size: fontSize - 2))
-                                .foregroundColor(.gray)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 4)
-                        .id("current")
-                    }
-                }
-                .padding(.vertical, 12)
+        VStack(spacing: 8) {
+            // 最新一句话的翻译（实时字幕）
+            if let last = state.segments.last, !last.translated.isEmpty {
+                Text(last.translated)
+                    .font(.system(size: fontSize, weight: .semibold))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 20)
+                    .id("translated")
             }
-            .onChange(of: state.segments.count) {
-                withAnimation { proxy.scrollTo("accumulated", anchor: .bottom) }
-            }
-            .onChange(of: state.currentText) {
-                withAnimation { proxy.scrollTo("current", anchor: .bottom) }
+            
+            // 当前正在识别的 partial
+            if !state.currentText.isEmpty {
+                Text(state.currentText)
+                    .font(.system(size: fontSize - 4, weight: .regular))
+                    .foregroundColor(.yellow)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .padding(.horizontal, 20)
+                    .id("current")
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(opacity))
     }
 }
