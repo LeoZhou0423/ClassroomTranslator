@@ -24,14 +24,11 @@ final class AudioEngineDriver {
                         self._engine.inputNode.removeTap(onBus: 0)
                         self._tapInstalled = false
                     }
-                    let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                               sampleRate: 16000,
-                                               channels: 1,
-                                               interleaved: false)
-                    guard let format else {
+                    let nativeFormat = self._engine.inputNode.outputFormat(forBus: 0)
+                    guard nativeFormat.sampleRate > 0, nativeFormat.channelCount > 0 else {
                         throw AudioEngineError.formatUnavailable
                     }
-                    self._engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+                    self._engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nativeFormat) { [weak self] buffer, _ in
                         self?.pump?(buffer)
                     }
                     self._tapInstalled = true
