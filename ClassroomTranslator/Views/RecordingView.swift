@@ -24,7 +24,20 @@ struct RecordingView: View {
     @State private var showSettings = false
     @State private var currentAccentCode = "en-GB"
 
-    private let quickAccents = ["auto", "en-US", "en-GB", "en-AU", "en-IN", "zh-Hans"]
+    private let allAccents: [(name: String, code: String)] = [
+        ("Auto (detect while recording)", "auto"),
+        ("American", "en-US"),
+        ("British", "en-GB"),
+        ("Australian", "en-AU"),
+        ("New Zealand", "en-NZ"),
+        ("Irish", "en-IE"),
+        ("South African", "en-ZA"),
+        ("Canadian", "en-CA"),
+        ("Indian", "en-IN"),
+        ("Chinese", "zh-Hans"),
+        ("Japanese", "ja-JP"),
+        ("Korean", "ko-KR"),
+    ]
 
     var body: some View {
         VStack(spacing: 0) { headerBar; Divider(); mainContent; Divider(); controlBar }
@@ -47,14 +60,14 @@ struct RecordingView: View {
             }
             .buttonStyle(.borderless)
             Text(course.name).font(.headline)
-            // 口音选择：Auto 走并行检测，手动直接用指定口音；录音中禁用
+            // 口音选择：下拉菜单（segmented 在选中值无对应分段时会布局卡死）
             Picker("Accent", selection: $currentAccentCode) {
-                ForEach(quickAccents, id: \.self) { code in
-                    Text(shortAccentName(code)).tag(code)
+                ForEach(allAccents, id: \.code) { accent in
+                    Text(LocalizedStringKey(accent.name)).tag(accent.code)
                 }
             }
-            .pickerStyle(.segmented)
-            .frame(width: 320)
+            .pickerStyle(.menu)
+            .frame(width: 200)
             .disabled(isRecording || isPaused || isPreparing)
             .onChange(of: currentAccentCode) { _, newCode in
                 // 录音中不切换（Auto 检测完会程序化赋值，此时识别器已经是对的）
@@ -399,10 +412,5 @@ struct RecordingView: View {
     private func toggleOverlay() {
         if subtitleWindowController?.window?.isVisible == true { subtitleWindowController?.hideWindow() }
         else { subtitleWindowController?.showWindow() }
-    }
-
-    private func shortAccentName(_ code: String) -> String {
-        let map = ["auto": "Auto", "en-US": "US", "en-GB": "UK", "en-AU": "AU", "en-IN": "IN", "zh-Hans": "中"]
-        return map[code] ?? code
     }
 }
