@@ -10,6 +10,8 @@ final class HistoryStore {
     var currentRecord: TranscriptRecord?
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
+    /// 防止 save() → fetchRecords() 同步通知观察者导致布局重入
+    private var isSaving = false
 
     init() {
         setupContainer()
@@ -65,7 +67,6 @@ final class HistoryStore {
     }
 
     func startNewRecord(in course: Course, title: String = "") {
-        // 如果课程已有记录，追加到最新那条（不新建）
         if let existing = recordsForCourse(course).first {
             currentRecord = existing
             return
@@ -80,13 +81,12 @@ final class HistoryStore {
     func addSegmentIfNew(_ segment: TranscriptSegment) {
         guard let record = currentRecord else { return }
         var segs = record.segments
-        // 去重：最后一段原文相同就不追加
         if let last = segs.last, last.original == segment.original { return }
         segs.append(segment)
         record.segments = segs
         record.duration = Date().timeIntervalSince(record.date)
-        // 推迟到下一个 runloop，避免 save() → fetchRecords() 同步通知
-        // 观察者（HomeView/CourseDetailView）导致布局期间 view graph invalidation
+        // 延迟到下一个 runloop，避免 save() → fetchRecords() 同步通知
+        // 观察者导致布局期间 view graph invalidation
         Task { @MainActor in save() }
     }
 
@@ -106,9 +106,15 @@ final class HistoryStore {
     }
 
     func save() {
+        guard !isSaving else { return } // 防重入
+        isSaving = true
+        defer { isSaving = false }
         try? modelContext?.save()
-        fetchCourses()
-        fetchRecords()
+        // 延迟 fetch，让当前布局完成
+        Task { @MainActor in
+            self.fetchCourses()
+            self.fetchRecords()
+        }
     }
 
     private func formatTitle(_ date: Date) -> String {
