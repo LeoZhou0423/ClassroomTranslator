@@ -66,7 +66,7 @@ struct CourseDetailView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .sheet(isPresented: $showRecording) {
+        .navigationDestination(isPresented: $showRecording) {
             RecordingView(course: course)
         }
     }

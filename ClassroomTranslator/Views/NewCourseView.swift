@@ -3,6 +3,7 @@ import SwiftUI
 struct NewCourseView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(HistoryStore.self) private var historyStore
+    var onCreate: (Course) -> Void
 
     @State private var courseName = ""
     @State private var accentCode = "en-US"
@@ -68,6 +69,6 @@ struct NewCourseView: View {
         guard !name.isEmpty else { return }
         let course = Course(name: name, accentCode: accentCode, createdAt: selectedDate)
         historyStore.addCourse(course)
-        dismiss()
+        onCreate(course)
     }
 }

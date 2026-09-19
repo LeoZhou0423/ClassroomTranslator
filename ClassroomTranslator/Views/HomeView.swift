@@ -3,6 +3,8 @@ import SwiftUI
 struct HomeView: View {
     @Environment(HistoryStore.self) private var historyStore
     @State private var showNewCourse = false
+    @State private var selectedCourse: Course?
+    @State private var navigateToCourse = false
 
     var body: some View {
         NavigationStack {
@@ -21,8 +23,16 @@ struct HomeView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showNewCourse) {
-                NewCourseView()
+            .navigationDestination(isPresented: $showNewCourse) {
+                NewCourseView(onCreate: { course in
+                    selectedCourse = course
+                    navigateToCourse = true
+                })
+            }
+            .navigationDestination(isPresented: $navigateToCourse) {
+                if let course = selectedCourse {
+                    CourseDetailView(course: course)
+                }
             }
         }
     }
@@ -49,32 +59,46 @@ struct HomeView: View {
     private var courseList: some View {
         List {
             ForEach(historyStore.courses) { course in
-                NavigationLink(destination: CourseDetailView(course: course)) {
+                Button(action: {
+                    selectedCourse = course
+                    navigateToCourse = true
+                }) {
                     courseRow(course)
                 }
+                .buttonStyle(.plain)
             }
             .onDelete(perform: deleteCourses)
         }
+        .listStyle(.inset)
     }
 
     private func courseRow(_ course: Course) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(course.name)
-                .font(.headline)
-            HStack(spacing: 12) {
-                Label(course.accentName, systemImage: "waveform")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Label("\(historyStore.recordsForCourse(course).count) sessions",
-                      systemImage: "doc.text")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(course.createdAt.formatted(date: .abbreviated, time: .omitted))
-                    .font(.caption)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "book.fill")
+                    .font(.title2)
+                    .foregroundColor(.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(course.name)
+                        .font(.title3).bold()
+                    Text(course.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
                     .foregroundColor(.secondary)
             }
+            HStack(spacing: 16) {
+                Label(course.accentName, systemImage: "waveform")
+                Label("\(historyStore.recordsForCourse(course).count) 次录音",
+                      systemImage: "mic.fill")
+            }
+            .font(.subheadline)
+            .foregroundColor(.secondary)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 8)
     }
 
     private func deleteCourses(at offsets: IndexSet) {
