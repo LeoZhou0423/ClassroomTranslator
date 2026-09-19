@@ -14,12 +14,12 @@ struct RecordingView: View {
     @State private var isPreparing = false
     @State private var prepareGeneration = 0
     @State private var statusMessage = ""
-    /// 已确认的翻译段落（只存中文）
-    @State private var translatedSegments: [String] = []
-    /// 当前正在识别的 partial 英文（overlay 显示用）
-    @State private var currentEnglish = ""
-    /// 当前 partial 的翻译
-    @State private var currentChinese = ""
+    /// 已确认的段落：(英文, 中文)
+    @State private var segments: [(english: String, chinese: String)] = []
+    /// 上一次 final 的完整文本（用于 diff 提取新句子）
+    @State private var lastFinalizedFullText = ""
+    /// 当前 partial 的新部分（不含已确认的）
+    @State private var currentPartialNew = ""
     @State private var showHistory = false
     @State private var showSettings = false
     @State private var currentAccentCode = "en-GB"
@@ -72,7 +72,7 @@ struct RecordingView: View {
 
     private var mainContent: some View {
         VStack(spacing: 16) {
-            if translatedSegments.isEmpty && currentEnglish.isEmpty { emptyStateView }
+            if segments.isEmpty && currentPartialNew.isEmpty { emptyStateView }
             else { transcriptView }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -90,32 +90,35 @@ struct RecordingView: View {
     private var transcriptView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    // 已确认的翻译段落（只显示中文）
-                    ForEach(Array(translatedSegments.enumerated()), id: \.offset) { index, chinese in
-                        Text(chinese)
-                            .font(.system(size: 15))
-                            .foregroundColor(.primary)
-                            .padding(10)
-                            .background(Color(nsColor: .controlBackgroundColor))
-                            .cornerRadius(8)
-                            .id(index)
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { index, seg in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(seg.english)
+                                .font(.system(size: 14, weight: .medium))
+                            Text(seg.chinese)
+                                .font(.system(size: 14))
+                                .foregroundColor(.blue)
+                        }
+                        .padding(10)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(8)
+                        .id(index)
                     }
-                    // 当前 partial 的翻译（实时）
-                    if !currentChinese.isEmpty {
-                        Text(currentChinese)
-                            .font(.system(size: 15))
-                            .foregroundColor(.blue)
+                    // 当前 partial 的新部分
+                    if !currentPartialNew.isEmpty {
+                        Text(currentPartialNew)
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundColor(.secondary)
                             .padding(10)
-                            .background(Color.blue.opacity(0.08))
+                            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
                             .cornerRadius(8)
                             .id("current")
                     }
                 }
                 .padding()
             }
-            .onChange(of: translatedSegments.count) { _, _ in
-                if autoScroll { withAnimation { proxy.scrollTo(translatedSegments.count - 1, anchor: .bottom) } }
+            .onChange(of: segments.count) { _, _ in
+                withAnimation { proxy.scrollTo(segments.count - 1, anchor: .bottom) }
             }
         }
     }
@@ -199,28 +202,50 @@ struct RecordingView: View {
                 statusMessage = message
             }
         }
-        speechManager.onSegmentRecognized = { text, isFinal in
+        speechManager.onSegmentRecognized = { fullText, isFinal in
             Task { @MainActor in
                 if isFinal {
-                    // 整句翻译
-                    let translated = await translationManager.translate(text)
-                    // 去重：如果最后一段和当前一样就不追加
-                    if translatedSegments.last != translated {
-                        translatedSegments.append(translated)
+                    // fullText 是累积全文，diff 出新句子
+                    let newEnglish = extractNewSentence(fullText: fullText)
+                    lastFinalizedFullText = fullText
+
+                    guard !newEnglish.trimmingCharacters(in: .whitespaces).isEmpty else {
+                        currentPartialNew = ""
+                        return
                     }
-                    // 保存到历史（去重）
-                    historyStore.addSegmentIfNew(TranscriptSegment(original: text, translated: translated))
-                    // overlay 追加
-                    controller.appendSegment(original: text, translated: translated)
-                    currentEnglish = ""
-                    currentChinese = ""
+
+                    // 翻译新句子
+                    let translated = await translationManager.translate(newEnglish)
+                    let trimmed = newEnglish.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    // 去重
+                    if segments.last?.english != trimmed {
+                        segments.append((english: trimmed, chinese: translated))
+                        historyStore.addSegmentIfNew(TranscriptSegment(original: trimmed, translated: translated))
+                        controller.appendSegment(original: trimmed, translated: translated)
+                    }
+                    currentPartialNew = ""
                 } else {
-                    currentEnglish = text
-                    // partial 不翻译，直接用英文原文在 overlay 显示
-                    controller.updateCurrentText(text)
+                    // partial 也是累积全文，diff 出当前新部分
+                    let newPart = extractNewSentence(fullText: fullText)
+                    currentPartialNew = newPart
+                    // overlay 显示当前新部分
+                    controller.updateCurrentText(newPart)
                 }
             }
         }
+    }
+
+    /// 从累积全文中提取新句子（去掉已确认的部分）
+    private func extractNewSentence(fullText: String) -> String {
+        guard !lastFinalizedFullText.isEmpty else { return fullText }
+        // 找到已确认文本在全文中的结束位置
+        if let range = fullText.range(of: lastFinalizedFullText) {
+            let afterConfirmed = fullText[range.upperBound...]
+            return String(afterConfirmed).trimmingCharacters(in: .whitespaces)
+        }
+        // 如果找不到（识别器重置了），返回全文
+        return fullText
     }
 
     private func startRecording() {
@@ -310,27 +335,31 @@ struct RecordingView: View {
     }
 
     private func endRecording() {
+        // 翻译最后一段 partial
+        if !currentPartialNew.isEmpty {
+            let englishToSave = currentPartialNew.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !englishToSave.isEmpty {
+                Task {
+                    let translated = await translationManager.translate(englishToSave)
+                    if segments.last?.english != englishToSave {
+                        segments.append((english: englishToSave, chinese: translated))
+                        historyStore.addSegmentIfNew(TranscriptSegment(original: englishToSave, translated: translated))
+                        subtitleWindowController?.appendSegment(original: englishToSave, translated: translated)
+                    }
+                }
+            }
+        }
+
         if speechManager.currentLanguageCode == "auto-detect" {
             speechManager.stopAutoDetectRecording()
         } else {
             speechManager.stopRecording()
         }
-        // 翻译最后一段 partial（如果有）
-        if !currentEnglish.isEmpty {
-            Task {
-                let translated = await translationManager.translate(currentEnglish)
-                if translatedSegments.last != translated {
-                    translatedSegments.append(translated)
-                }
-                historyStore.addSegmentIfNew(TranscriptSegment(original: currentEnglish, translated: translated))
-                subtitleWindowController?.appendSegment(original: currentEnglish, translated: translated)
-            }
-        }
         historyStore.stopCurrentRecord()
         isRecording = false
         isPaused = false
-        currentEnglish = ""
-        currentChinese = ""
+        currentPartialNew = ""
+        lastFinalizedFullText = ""
         dismiss()
     }
 
