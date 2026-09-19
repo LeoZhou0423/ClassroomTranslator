@@ -2,7 +2,7 @@ name: Build macOS App
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, codex/fix-recording-start ]
   workflow_dispatch:
 
 jobs:
@@ -18,6 +18,9 @@ jobs:
       
     - name: Build Release
       run: swift build -c release
+      
+    - name: Test recording startup
+      run: swift test
       
     - name: Create App Bundle
       run: |

@@ -72,6 +72,15 @@ struct RecordingView: View {
                 setupCallbacks()
             }
         }
+        .onDisappear {
+            prepareGeneration += 1
+            isPreparing = false
+            speechManager.stopRecording()
+            historyStore.stopCurrentRecord()
+            speechManager.onRecordingInterrupted = nil
+            speechManager.onLanguageModelStatusChanged = nil
+            speechManager.onSegmentRecognized = nil
+        }
         .sheet(isPresented: $showHistory) { HistoryView() }
         .sheet(isPresented: $showSettings) { SettingsView(translationManager: translationManager) }
         .modifier(TranslationSessionCompat(manager: translationManager))
@@ -80,8 +89,10 @@ struct RecordingView: View {
     // MARK: - Actions
 
     private func stopAndDismiss() {
+        prepareGeneration += 1
+        isPreparing = false
+        speechManager.stopRecording()
         if isRecording || isPaused {
-            speechManager.stopRecording()
             historyStore.stopCurrentRecord()
             isRecording = false
             isPaused = false
@@ -91,11 +102,11 @@ struct RecordingView: View {
 
     private func setupCallbacks() {
         speechManager.onRecordingInterrupted = {
-            Task { @MainActor in
-                isRecording = false
-                isPaused = false
-                statusMessage = String(localized: "Recording was interrupted. Tap Start to resume.")
-            }
+            prepareGeneration += 1
+            isPreparing = false
+            isRecording = false
+            isPaused = false
+            statusMessage = String(localized: "Recording was interrupted. Tap Start to resume.")
         }
         speechManager.onLanguageModelStatusChanged = { message in
             Task { @MainActor in
@@ -147,6 +158,8 @@ struct RecordingView: View {
     }
 
     private func startRecording() {
+        guard !isPreparing, !isRecording else { return }
+        speechManager.switchLanguage(to: currentAccentCode)
         prepareGeneration += 1
         let generation = prepareGeneration
         isPreparing = true
@@ -213,6 +226,7 @@ struct RecordingView: View {
     }
 
     private func resumeRecording() {
+        guard !isPreparing, !isRecording else { return }
         prepareGeneration += 1
         let generation = prepareGeneration
         isPreparing = true
@@ -279,26 +293,24 @@ struct RecordingView: View {
     }
 
     private static func message(for error: Error, fallback: String) -> String {
-        (error as? SpeechError)?.errorDescription ?? fallback
+        (error as? LocalizedError)?.errorDescription ?? "\(fallback) (\(error.localizedDescription))"
     }
 
-    private func runStep(timeoutSeconds: UInt64 = 25, timeoutMessage: String, operation: () async throws -> Void) async -> Error? {
-        let watchdog = Task {
-            try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
-            if !Task.isCancelled {
+    private func runStep(timeoutSeconds: UInt64 = 25, timeoutMessage: String, operation: @escaping @MainActor () async throws -> Void) async -> Error? {
+        let generation = prepareGeneration
+        return await RecordingStartupStep.run(
+            timeoutNanoseconds: timeoutSeconds * 1_000_000_000,
+            onTimeout: {
+                guard generation == prepareGeneration else { return }
+                prepareGeneration += 1
+                speechManager.stopRecording()
                 statusMessage = timeoutMessage
                 isPreparing = false
-            }
-        }
-        do {
-            try await operation()
-            watchdog.cancel()
-            return nil
-        } catch {
-            watchdog.cancel()
-            return error
-        }
+            },
+            operation: operation
+        )
     }
+
 }
 
 // MARK: - HeaderBarView (独立 view graph)

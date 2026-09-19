@@ -145,3 +145,5 @@
 "Microphone permission timed out." = "麦克风权限请求超时。";
 "Recording took too long to start." = "录音启动超时。";
 "Failed to start recording." = "录音启动失败。";
+
+"The previous recording is still starting. Please wait." = "上一次录音启动尚未结束，请稍候。";

@@ -1,66 +1,95 @@
+import Foundation
 import AVFoundation
 
-/// 音频引擎独立驱动器。
-/// 所有可能阻塞的音频 API（installTap/prepare/start/stop）都在专用后台
-/// 队列执行，绝不占用主线程，避免“点开始卡死 / 全屏假死”。
-/// 非 actor 隔离，无并发编译告警；引擎所有权都在这类内部。
+/// Engine creation, configuration, notifications and teardown share one queue.
 final class AudioEngineDriver {
     private let queue = DispatchQueue(label: "com.classroomtranslator.audioEngine")
-    private var _tapInstalled = false
-    private var pump: ((AVAudioPCMBuffer) -> Void)?
-    private let _engine = AVAudioEngine()
+    private var engine: AVAudioEngine?
+    private var tapInstalled = false
+    private var configurationObserver: NSObjectProtocol?
 
-    /// 供外部监听配置变化（设备切换/睡眠/插拔），只读取引擎对象本身
-    var engine: AVAudioEngine { _engine }
-
-    /// 在后台队列启动引擎，成功则持续把麦克风 buffer 喂给 pump。
-    /// 只在引擎真正起来或抛错时才结束，正常情况不会阻塞调用方。
-    func start(pump: @escaping (AVAudioPCMBuffer) -> Void) async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+    func start(
+        onInterruption: @escaping @Sendable () -> Void,
+        pump: @escaping @Sendable (AVAudioPCMBuffer) -> Void
+    ) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async {
+                self.tearDown()
+                let engine = AVAudioEngine()
+                self.engine = engine
                 do {
-                    if self._engine.isRunning { self._engine.stop() }
-                    if self._tapInstalled {
-                        self._engine.inputNode.removeTap(onBus: 0)
-                        self._tapInstalled = false
-                    }
-                    let nativeFormat = self._engine.inputNode.outputFormat(forBus: 0)
-                    guard nativeFormat.sampleRate > 0, nativeFormat.channelCount > 0 else {
+                    let input = engine.inputNode
+                    let hardwareFormat = input.inputFormat(forBus: 0)
+                    let format = input.outputFormat(forBus: 0)
+                    guard hardwareFormat.sampleRate > 0, hardwareFormat.channelCount > 0,
+                          format.sampleRate > 0, format.channelCount > 0 else {
                         throw AudioEngineError.formatUnavailable
                     }
-                    self._engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nativeFormat) { [weak self] buffer, _ in
-                        self?.pump?(buffer)
+                    // Use the node's current format; don't force a stale hardware format.
+                    input.installTap(onBus: 0, bufferSize: 1024, format: nil) { @Sendable buffer, _ in
+                        pump(buffer)
                     }
-                    self._tapInstalled = true
-                    self.pump = pump
-                    self._engine.prepare()
-                    try self._engine.start()
-                    cont.resume(returning: ())
+                    self.tapInstalled = true
+                    self.configurationObserver = NotificationCenter.default.addObserver(
+                        forName: .AVAudioEngineConfigurationChange,
+                        object: engine,
+                        queue: nil
+                    ) { [weak self, weak engine] _ in
+                        guard let self else { return }
+                        self.queue.async {
+                            guard let engine, self.engine === engine, !engine.isRunning else { return }
+                            self.tearDown()
+                            onInterruption()
+                        }
+                    }
+                    engine.prepare()
+                    try engine.start()
+                    continuation.resume()
                 } catch {
-                    cont.resume(throwing: error)
+                    self.tearDown()
+                    continuation.resume(throwing: error)
                 }
             }
         }
     }
 
-    /// 异步收尾：停引擎、摘 tap、清回调。不等待，绝不阻塞调用方。
     func stop() {
-        queue.async {
-            self.pump = nil
-            if self._engine.isRunning { self._engine.stop() }
-            if self._tapInstalled {
-                self._engine.inputNode.removeTap(onBus: 0)
-                self._tapInstalled = false
-            }
+        queue.async { self.tearDown() }
+    }
+
+    private func tearDown() {
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
         }
+        guard let engine else { return }
+        if engine.isRunning { engine.stop() }
+        if tapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        self.engine = nil
     }
 
     deinit {
-        // deinit 无法强同步清理，这里再做一次兜底
-        if _engine.isRunning { _engine.stop() }
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+        }
+        // Do not call blocking audio APIs from whichever thread releases the view.
+        if let engine {
+            let hadTap = tapInstalled
+            queue.async {
+                if engine.isRunning { engine.stop() }
+                if hadTap { engine.inputNode.removeTap(onBus: 0) }
+            }
+        }
     }
 }
 
-enum AudioEngineError: Error {
+enum AudioEngineError: LocalizedError {
     case formatUnavailable
+
+    var errorDescription: String? {
+        String(localized: "Invalid audio format")
+    }
 }

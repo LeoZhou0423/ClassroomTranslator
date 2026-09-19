@@ -21,6 +21,8 @@ final class SpeechManager {
     /// 音频引擎全部在后台队列跑，避免 start() 阻塞主线程
     /// （那是"正在启动录音…"假死、全屏黑屏的根因）
     private let driver = AudioEngineDriver()
+    private var isStarting = false
+    private var recordingGeneration = 0
 
     // MARK: - 自适应停顿检测模型
     private var debounceWorkItem: DispatchWorkItem?
@@ -70,22 +72,12 @@ final class SpeechManager {
         if speechRecognizer == nil {
             print("Warning: no speech recognizer available on this device")
         }
-        // SpeechManager 与主窗口同生命周期；用 block 观察者 + Task 跳回主 actor，
-        // 避免在非隔离回调里直接碰 MainActor 内容
-        NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: driver.engine,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleConfigurationChange()
-            }
-        }
+
     }
 
     /// 音频配置变化（锁屏/睡眠/插拔设备）时，录音已经没了，收尾并通知 UI
     private func handleConfigurationChange() {
-        guard isRecording else { return }
+        guard isRecording || isStarting else { return }
         stopRecording()
         onRecordingInterrupted?()
     }
@@ -172,7 +164,7 @@ final class SpeechManager {
 
     func requestSpeechPermission() async -> Bool {
         await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
+            SFSpeechRecognizer.requestAuthorization { @Sendable status in
                 continuation.resume(returning: status == .authorized)
             }
         }
@@ -185,7 +177,7 @@ final class SpeechManager {
             return true
         case .notDetermined:
             return await withCheckedContinuation { continuation in
-                AVCaptureDevice.requestAccess(for: .audio) { granted in
+                AVCaptureDevice.requestAccess(for: .audio) { @Sendable granted in
                     continuation.resume(returning: granted)
                 }
             }
@@ -195,7 +187,12 @@ final class SpeechManager {
     }
 
     func startRecording() async throws {
+        guard !isStarting else { throw SpeechError.startInProgress }
         if isRecording { return }
+        isStarting = true
+        recordingGeneration += 1
+        let generation = recordingGeneration
+        defer { isStarting = false }
 
         // 识别器不可用（设备不支持/被限制）：直接报，不崩
         guard let recognizer = speechRecognizer else {
@@ -207,20 +204,16 @@ final class SpeechManager {
             throw SpeechError.noInputDevice
         }
 
-        // 输入格式异常也快速失败
-        let inputNode = driver.engine.inputNode
-        guard inputNode.outputFormat(forBus: 0).sampleRate > 0 else {
-            throw SpeechError.invalidFormat
-        }
+        guard recognizer.isAvailable else { throw SpeechError.recognizerUnavailable }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.taskHint = .dictation
         recognitionRequest = request
 
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+        recognitionTask = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
             Task { @MainActor in
-                guard let self = self else { return }
+                guard let self, self.recordingGeneration == generation else { return }
 
                 if let result {
                     let text = result.bestTranscription.formattedString
@@ -307,27 +300,39 @@ final class SpeechManager {
 
         // 引擎启动放后台队列；慢/失败都不占用主线程
         do {
-            try await driver.start { [weak request] buffer in
+            try await driver.start(onInterruption: { [weak self] in
+                Task { @MainActor in
+                    guard let self, self.recordingGeneration == generation else { return }
+                    self.handleConfigurationChange()
+                }
+            }) { [weak request] buffer in
                 request?.append(buffer)
             }
         } catch {
-            recognitionTask?.cancel()
-            recognitionTask = nil
-            recognitionRequest = nil
-            throw SpeechError.engineStartFailed
+            stopRecording()
+            throw error
         }
+        guard recordingGeneration == generation else { throw CancellationError() }
         isRecording = true
     }
 
     func stopRecording() {
-        guard isRecording else { return }
-
+        // Invalidate callbacks before cancel(), including a start still awaiting the engine.
+        recordingGeneration += 1
+        debounceWorkItem?.cancel()
+        debounceWorkItem = nil
+        resetPauseModel()
         driver.stop()
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
-
         recognitionRequest = nil
         recognitionTask = nil
+        for entry in parallelRecognizers.values {
+            entry.request.endAudio()
+            entry.task.cancel()
+        }
+        parallelRecognizers.removeAll()
+        bestLocale = nil
         isRecording = false
     }
 
@@ -342,7 +347,12 @@ final class SpeechManager {
     static let detectLocales = ["en-US", "en-GB", "en-AU", "en-NZ", "en-IE", "en-ZA", "en-CA", "en-IN"]
 
     func startAutoDetectRecording() async throws {
+        guard !isStarting else { throw SpeechError.startInProgress }
         if isRecording { return }
+        isStarting = true
+        recordingGeneration += 1
+        let generation = recordingGeneration
+        defer { isStarting = false }
         guard AVCaptureDevice.default(for: .audio) != nil else {
             throw SpeechError.noInputDevice
         }
@@ -358,21 +368,21 @@ final class SpeechManager {
         // 创建多口音识别器
         var scores: [String: Int] = [:]
         var texts: [String: String] = [:]
-        let lock = NSLock()
 
         for code in Self.detectLocales {
-            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: code)) else { continue }
+            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: code)),
+                  recognizer.isAvailable else { continue }
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
 
-            let task = recognizer.recognitionTask(with: request) { [weak self] result, _ in
+            let task = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, _ in
                 guard let result else { return }
                 let text = result.bestTranscription.formattedString
-                lock.lock()
-                texts[code] = text
-                scores[code] = text.split(separator: " ").count + (recognizer.supportsOnDeviceRecognition ? 2 : 0)
-                lock.unlock()
-                // 评估期间不转发到主窗口（避免重复显示）
+                Task { @MainActor in
+                    guard let self, self.recordingGeneration == generation else { return }
+                    texts[code] = text
+                    scores[code] = text.split(separator: " ").count
+                }
             }
 
             parallelRecognizers[code] = (recognizer, request, task)
@@ -382,25 +392,30 @@ final class SpeechManager {
             throw SpeechError.engineStartFailed
         }
 
-        // 单一 audio tap，广播给所有识别器
-        try await driver.start { [weak self] buffer in
-            guard let self else { return }
-            for (_, entry) in self.parallelRecognizers {
-                entry.request.append(buffer)
+        // Capture an immutable request list: the audio thread must never read actor state.
+        let requests = parallelRecognizers.values.map { $0.request }
+        do {
+            try await driver.start(onInterruption: { [weak self] in
+                Task { @MainActor in
+                    guard let self, self.recordingGeneration == generation else { return }
+                    self.handleConfigurationChange()
+                }
+            }) { buffer in
+                for request in requests { request.append(buffer) }
             }
+            guard recordingGeneration == generation else { throw CancellationError() }
+            isRecording = true
+            onLanguageModelStatusChanged?("检测口音中…")
+            try await Task.sleep(nanoseconds: 5_000_000_000)
+            guard recordingGeneration == generation else { throw CancellationError() }
+        } catch {
+            stopRecording()
+            throw error
         }
-        isRecording = true
-        currentLanguageCode = "auto-detect"
-
-        // 评估5秒
-        onLanguageModelStatusChanged?("检测口音中…")
-        try? await Task.sleep(nanoseconds: 5_000_000_000)
 
         // 选最佳
-        lock.lock()
         let winner = scores.max(by: { $0.value < $1.value })?.key ?? "en-US"
         let winnerText = texts[winner] ?? ""
-        lock.unlock()
 
         bestLocale = winner
         currentLanguageCode = winner
@@ -408,7 +423,7 @@ final class SpeechManager {
         isRecording = false
 
         // 停掉所有并行识别器并清理（重要！避免旧回调干扰）
-        for (code, entry) in parallelRecognizers {
+        for entry in parallelRecognizers.values {
             entry.request.endAudio()
             entry.task.cancel()
         }
@@ -420,6 +435,7 @@ final class SpeechManager {
         if let bestRecognizer = SFSpeechRecognizer(locale: Locale(identifier: winner)) {
             speechRecognizer = bestRecognizer
         }
+        isStarting = false
         try await startRecording()
 
         // 如果评估期间有文本，把它发出去
@@ -430,18 +446,13 @@ final class SpeechManager {
     }
 
     func stopAutoDetectRecording() {
-        for (_, entry) in parallelRecognizers {
-            entry.request.endAudio()
-            entry.task.cancel()
-        }
-        parallelRecognizers.removeAll()
-        bestLocale = nil
-        driver.stop()
-        isRecording = false
+        stopRecording()
     }
+
 }
 
 enum SpeechError: LocalizedError {
+    case startInProgress
     case invalidFormat
     case requestCreationFailed
     case engineStartFailed
@@ -452,6 +463,8 @@ enum SpeechError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .startInProgress:
+            return String(localized: "The previous recording is still starting. Please wait.")
         case .invalidFormat:
             return String(localized: "Invalid audio format")
         case .requestCreationFailed:
