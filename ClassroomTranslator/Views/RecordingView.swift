@@ -6,6 +6,12 @@ struct RecordingView: View {
     @Environment(\.dismiss) private var dismiss
     let course: Course
 
+    private struct Segment: Identifiable {
+        let id = UUID()
+        let english: String
+        let chinese: String
+    }
+
     @State private var speechManager = SpeechManager()
     @State private var translationManager = TranslationManager()
     @State private var subtitleWindowController: SubtitleWindowController?
@@ -14,8 +20,7 @@ struct RecordingView: View {
     @State private var isPreparing = false
     @State private var prepareGeneration = 0
     @State private var statusMessage = ""
-    /// 已确认的段落：(英文, 中文)
-    @State private var segments: [(english: String, chinese: String)] = []
+    @State private var segments: [Segment] = []
     /// 上一次 final 的完整文本（用于 diff 提取新句子）
     @State private var lastFinalizedFullText = ""
     /// 当前 partial 的新部分（不含已确认的）
@@ -107,7 +112,7 @@ struct RecordingView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    ForEach(Array(segments.enumerated()), id: \.offset) { index, seg in
+                    ForEach(segments) { seg in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(seg.english)
                                 .font(.system(size: 14, weight: .medium))
@@ -118,7 +123,6 @@ struct RecordingView: View {
                         .padding(10)
                         .background(Color(nsColor: .controlBackgroundColor))
                         .cornerRadius(8)
-                        .id(index)
                     }
                     // 当前 partial 的新部分
                     if !currentPartialNew.isEmpty {
@@ -133,10 +137,10 @@ struct RecordingView: View {
                 }
                 .padding()
             }
-            .onChange(of: segments.count) { _, newCount in
-                guard autoScroll, newCount > 0 else { return }
+            .onChange(of: segments.count) { _, _ in
+                guard autoScroll, let lastID = segments.last?.id else { return }
                 Task { @MainActor in
-                    withAnimation { proxy.scrollTo(newCount - 1, anchor: .bottom) }
+                    withAnimation { proxy.scrollTo(lastID, anchor: .bottom) }
                 }
             }
         }
@@ -245,13 +249,9 @@ struct RecordingView: View {
 
                     // 去重
                     if self.segments.last?.english != trimmed {
-                        self.segments.append((english: trimmed, chinese: translated))
+                        self.segments.append(Segment(english: trimmed, chinese: translated))
                         self.historyStore.addSegmentIfNew(TranscriptSegment(original: trimmed, translated: translated))
-                        // AppKit 侧推迟到下一个 runloop，避免和 SwiftUI 布局周期重入
-                        let controller = self.subtitleWindowController
-                        DispatchQueue.main.async {
-                            controller?.appendSegment(original: trimmed, translated: translated)
-                        }
+                        self.subtitleWindowController?.appendSegment(original: trimmed, translated: translated)
                     }
                     self.currentPartialNew = ""
                 } else {
@@ -259,10 +259,7 @@ struct RecordingView: View {
                     let newPart = self.extractNewSentence(fullText: fullText)
                     guard newPart != self.currentPartialNew else { return }
                     self.currentPartialNew = newPart
-                    let controller = self.subtitleWindowController
-                    DispatchQueue.main.async {
-                        controller?.updateCurrentText(newPart)
-                    }
+                    self.subtitleWindowController?.updateCurrentText(newPart)
                 }
             }
         }
@@ -325,7 +322,9 @@ struct RecordingView: View {
                 if let detectErr {
                     statusMessage = Self.message(for: detectErr, fallback: String(localized: "Failed to start recording."))
                 } else {
-                    currentAccentCode = speechManager.currentLanguageCode
+                    let detected = speechManager.currentLanguageCode
+                    // "auto-detect" 不在 allAccents 里，会触发布局异常；fallback 到 "auto"
+                    currentAccentCode = allAccents.contains(where: { $0.code == detected }) ? detected : "auto"
                     historyStore.startNewRecord(in: course)
                     statusMessage = ""
                     isRecording = true
@@ -385,11 +384,9 @@ struct RecordingView: View {
                 Task {
                     let translated = await translationManager.translate(englishToSave)
                     if segments.last?.english != englishToSave {
-                        segments.append((english: englishToSave, chinese: translated))
+                        segments.append(Segment(english: englishToSave, chinese: translated))
                         historyStore.addSegmentIfNew(TranscriptSegment(original: englishToSave, translated: translated))
-                        DispatchQueue.main.async {
-                            subtitleWindowController?.appendSegment(original: englishToSave, translated: translated)
-                        }
+                        subtitleWindowController?.appendSegment(original: englishToSave, translated: translated)
                     }
                 }
             }
@@ -431,10 +428,18 @@ struct RecordingView: View {
     }
 
     private func toggleOverlay() {
-        if subtitleWindowController == nil {
-            subtitleWindowController = SubtitleWindowController()
+        // 推迟到下一个 runloop，避免 NSWindow 创建/显示和 SwiftUI 布局周期重入
+        DispatchQueue.main.async { [self] in
+            if subtitleWindowController == nil {
+                subtitleWindowController = SubtitleWindowController()
+            }
+            if subtitleWindowController?.window?.isVisible == true {
+                subtitleWindowController?.hideWindow()
+            } else {
+                DispatchQueue.main.async {
+                    self.subtitleWindowController?.showWindow()
+                }
+            }
         }
-        if subtitleWindowController?.window?.isVisible == true { subtitleWindowController?.hideWindow() }
-        else { subtitleWindowController?.showWindow() }
     }
 }

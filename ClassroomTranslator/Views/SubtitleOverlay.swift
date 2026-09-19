@@ -7,6 +7,7 @@ final class SubtitleState: ObservableObject {
     @Published var currentText: String = ""
 }
 
+@MainActor
 class SubtitleWindowController: NSWindowController {
     private let state = SubtitleState()
     private var overlayWasVisible = false
@@ -33,7 +34,17 @@ class SubtitleWindowController: NSWindowController {
         self.init(window: window)
 
         let subtitleView = SubtitleView(state: state)
-        window.contentView = NSHostingView(rootView: subtitleView)
+        let hostingView = NSHostingView(rootView: subtitleView)
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        window.contentView = hostingView
+        if let content = window.contentView {
+            NSLayoutConstraint.activate([
+                hostingView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                hostingView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                hostingView.topAnchor.constraint(equalTo: content.topAnchor),
+                hostingView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            ])
+        }
 
         NotificationCenter.default.addObserver(self, selector: #selector(mainWindowWillEnterFullScreen(_:)), name: NSWindow.willEnterFullScreenNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(mainWindowDidExitFullScreen(_:)), name: NSWindow.didExitFullScreenNotification, object: nil)
@@ -59,7 +70,6 @@ class SubtitleWindowController: NSWindowController {
         }
     }
 
-    /// 追加一段翻译（去重：最后一段相同则不重复追加）
     func appendSegment(original: String, translated: String) {
         guard !translated.isEmpty else { return }
         if let last = state.segments.last, last.translated == translated { return }
@@ -67,7 +77,6 @@ class SubtitleWindowController: NSWindowController {
         state.currentText = ""
     }
 
-    /// 更新 partial 文本（实时显示）
     func updateCurrentText(_ text: String) {
         state.currentText = text
     }
@@ -91,31 +100,28 @@ struct SubtitleView: View {
     @AppStorage("fontSize") private var fontSize: Double = 20
     @AppStorage("overlayOpacity") private var overlayOpacity: Double = 0.85
 
+    private var lastTranslated: String {
+        state.segments.last?.translated ?? ""
+    }
+
     var body: some View {
         VStack(spacing: 8) {
-            // 只显示最后一句翻译（实时字幕）
-            if let last = state.segments.last, !last.translated.isEmpty {
-                Text(last.translated)
-                    .font(.system(size: fontSize, weight: .semibold))
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 20)
-                    .id("translated")
-            }
+            Text(lastTranslated)
+                .font(.system(size: fontSize, weight: .semibold))
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+                .textSelection(.enabled)
+                .padding(.horizontal, 20)
+                .opacity(lastTranslated.isEmpty ? 0 : 1)
 
-            // 当前正在识别的 partial（英文原文，小字）
-            if !state.currentText.isEmpty {
-                Text(state.currentText)
-                    .font(.system(size: fontSize - 4, weight: .regular))
-                    .foregroundColor(.yellow)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .padding(.horizontal, 20)
-                    .id("current")
-            }
+            Text(state.currentText)
+                .font(.system(size: fontSize - 4, weight: .regular))
+                .foregroundColor(.yellow)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .padding(.horizontal, 20)
+                .opacity(state.currentText.isEmpty ? 0 : 1)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(overlayOpacity))
     }
 }
