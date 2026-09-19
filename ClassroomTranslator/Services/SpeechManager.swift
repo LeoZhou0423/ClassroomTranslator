@@ -188,7 +188,7 @@ final class SpeechManager {
                     guard let self, self.recordingGeneration == generation else { return }
                     self.handleRecognition(result: result, error: error)
                 }
-            }
+            })
         } catch {
             stopRecording()
             throw error

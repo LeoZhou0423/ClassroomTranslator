@@ -6,7 +6,7 @@ import Speech
 /// Captures microphone samples without AVAudioEngine. AVCaptureSession uses a
 /// separate capture path and avoids the AVAudioEngine input-node failures seen
 /// on macOS 26/27.
-final class AudioEngineDriver: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+final class AudioEngineDriver: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.classroomtranslator.audioCapture")
     private var session: AVCaptureSession?
     private var output: AVCaptureAudioDataOutput?
