@@ -44,9 +44,11 @@ struct RecordingView: View {
             .frame(minWidth: 400, minHeight: 300)
             .background(Color(nsColor: .windowBackgroundColor))
             .onAppear {
-                currentAccentCode = course.accentCode
-                speechManager.switchLanguage(to: course.accentCode)
-                setupSubtitleWindow()
+                Task { @MainActor in
+                    currentAccentCode = course.accentCode
+                    speechManager.switchLanguage(to: course.accentCode)
+                    setupSubtitleWindow()
+                }
             }
             .sheet(isPresented: $showHistory) { HistoryView() }
             .sheet(isPresented: $showSettings) { SettingsView(translationManager: translationManager) }
@@ -72,7 +74,9 @@ struct RecordingView: View {
             .onChange(of: currentAccentCode) { _, newCode in
                 // 录音中不切换（Auto 检测完会程序化赋值，此时识别器已经是对的）
                 guard !isRecording && !isPaused else { return }
-                speechManager.switchLanguage(to: newCode)
+                Task { @MainActor in
+                    speechManager.switchLanguage(to: newCode)
+                }
             }
             Spacer()
             Button(action: { showHistory = true }) { Label("History", systemImage: "clock") }.buttonStyle(.borderless)
@@ -130,10 +134,8 @@ struct RecordingView: View {
                 .padding()
             }
             .onChange(of: segments.count) { _, newCount in
-                // 推迟到下一个 runloop：在布局周期内直接 scrollTo 会触发
-                // AppKit 显示周期异常（NSWindow Objective-C exception -> abort）
                 guard autoScroll, newCount > 0 else { return }
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     withAnimation { proxy.scrollTo(newCount - 1, anchor: .bottom) }
                 }
             }
@@ -144,9 +146,13 @@ struct RecordingView: View {
 
     private var controlBar: some View {
         HStack(spacing: 16) {
-            Button(action: toggleOverlay) {
-                Label(subtitleWindowController?.window?.isVisible == true ? "Hide Overlay" : "Show Overlay",
-                      systemImage: subtitleWindowController?.window?.isVisible == true ? "eye.slash" : "eye")
+            Button(action: {
+                Task { @MainActor in
+                    toggleOverlay()
+                }
+            }) {
+                Image(systemName: subtitleWindowController?.window?.isVisible == true ? "eye.slash" : "eye")
+                Text(subtitleWindowController?.window?.isVisible == true ? "Hide Overlay" : "Show Overlay")
             }
             .buttonStyle(.bordered)
             if !statusMessage.isEmpty {

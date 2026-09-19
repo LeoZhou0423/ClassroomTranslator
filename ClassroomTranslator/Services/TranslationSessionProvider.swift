@@ -20,11 +20,11 @@ struct TranslationSessionHost<Content: View>: View {
 
     var body: some View {
         content
-            .onAppear { syncConfig() }
-            .onChange(of: language) { _, _ in syncConfig() }
-            .onChange(of: target) { _, _ in syncConfig() }
+            .onAppear { Task { @MainActor in syncConfig() } }
+            .onChange(of: language) { _, _ in Task { @MainActor in syncConfig() } }
+            .onChange(of: target) { _, _ in Task { @MainActor in syncConfig() } }
             .onChange(of: manager.sessionRefreshToken) { _, _ in
-                config.invalidate()
+                Task { @MainActor in config.invalidate() }
             }
             .translationTask(config) { session in
                 manager.attach(session: session)

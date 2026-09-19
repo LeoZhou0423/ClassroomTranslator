@@ -88,7 +88,9 @@ struct SettingsView: View {
                         Text("Follow System").tag("system")
                     }
                     .onChange(of: appLanguage) { _, _ in
-                        ClassroomTranslatorApp.applyAppLanguage()
+                        Task { @MainActor in
+                            ClassroomTranslatorApp.applyAppLanguage()
+                        }
                     }
                     Text("Restart the app to apply the language change.")
                         .font(.caption)
