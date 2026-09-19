@@ -124,13 +124,14 @@ struct RecordingView: View {
                     let finalText = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
 
                     if let lastIdx = self.segments.indices.last,
-                       !Self.hasSentenceEnding(self.segments[lastIdx].english) {
-                        let merged = self.segments[lastIdx].english + finalText
-                        let punctuatedMerged = await PunctuationService.punctuate(merged)
+                       !Self.hasSentenceEnding(self.segments[lastIdx].english),
+                       self.segments[lastIdx].english.count < 20 {
+                        let mergedText = self.segments[lastIdx].english + finalText
+                        let punctuatedMerged = await PunctuationService.punctuate(mergedText)
                         let translated = await self.translationManager.translate(punctuatedMerged)
-                        var merged = Segment(english: punctuatedMerged, chinese: translated)
-                        merged.id = self.segments[lastIdx].id
-                        self.segments[lastIdx] = merged
+                        var mergedSeg = Segment(english: punctuatedMerged, chinese: translated)
+                        mergedSeg.id = self.segments[lastIdx].id
+                        self.segments[lastIdx] = mergedSeg
                         self.historyStore.addSegmentIfNew(TranscriptSegment(original: punctuatedMerged, translated: translated))
                         self.subtitleWindowController?.appendSegment(original: punctuatedMerged, translated: translated)
                     } else {

@@ -304,7 +304,8 @@ final class StableRecordingViewController: NSViewController {
                     let finalText = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
 
                     if !self.lastCommittedEnglish.isEmpty,
-                       !Self.hasSentenceEnding(self.lastCommittedEnglish) {
+                       !Self.hasSentenceEnding(self.lastCommittedEnglish),
+                       self.lastCommittedEnglish.count < 20 {
                         let merged = self.lastCommittedEnglish + finalText
                         let punctuatedMerged = await PunctuationService.punctuate(merged)
                         let translated = await self.translationManager.translate(punctuatedMerged)
