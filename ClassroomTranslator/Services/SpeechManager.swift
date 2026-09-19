@@ -17,8 +17,12 @@ final class SpeechManager {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     /// 音频引擎全部在后台队列跑，避免 start() 阻塞主线程
-    /// （那是“正在启动录音…”假死、全屏黑屏的根因）
+    /// （那是"正在启动录音…"假死、全屏黑屏的根因）
     private let driver = AudioEngineDriver()
+    /// 停顿检测：根据语速自适应阈值
+    private var debounceWorkItem: DispatchWorkItem?
+    private var partialTimestamps: [TimeInterval] = []   // 最近 N 次 partial 的时间戳
+    private var lastPartialText = ""
 
     /// 当前使用的语言代码
     private(set) var currentLanguageCode: String
@@ -112,16 +116,65 @@ final class SpeechManager {
                     let isFinal = result.isFinal
 
                     if isFinal {
+                        self.debounceWorkItem?.cancel()
+                        self.debounceWorkItem = nil
+                        self.partialTimestamps.removeAll()
+                        self.lastPartialText = ""
                         self.finalSegments.append(text)
                         self.currentText = ""
                         self.onSegmentRecognized?(text, true)
                     } else {
+                        let now = ProcessInfo.processInfo.systemUptime
+                        // 只在文本实际变化时记录（忽略 recognizer 重复回调同一条）
+                        if text != self.lastPartialText {
+                            self.partialTimestamps.append(now)
+                            if self.partialTimestamps.count > 10 { self.partialTimestamps.removeFirst() }
+                            self.lastPartialText = text
+                        }
+
+                        // 算语速：每秒字符数（取最近几次更新的平均间隔）
+                        let charsPerSecond: Double
+                        if self.partialTimestamps.count >= 2 {
+                            let intervals = zip(self.partialTimestamps.dropFirst(), self.partialTimestamps.dropLast())
+                            let avgInterval = intervals.map(-).reduce(0, +) / Double(self.partialTimestamps.count - 1)
+                            let totalChars = Double(text.count)
+                            let totalTime = avgInterval * Double(self.partialTimestamps.count - 1)
+                            charsPerSecond = totalTime > 0 ? totalChars / totalTime : 3.0
+                        } else {
+                            charsPerSecond = 3.0  // 默认中等语速
+                        }
+
+                        // 停顿阈值 = 自适应：语速越快阈值越短，越慢越长
+                        //   快速说话 (6 cps) → ~1.5s
+                        //   中等 (3 cps)   → ~2.5s
+                        //   慢速 (1.5 cps) → ~4s
+                        let pauseThreshold = max(1.2, min(5.0, 8.0 / max(charsPerSecond, 0.5)))
+
+                        self.debounceWorkItem?.cancel()
+                        if text.count >= 3 {
+                            let workItem = DispatchWorkItem { [weak self] in
+                                guard let self else { return }
+                                guard self.isRecording else { return }
+                                // 停顿达到阈值，当 final 处理，触发翻译
+                                self.partialTimestamps.removeAll()
+                                self.lastPartialText = ""
+                                self.finalSegments.append(text)
+                                self.currentText = ""
+                                self.onSegmentRecognized?(text, true)
+                            }
+                            self.debounceWorkItem = workItem
+                            DispatchQueue.main.asyncAfter(deadline: .now() + pauseThreshold, execute: workItem)
+                        }
                         self.currentText = text
                         self.onSegmentRecognized?(text, false)
                     }
                 }
 
                 if error != nil {
+                    self.debounceWorkItem?.cancel()
+                    self.debounceWorkItem = nil
+                    self.partialTimestamps.removeAll()
+                    self.lastPartialText = ""
                     self.stopRecording()
                     self.onRecordingInterrupted?()
                 }
