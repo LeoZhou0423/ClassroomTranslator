@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import CoreMedia
+import Speech
 
 /// Captures microphone samples without AVAudioEngine. AVCaptureSession uses a
 /// separate capture path and avoids the AVAudioEngine input-node failures seen
@@ -12,15 +13,34 @@ final class AudioEngineDriver: NSObject, AVCaptureAudioDataOutputSampleBufferDel
     private var pump: (@Sendable (CMSampleBuffer) -> Void)?
     private var observers: [NSObjectProtocol] = []
     private var interruption: (@Sendable () -> Void)?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private var recognizer: SFSpeechRecognizer?
+    private var recognitionQueue: OperationQueue?
 
     func start(
+        localeIdentifier: String,
         onInterruption: @escaping @Sendable () -> Void,
-        pump: @escaping @Sendable (CMSampleBuffer) -> Void
+        onRecognition: @escaping @Sendable (SFSpeechRecognitionResult?, Error?) -> Void
     ) async throws {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 self.stopLocked()
                 do {
+                    guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)),
+                          recognizer.isAvailable else {
+                        throw AudioEngineError.recognizerUnavailable
+                    }
+                    let request = SFSpeechAudioBufferRecognitionRequest()
+                    request.shouldReportPartialResults = true
+                    request.taskHint = .dictation
+                    let recognitionQueue = OperationQueue()
+                    recognitionQueue.name = "com.classroomtranslator.speechRecognition"
+                    recognitionQueue.maxConcurrentOperationCount = 1
+                    recognitionQueue.underlyingQueue = self.queue
+                    recognizer.queue = recognitionQueue
+                    let task = recognizer.recognitionTask(with: request, resultHandler: onRecognition)
+
                     guard let device = AVCaptureDevice.default(for: .audio) else {
                         throw AudioEngineError.noInputDevice
                     }
@@ -40,7 +60,13 @@ final class AudioEngineDriver: NSObject, AVCaptureAudioDataOutputSampleBufferDel
 
                     self.session = session
                     self.output = output
-                    self.pump = pump
+                    self.recognizer = recognizer
+                    self.recognitionQueue = recognitionQueue
+                    self.recognitionRequest = request
+                    self.recognitionTask = task
+                    self.pump = { [weak request] sampleBuffer in
+                        request?.appendAudioSampleBuffer(sampleBuffer)
+                    }
                     self.interruption = onInterruption
                     self.observe(session)
 
@@ -97,6 +123,13 @@ final class AudioEngineDriver: NSObject, AVCaptureAudioDataOutputSampleBufferDel
         output?.setSampleBufferDelegate(nil, queue: nil)
         pump = nil
         interruption = nil
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+        recognitionRequest = nil
+        recognitionTask = nil
+        recognizer = nil
+        recognitionQueue?.cancelAllOperations()
+        recognitionQueue = nil
         if let session, session.isRunning { session.stopRunning() }
         output = nil
         session = nil
@@ -117,6 +150,7 @@ enum AudioEngineError: LocalizedError {
     case noInputDevice
     case configurationFailed
     case startFailed
+    case recognizerUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -126,6 +160,8 @@ enum AudioEngineError: LocalizedError {
             return String(localized: "Failed to configure microphone capture.")
         case .startFailed:
             return String(localized: "Failed to start microphone capture.")
+        case .recognizerUnavailable:
+            return String(localized: "Speech recognition is unavailable on this device.")
         }
     }
 }

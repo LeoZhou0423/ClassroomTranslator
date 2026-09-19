@@ -15,9 +15,6 @@ final class SpeechManager {
     /// 语言模型状态变化回调（UI 显示"正在下载模型..."等提示）
     var onLanguageModelStatusChanged: ((String) -> Void)?
 
-    private var speechRecognizer: SFSpeechRecognizer?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
     /// 音频引擎全部在后台队列跑，避免 start() 阻塞主线程
     /// （那是"正在启动录音…"假死、全屏黑屏的根因）
     private let driver = AudioEngineDriver()
@@ -63,11 +60,6 @@ final class SpeechManager {
             savedLanguage = "en-US"
         }
         currentLanguageCode = savedLanguage
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: savedLanguage))
-            ?? SFSpeechRecognizer()
-        if speechRecognizer == nil {
-            print("Warning: no speech recognizer available on this device")
-        }
 
     }
 
@@ -92,19 +84,8 @@ final class SpeechManager {
         guard languageCode != currentLanguageCode else { return }
         guard languageCode != "auto", languageCode != "auto-detect" else { return }
 
-        if let newRecognizer = SFSpeechRecognizer(locale: Locale(identifier: languageCode)) {
-            speechRecognizer = newRecognizer
-            currentLanguageCode = languageCode
-            print("Switched speech recognizer to: \(languageCode)")
-
-            // 检查模型是否就绪，未就绪时通知 UI 显示下载提示
-            Task {
-                await checkAndNotifyModelStatus(newRecognizer, languageCode: languageCode)
-            }
-        } else {
-            print("Warning: Cannot create recognizer for \(languageCode)")
-            onLanguageModelStatusChanged?("Speech recognition is not available for this language.")
-        }
+        currentLanguageCode = languageCode
+        onLanguageModelStatusChanged?("")
     }
 
     /// 检查模型状态并通知 UI
@@ -190,119 +171,23 @@ final class SpeechManager {
         let generation = recordingGeneration
         defer { isStarting = false }
 
-        // 识别器不可用（设备不支持/被限制）：直接报，不崩
-        guard let recognizer = speechRecognizer else {
-            throw SpeechError.recognizerUnavailable
-        }
-
         // 没有麦克风/输入设备时直接失败，而不是访问引擎触发异常崩溃
         guard AVCaptureDevice.default(for: .audio) != nil else {
             throw SpeechError.noInputDevice
         }
 
-        guard recognizer.isAvailable else { throw SpeechError.recognizerUnavailable }
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.taskHint = .dictation
-        recognitionRequest = request
-
-        recognitionTask = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
-            Task { @MainActor in
-                guard let self, self.recordingGeneration == generation else { return }
-
-                if let result {
-                    let text = result.bestTranscription.formattedString
-                    let isFinal = result.isFinal
-
-                    if isFinal {
-                        self.debounceWorkItem?.cancel()
-                        self.debounceWorkItem = nil
-                        self.resetPauseModel()
-                        self.finalSegments.append(text)
-                        self.currentText = ""
-                        self.onSegmentRecognized?(text, true)
-                    } else {
-                        let now = ProcessInfo.processInfo.systemUptime
-
-                        if text != self.lastPartialText {
-                            let gap = now - self.lastPartialTime
-                            // ---- 更新 EMA 模型 ----
-                            if self.lastPartialTime > 0 {
-                                if self.intervalCount == 0 {
-                                    self.emaInterval = gap
-                                } else {
-                                    self.emaInterval = self.emaAlpha * gap + (1 - self.emaAlpha) * self.emaInterval
-                                }
-                                self.intervalCount += 1
-                                self.minInterval = max(0.2, self.emaInterval * 0.3)
-                            }
-                            self.lastPartialTime = now
-                            self.lastPartialText = text
-
-                            // ---- 计算停顿阈值 ----
-                            let threshold: Double
-                            if self.intervalCount < self.warmupThreshold {
-                                threshold = 2.0
-                            } else {
-                                let confidence = min(1.0, Double(self.intervalCount - self.warmupThreshold) / 20.0)
-                                let k = self.kBase - (self.kBase - self.kMin) * confidence
-                                threshold = max(self.minInterval * 2, self.emaInterval * k)
-                            }
-
-                            // ---- 停顿检测：有句末标点时断句 ----
-                            let pauseDetected: Bool
-                            if self.lastPartialTime > 0, self.intervalCount >= self.warmupThreshold {
-                                pauseDetected = gap > threshold && Self.hasSentenceEnding(text)
-                            } else {
-                                pauseDetected = self.lastPartialTime > 0 && gap > self.warmupPause && Self.hasSentenceEnding(text)
-                            }
-
-                            if pauseDetected && text.count >= 3 {
-                                self.debounceWorkItem?.cancel()
-                                self.finalSegments.append(text)
-                                self.currentText = ""
-                                self.onSegmentRecognized?(text, true)
-                            } else {
-                                // 还在说话：重置 debounce 计时器
-                                self.debounceWorkItem?.cancel()
-                                let workItem = DispatchWorkItem { [weak self] in
-                                    guard let self, self.isRecording else { return }
-                                    // debounce 超时也检查句末标点
-                                    guard Self.hasSentenceEnding(text) || text.count > 60 else { return }
-                                    self.resetPauseModel()
-                                    self.finalSegments.append(text)
-                                    self.currentText = ""
-                                    self.onSegmentRecognized?(text, true)
-                                }
-                                self.debounceWorkItem = workItem
-                                DispatchQueue.main.asyncAfter(deadline: .now() + threshold, execute: workItem)
-                            }
-                        }
-                        self.currentText = text
-                        self.onSegmentRecognized?(text, false)
-                    }
-                }
-
-                if error != nil {
-                    self.debounceWorkItem?.cancel()
-                    self.debounceWorkItem = nil
-                    self.resetPauseModel()
-                    self.stopRecording()
-                    self.onRecordingInterrupted?()
-                }
-            }
-        }
-
         // 引擎启动放后台队列；慢/失败都不占用主线程
         do {
-            try await driver.start(onInterruption: { [weak self] in
+            try await driver.start(localeIdentifier: currentLanguageCode, onInterruption: { [weak self] in
                 Task { @MainActor in
                     guard let self, self.recordingGeneration == generation else { return }
                     self.handleConfigurationChange()
                 }
-            }) { [weak request] buffer in
-                request?.appendAudioSampleBuffer(buffer)
+            }, onRecognition: { [weak self] result, error in
+                Task { @MainActor in
+                    guard let self, self.recordingGeneration == generation else { return }
+                    self.handleRecognition(result: result, error: error)
+                }
             }
         } catch {
             stopRecording()
@@ -312,6 +197,30 @@ final class SpeechManager {
         isRecording = true
     }
 
+    private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
+        if error != nil {
+            stopRecording()
+            onRecordingInterrupted?()
+            return
+        }
+        guard let result else { return }
+        let text = result.bestTranscription.formattedString
+        guard text != lastPartialText || result.isFinal else { return }
+        lastPartialText = text
+
+        if result.isFinal {
+            debounceWorkItem?.cancel()
+            debounceWorkItem = nil
+            finalSegments.append(text)
+            currentText = ""
+            onSegmentRecognized?(text, true)
+            resetPauseModel()
+        } else {
+            currentText = text
+            onSegmentRecognized?(text, false)
+        }
+    }
+
     func stopRecording() {
         // Invalidate callbacks before cancel(), including a start still awaiting the engine.
         recordingGeneration += 1
@@ -319,10 +228,6 @@ final class SpeechManager {
         debounceWorkItem = nil
         resetPauseModel()
         driver.stop()
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        recognitionRequest = nil
-        recognitionTask = nil
         isRecording = false
     }
 
@@ -338,10 +243,6 @@ final class SpeechManager {
     /// on macOS 26/27, so Auto deliberately uses one stable English recognizer.
     func startAutoDetectRecording() async throws {
         let locale = Self.safeAutomaticEnglishLocale()
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)) else {
-            throw SpeechError.recognizerUnavailable
-        }
-        speechRecognizer = recognizer
         currentLanguageCode = locale
         try await startRecording()
     }
