@@ -29,11 +29,27 @@ final class SpeechManager {
     private var emaInterval: Double = 0
     private var intervalCount = 0
     private var minInterval: Double = 0.3
-    private let emaAlpha = 0.4                // 更跟最新值，快速适应语速变化
-    private let kBase = 4.0                   // 基础倍数：间隔的 4 倍算停顿
-    private let kMin = 2.5                    // 最小倍数
-    private let warmupThreshold = 3           // 更快进入自适应模式
-    private let warmupPause: TimeInterval = 1.5  // 冷启动停顿阈值（秒）
+    private let emaAlpha = 0.4
+    private let kBase = 4.0
+    private let kMin = 2.5
+    private let warmupThreshold = 3
+    private let warmupPause: TimeInterval = 1.5
+    /// 句末标点集合（断句必须有这些才真正分句）
+    private static let sentenceEndingPunctuation: Set<Character> = [".", "!", "?", "。", "！", "？", "…", ".", "!", "?", ".", "!", "?", ")", "]", "」", "』", "\"", "'", "\u{201D}", "\u{2019}"]
+
+    /// 判断文本是否以句末标点结尾（真正完成了一个完整句意）
+    private static func hasSentenceEnding(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard let last = trimmed.last else { return false }
+        // 句末标点直接返回
+        if sentenceEndingPunctuation.contains(last) { return true }
+        // 英文缩写不误判（如 "U.S." "Dr."）—— 检查倒数第二个字符
+        if last == "." && trimmed.count >= 3 {
+            let idx = trimmed.index(trimmed.endIndex, offsetBy: -2)
+            if trimmed[idx].isUppercase { return false }
+        }
+        return false
+    }
 
     /// 当前使用的语言代码
     private(set) var currentLanguageCode: String
@@ -230,12 +246,13 @@ final class SpeechManager {
                                 threshold = max(self.minInterval * 2, self.emaInterval * k)
                             }
 
-                            // ---- 停顿检测 ----
+                            // ---- 停顿检测：必须有句末标点才真正断句 ----
                             let pauseDetected: Bool
+                            let forceBreak = text.count > 150  // 安全网：超长文本强制断句
                             if self.lastPartialTime > 0, self.intervalCount >= self.warmupThreshold {
-                                pauseDetected = gap > threshold
+                                pauseDetected = (gap > threshold && Self.hasSentenceEnding(text)) || forceBreak
                             } else {
-                                pauseDetected = self.lastPartialTime > 0 && gap > self.warmupPause
+                                pauseDetected = (self.lastPartialTime > 0 && gap > self.warmupPause && Self.hasSentenceEnding(text)) || forceBreak
                             }
 
                             if pauseDetected && text.count >= 3 {
@@ -248,6 +265,8 @@ final class SpeechManager {
                                 self.debounceWorkItem?.cancel()
                                 let workItem = DispatchWorkItem { [weak self] in
                                     guard let self, self.isRecording else { return }
+                                    // debounce 超时也检查句末标点
+                                    guard Self.hasSentenceEnding(text) || text.count > 60 else { return }
                                     self.resetPauseModel()
                                     self.finalSegments.append(text)
                                     self.currentText = ""
