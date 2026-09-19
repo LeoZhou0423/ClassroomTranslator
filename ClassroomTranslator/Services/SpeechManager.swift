@@ -37,6 +37,7 @@ final class SpeechManager {
     private let warmupPause: TimeInterval = 1.5
     /// 句末标点集合（断句必须有这些才真正分句）
     private static let sentenceEndingPunctuation: Set<Character> = [".", "!", "?", "。", "！", "？", "…", ".", "!", "?", ".", "!", "?", ")", "]", "」", "』", "\"", "'", "\u{201D}", "\u{2019}"]
+    private static let sentenceEnders = CharacterSet(charactersIn: ".!?。！？…")
 
     /// 判断文本是否以句末标点结尾（真正完成了一个完整句意）
     private static func hasSentenceEnding(_ text: String) -> Bool {
@@ -221,8 +222,19 @@ final class SpeechManager {
             let incremental: String
             if !committedText.isEmpty, fullText.hasPrefix(committedText) {
                 incremental = String(fullText.dropFirst(committedText.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if !committedText.isEmpty {
+                let commonLen = Self.commonPrefixLength(committedText, fullText)
+                incremental = commonLen > 5
+                    ? String(fullText.dropFirst(commonLen)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    : fullText.trimmingCharacters(in: .whitespacesAndNewlines)
             } else {
                 incremental = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            guard !incremental.trimmingCharacters(in: Self.sentenceEnders).isEmpty else {
+                currentText = ""
+                resetPauseModel()
+                committedText = fullText
+                return
             }
             guard !incremental.isEmpty else {
                 currentText = ""
@@ -281,17 +293,29 @@ final class SpeechManager {
     /// 只在长时间无新结果时才提交（fallback），正常情况靠 isFinal 提交
     private func scheduleFallbackCommit(fullText: String, visibleText: String) {
         debounceWorkItem?.cancel()
-        let delay: TimeInterval = Self.hasSentenceEnding(visibleText) ? 1.0 : 2.0
+        let delay: TimeInterval = {
+            if Self.hasSentenceEnding(visibleText) { return 0.8 }
+            if visibleText.count >= 60 { return 1.0 }
+            if visibleText.count >= 30 { return 1.2 }
+            return 1.5
+        }()
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self, self.isRecording, self.lastPartialText == fullText else { return }
                 let incremental: String
                 if !self.committedText.isEmpty, fullText.hasPrefix(self.committedText) {
                     incremental = String(fullText.dropFirst(self.committedText.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                } else if !self.committedText.isEmpty {
+                    let commonLen = Self.commonPrefixLength(self.committedText, fullText)
+                    incremental = commonLen > 5
+                        ? String(fullText.dropFirst(commonLen)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        : fullText.trimmingCharacters(in: .whitespacesAndNewlines)
                 } else {
                     incremental = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
-                guard !incremental.isEmpty, !self.isDuplicate(incremental) else { return }
+                guard !incremental.trimmingCharacters(in: Self.sentenceEnders).isEmpty,
+                      !incremental.isEmpty,
+                      !self.isDuplicate(incremental) else { return }
                 self.committedText = fullText
                 self.currentText = ""
                 self.finalSegments.append(incremental)
