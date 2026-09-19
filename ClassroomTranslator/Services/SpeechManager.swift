@@ -325,7 +325,6 @@ final class SpeechManager {
                 texts[code] = text
                 scores[code] = text.split(separator: " ").count + (recognizer.supportsOnDeviceRecognition ? 2 : 0)
                 lock.unlock()
-                // 把最佳结果回调出去
                 if let best = self?.bestLocale, code == best {
                     Task { @MainActor in
                         self?.currentText = text
@@ -335,19 +334,19 @@ final class SpeechManager {
             }
 
             parallelRecognizers[code] = (recognizer, request, task)
-
-            // 安装 audio tap
-            let nativeFormat = driver.engine.inputNode.outputFormat(forBus: 0)
-            driver.engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nativeFormat) { [weak request] buffer, _ in
-                request?.append(buffer)
-            }
         }
 
         guard !parallelRecognizers.isEmpty else {
             throw SpeechError.engineStartFailed
         }
 
-        try driver.start { _ in } // tap 已安装，这里只需要启动引擎
+        // 单一 audio tap，广播给所有识别器
+        try await driver.start { [weak self] buffer in
+            guard let self else { return }
+            for (_, entry) in self.parallelRecognizers {
+                entry.request.append(buffer)
+            }
+        }
         isRecording = true
         currentLanguageCode = "auto-detect"
 
@@ -369,7 +368,6 @@ final class SpeechManager {
         for (code, entry) in parallelRecognizers {
             entry.request.endAudio()
             entry.task.cancel()
-            driver.engine.inputNode.removeTap(onBus: 0)
             parallelRecognizers.removeValue(forKey: code)
         }
         driver.stop()
@@ -380,7 +378,7 @@ final class SpeechManager {
         }
         try await startRecording()
 
-        // 如果评估期间有文本，把它作为第一段
+        // 如果评估期间有文本，把它发出去
         if !winnerText.isEmpty {
             currentText = winnerText
             onSegmentRecognized?(winnerText, false)
@@ -394,7 +392,6 @@ final class SpeechManager {
         }
         parallelRecognizers.removeAll()
         bestLocale = nil
-        driver.engine.inputNode.removeTap(onBus: 0)
         driver.stop()
         isRecording = false
     }
