@@ -120,17 +120,11 @@ struct RecordingView: View {
                         self.currentPartialNew = ""
                         return
                     }
-                    let punctuated = await PunctuationService.punctuate(trimmed)
-                    let sentences = Self.splitIntoSentences(punctuated)
-                    if sentences.count <= 1 {
-                        await self.commitSentence(Self.ensureEndingPunctuation(trimmed))
-                    } else {
-                        for sentence in sentences {
-                            let s = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !s.isEmpty, s.count > 3 else { continue }
-                            await self.commitSentence(s)
-                        }
-                    }
+                    let sentence = Self.ensureEndingPunctuation(trimmed)
+                    let translated = await self.translationManager.translate(sentence)
+                    self.segments.append(Segment(english: sentence, chinese: translated))
+                    self.historyStore.addSegmentIfNew(TranscriptSegment(original: sentence, translated: translated))
+                    self.subtitleWindowController?.appendSegment(original: sentence, translated: translated)
                     self.currentPartialNew = ""
                 } else {
                     guard text != self.currentPartialNew else { return }
@@ -141,7 +135,7 @@ struct RecordingView: View {
         }
     }
 
-    /// rpunct 没标点时兜底：确保句子有结尾标点
+    /// 本地分句：确保句子有结尾标点（不依赖 rpunct）
     private static func ensureEndingPunctuation(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         guard let last = trimmed.last else { return text }
@@ -155,59 +149,6 @@ struct RecordingView: View {
             return trimmed + "?"
         }
         return trimmed + "."
-    }
-
-    /// 用 NLP 标点分割句子，而不是靠时间间隔
-    private static func splitIntoSentences(_ text: String) -> [String] {
-        var sentences: [String] = []
-        var current = ""
-        let chars = Array(text)
-        var i = 0
-        while i < chars.count {
-            let c = chars[i]
-            current.append(c)
-            if ".!?。！？".contains(c) {
-                let nextIsSpaceOrEnd = (i + 1 >= chars.count) || chars[i + 1].isWhitespace
-                let prevIsUpper = i > 0 && chars[i - 1].isUppercase
-                let isAbbreviation = c == "." && prevIsUpper && (i + 1 < chars.count) && chars[i + 1].isLowercase
-                if nextIsSpaceOrEnd && !isAbbreviation {
-                    sentences.append(current)
-                    current = ""
-                }
-            }
-            i += 1
-        }
-        if !current.trimmingCharacters(in: .whitespaces).isEmpty {
-            sentences.append(current)
-        }
-        return sentences
-    }
-
-    /// 提交一个句子：合并前一个未标点片段，翻译完整句子
-    private func commitSentence(_ sentence: String) async {
-        if let lastIdx = segments.indices.last,
-           !Self.hasSentenceEnding(segments[lastIdx].english) {
-            let mergedText = segments[lastIdx].english + " " + sentence
-            let translated = await translationManager.translate(mergedText)
-            var mergedSeg = Segment(english: mergedText, chinese: translated)
-            mergedSeg.id = segments[lastIdx].id
-            segments[lastIdx] = mergedSeg
-            historyStore.addSegmentIfNew(TranscriptSegment(original: mergedText, translated: translated))
-            subtitleWindowController?.appendSegment(original: mergedText, translated: translated)
-        } else {
-            let translated = await translationManager.translate(sentence)
-            segments.append(Segment(english: sentence, chinese: translated))
-            historyStore.addSegmentIfNew(TranscriptSegment(original: sentence, translated: translated))
-            subtitleWindowController?.appendSegment(original: sentence, translated: translated)
-        }
-    }
-
-    private static let sentenceEndingPunctuation: Set<Character> = [".", "!", "?", "。", "！", "？", "…", ")", "]", "」", "』", "\"", "'", "\u{201D}", "\u{2019}"]
-
-    private static func hasSentenceEnding(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard let last = trimmed.last else { return false }
-        return sentenceEndingPunctuation.contains(last)
     }
 
     private func startRecording() {

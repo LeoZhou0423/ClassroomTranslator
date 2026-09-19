@@ -300,13 +300,19 @@ final class StableRecordingViewController: NSViewController {
                 partialRevision += 1
                 let task = Task { @MainActor [weak self] in
                     guard let self else { return }
-                    let punctuated = await PunctuationService.punctuate(text)
-                    let sentences = Self.splitIntoSentences(punctuated)
-                    for sentence in sentences {
-                        let s = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !s.isEmpty, s.count > 3 else { continue }
-                        await self.commitSentence(s)
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else {
+                        self.partialText = ""
+                        self.partialTranslation = ""
+                        self.refreshTranscript()
+                        return
                     }
+                    let sentence = Self.ensureEndingPunctuation(trimmed)
+                    let translated = await self.translationManager.translate(sentence)
+                    self.finalizedText += "\n\n\(sentence)\n\(translated)"
+                    self.lastCommittedEnglish = sentence
+                    self.historyStore.addSegmentIfNew(TranscriptSegment(original: sentence, translated: translated))
+                    self.subtitleWindow.appendSegment(original: sentence, translated: translated)
                     self.partialText = ""
                     self.partialTranslation = ""
                     self.refreshTranscript()
@@ -322,48 +328,19 @@ final class StableRecordingViewController: NSViewController {
         }
     }
 
-    private static func splitIntoSentences(_ text: String) -> [String] {
-        var sentences: [String] = []
-        var current = ""
-        let chars = Array(text)
-        var i = 0
-        while i < chars.count {
-            let c = chars[i]
-            current.append(c)
-            if ".!?。！？".contains(c) {
-                let nextIsSpaceOrEnd = (i + 1 >= chars.count) || chars[i + 1].isWhitespace
-                let prevIsUpper = i > 0 && chars[i - 1].isUppercase
-                let isAbbreviation = c == "." && prevIsUpper && (i + 1 < chars.count) && chars[i + 1].isLowercase
-                if nextIsSpaceOrEnd && !isAbbreviation {
-                    sentences.append(current)
-                    current = ""
-                }
-            }
-            i += 1
+    private static func ensureEndingPunctuation(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard let last = trimmed.last else { return text }
+        if ".!?。！？…".contains(last) { return trimmed }
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("what") || lower.hasPrefix("how") || lower.hasPrefix("why")
+            || lower.hasPrefix("where") || lower.hasPrefix("when") || lower.hasPrefix("who")
+            || lower.hasPrefix("can ") || lower.hasPrefix("could ") || lower.hasPrefix("would")
+            || lower.hasPrefix("is ") || lower.hasPrefix("are ") || lower.hasPrefix("do ")
+            || lower.hasPrefix("does ") || lower.hasPrefix("did ") {
+            return trimmed + "?"
         }
-        if !current.trimmingCharacters(in: .whitespaces).isEmpty {
-            sentences.append(current)
-        }
-        return sentences
-    }
-
-    private func commitSentence(_ sentence: String) async {
-        if !lastCommittedEnglish.isEmpty,
-           !Self.hasSentenceEnding(lastCommittedEnglish) {
-            let mergedText = lastCommittedEnglish + " " + sentence
-            let translated = await translationManager.translate(mergedText)
-            removeLastFinalizedSegment()
-            finalizedText += "\n\n\(mergedText)\n\(translated)"
-            lastCommittedEnglish = mergedText
-            historyStore.addSegmentIfNew(TranscriptSegment(original: mergedText, translated: translated))
-            subtitleWindow.appendSegment(original: mergedText, translated: translated)
-        } else {
-            let translated = await translationManager.translate(sentence)
-            finalizedText += "\n\n\(sentence)\n\(translated)"
-            lastCommittedEnglish = sentence
-            historyStore.addSegmentIfNew(TranscriptSegment(original: sentence, translated: translated))
-            subtitleWindow.appendSegment(original: sentence, translated: translated)
-        }
+        return trimmed + "."
     }
 
     private func refreshTranscript() {
