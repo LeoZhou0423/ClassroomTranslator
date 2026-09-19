@@ -15,16 +15,20 @@ struct ContentView: View {
     @State private var recentSegments: [(original: String, translated: String)] = []
     @State private var showHistory = false
     @State private var showSettings = false
-    @AppStorage("recognitionLanguage") private var recognitionLanguage: String = "en-GB"
+    @AppStorage("recognitionLanguage") private var recognitionLanguage: String = "auto"
     private let maxRecentSegments = 20
 
     var body: some View {
         VStack(spacing: 0) { headerBar; Divider(); mainContent; Divider(); controlBar }
         .frame(minWidth: 400, minHeight: 300)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear { setupSubtitleWindow() }
+        .onAppear {
+            applyAutoLanguage()
+            setupSubtitleWindow()
+        }
         .onChange(of: recognitionLanguage) { _, newLanguage in
-            speechManager.switchLanguage(to: newLanguage)
+            applyAutoLanguage()
+            speechManager.switchLanguage(to: effectiveLanguage)
         }
         .sheet(isPresented: $showHistory) { HistoryView() }
         .sheet(isPresented: $showSettings) { SettingsView(translationManager: translationManager) }
@@ -105,8 +109,48 @@ struct ContentView: View {
             "en-ZA": "South African", "zh-Hans": "Chinese",
             "ja-JP": "Japanese", "ko-KR": "Korean", "hi-IN": "Hindi"
         ]
-        let name = accentMap[recognitionLanguage] ?? recognitionLanguage
+        let code = effectiveLanguage
+        let name = accentMap[code] ?? code
         return NSLocalizedString(name, comment: "Speech accent display name")
+    }
+
+    /// 当前实际使用的语言代码（"auto" 时解析为系统语言）
+    private var effectiveLanguage: String {
+        if recognitionLanguage != "auto" { return recognitionLanguage }
+        return Self.detectLanguageFromSystem()
+    }
+
+    private func applyAutoLanguage() {
+        if recognitionLanguage != "auto" {
+            speechManager.switchLanguage(to: recognitionLanguage)
+        } else {
+            speechManager.switchLanguage(to: Self.detectLanguageFromSystem())
+        }
+    }
+
+    /// 根据系统语言自动匹配最佳识别器
+    private static func detectLanguageFromSystem() -> String {
+        let sysLang = Locale.preferredLanguages.first ?? "en-US"
+        // 精确匹配
+        let supported = Set([
+            "en-US", "en-GB", "en-AU", "en-NZ", "en-IE", "en-ZA", "en-CA",
+            "en-IN", "en-PH", "en-SG", "en-MY", "en-JP", "en-KR",
+            "en-AE", "en-SA", "en-IL", "en-TR", "en-EG", "en-QA",
+            "en-KW", "en-BH", "en-OM", "en-JO", "en-LB",
+            "zh-Hans", "zh-Hant", "ja-JP", "ko-KR", "hi-IN"
+        ])
+        if supported.contains(sysLang) { return sysLang }
+        // 前缀匹配 (en-US-xx → en-US)
+        let prefix = String(sysLang.prefix(5))
+        if supported.contains(prefix) { return prefix }
+        // 语言族匹配 (en → en-US)
+        let lang = String(sysLang.prefix(2))
+        if lang == "en" { return "en-US" }
+        if lang == "zh" { return "zh-Hans" }
+        if lang == "ja" { return "ja-JP" }
+        if lang == "ko" { return "ko-KR" }
+        if lang == "hi" { return "hi-IN" }
+        return "en-US" // 兜底
     }
     
     private func setupSubtitleWindow() {

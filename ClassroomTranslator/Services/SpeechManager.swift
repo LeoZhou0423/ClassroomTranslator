@@ -19,10 +19,19 @@ final class SpeechManager {
     /// 音频引擎全部在后台队列跑，避免 start() 阻塞主线程
     /// （那是"正在启动录音…"假死、全屏黑屏的根因）
     private let driver = AudioEngineDriver()
-    /// 停顿检测：根据语速自适应阈值
+
+    // MARK: - 自适应停顿检测模型
+    // 用 EMA 跟踪 partial result 的更新间隔，动态判断"停顿"
     private var debounceWorkItem: DispatchWorkItem?
-    private var partialTimestamps: [TimeInterval] = []   // 最近 N 次 partial 的时间戳
     private var lastPartialText = ""
+    private var lastPartialTime: TimeInterval = 0
+    private var emaInterval: Double = 0       // 指数移动平均：最近更新间隔
+    private var intervalCount = 0             // 已收集的间隔数（越多越自信）
+    private var minInterval: Double = 0.3     // 动态下限：快速说话也不会误判
+    private let emaAlpha = 0.3                // 平滑系数（越大越跟踪最新值）
+    private let kBase = 3.5                   // 基础倍数：间隔的几倍算停顿
+    private let kMin = 2.0                    // 最小倍数（数据多时收紧）
+    private let warmupThreshold = 5           // 前 N 次用保守值
 
     /// 当前使用的语言代码
     private(set) var currentLanguageCode: String
@@ -49,6 +58,14 @@ final class SpeechManager {
         guard isRecording else { return }
         stopRecording()
         onRecordingInterrupted?()
+    }
+
+    private func resetPauseModel() {
+        emaInterval = 0
+        intervalCount = 0
+        minInterval = 0.3
+        lastPartialTime = 0
+        lastPartialText = ""
     }
 
     /// 切换识别语言（口音）
@@ -118,52 +135,69 @@ final class SpeechManager {
                     if isFinal {
                         self.debounceWorkItem?.cancel()
                         self.debounceWorkItem = nil
-                        self.partialTimestamps.removeAll()
-                        self.lastPartialText = ""
+                        self.resetPauseModel()
                         self.finalSegments.append(text)
                         self.currentText = ""
                         self.onSegmentRecognized?(text, true)
                     } else {
                         let now = ProcessInfo.processInfo.systemUptime
-                        // 只在文本实际变化时记录（忽略 recognizer 重复回调同一条）
+
                         if text != self.lastPartialText {
-                            self.partialTimestamps.append(now)
-                            if self.partialTimestamps.count > 10 { self.partialTimestamps.removeFirst() }
+                            // ---- 更新 EMA 模型 ----
+                            if self.lastPartialTime > 0 {
+                                let gap = now - self.lastPartialTime
+                                if self.intervalCount == 0 {
+                                    // 第一个间隔：直接赋值
+                                    self.emaInterval = gap
+                                } else {
+                                    self.emaInterval = self.emaAlpha * gap + (1 - self.emaAlpha) * self.emaInterval
+                                }
+                                self.intervalCount += 1
+                                // 动态最小间隔 = EMA 的 30%（容错下限）
+                                self.minInterval = max(0.2, self.emaInterval * 0.3)
+                            }
+                            self.lastPartialTime = now
                             self.lastPartialText = text
-                        }
 
-                        // 算语速：每秒字符数（取最近几次更新的平均间隔）
-                        let charsPerSecond: Double
-                        if self.partialTimestamps.count >= 2 {
-                            let intervals = zip(self.partialTimestamps.dropFirst(), self.partialTimestamps.dropLast())
-                            let avgInterval = intervals.map(-).reduce(0, +) / Double(self.partialTimestamps.count - 1)
-                            let totalChars = Double(text.count)
-                            let totalTime = avgInterval * Double(self.partialTimestamps.count - 1)
-                            charsPerSecond = totalTime > 0 ? totalChars / totalTime : 3.0
-                        } else {
-                            charsPerSecond = 3.0  // 默认中等语速
-                        }
+                            // ---- 计算停顿阈值 ----
+                            let threshold: Double
+                            if self.intervalCount < self.warmupThreshold {
+                                // 冷启动：数据不够，用保守值
+                                threshold = 2.0
+                            } else {
+                                // 稳态：K 随置信度收紧，容错率自适应
+                                let confidence = min(1.0, Double(self.intervalCount - self.warmupThreshold) / 20.0)
+                                let k = self.kBase - (self.kBase - self.kMin) * confidence
+                                threshold = max(self.minInterval * 2, self.emaInterval * k)
+                            }
 
-                        // 停顿阈值 = 自适应：语速越快阈值越短，越慢越长
-                        //   快速说话 (6 cps) → ~1.5s
-                        //   中等 (3 cps)   → ~2.5s
-                        //   慢速 (1.5 cps) → ~4s
-                        let pauseThreshold = max(1.2, min(5.0, 8.0 / max(charsPerSecond, 0.5)))
+                            // ---- 停顿检测 ----
+                            let pauseDetected: Bool
+                            if self.intervalCount >= self.warmupThreshold {
+                                pauseDetected = gap > threshold
+                            } else {
+                                // 冷启动：只靠文本稳定判断
+                                pauseDetected = gap > 2.0 && text == self.lastPartialText
+                            }
 
-                        self.debounceWorkItem?.cancel()
-                        if text.count >= 3 {
-                            let workItem = DispatchWorkItem { [weak self] in
-                                guard let self else { return }
-                                guard self.isRecording else { return }
-                                // 停顿达到阈值，当 final 处理，触发翻译
-                                self.partialTimestamps.removeAll()
-                                self.lastPartialText = ""
+                            if pauseDetected && text.count >= 3 {
+                                self.debounceWorkItem?.cancel()
                                 self.finalSegments.append(text)
                                 self.currentText = ""
                                 self.onSegmentRecognized?(text, true)
+                            } else {
+                                // 还在说话：重置 debounce 计时器
+                                self.debounceWorkItem?.cancel()
+                                let workItem = DispatchWorkItem { [weak self] in
+                                    guard let self, self.isRecording else { return }
+                                    self.resetPauseModel()
+                                    self.finalSegments.append(text)
+                                    self.currentText = ""
+                                    self.onSegmentRecognized?(text, true)
+                                }
+                                self.debounceWorkItem = workItem
+                                DispatchQueue.main.asyncAfter(deadline: .now() + threshold, execute: workItem)
                             }
-                            self.debounceWorkItem = workItem
-                            DispatchQueue.main.asyncAfter(deadline: .now() + pauseThreshold, execute: workItem)
                         }
                         self.currentText = text
                         self.onSegmentRecognized?(text, false)
@@ -173,8 +207,7 @@ final class SpeechManager {
                 if error != nil {
                     self.debounceWorkItem?.cancel()
                     self.debounceWorkItem = nil
-                    self.partialTimestamps.removeAll()
-                    self.lastPartialText = ""
+                    self.resetPauseModel()
                     self.stopRecording()
                     self.onRecordingInterrupted?()
                 }
