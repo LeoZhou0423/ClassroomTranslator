@@ -5,6 +5,8 @@ struct HomeView: View {
     @State private var showNewCourse = false
     @State private var selectedCourse: Course?
     @State private var navigateToCourse = false
+    @State private var courseToDelete: Course?
+    @State private var showDeleteConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -66,10 +68,33 @@ struct HomeView: View {
                     courseRow(course)
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    Button(role: .destructive, action: {
+                        courseToDelete = course
+                        showDeleteConfirm = true
+                    }) {
+                        Label("Delete Course", systemImage: "trash")
+                    }
+                }
             }
             .onDelete(perform: deleteCourses)
         }
         .listStyle(.inset)
+        .confirmationDialog(
+            "Delete Course",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let course = courseToDelete {
+                    historyStore.deleteCourse(course)
+                    courseToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { courseToDelete = nil }
+        } message: {
+            Text("Are you sure you want to delete this course? All recordings will be removed.")
+        }
     }
 
     private func courseRow(_ course: Course) -> some View {

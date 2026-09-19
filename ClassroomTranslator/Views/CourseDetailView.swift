@@ -4,7 +4,9 @@ struct CourseDetailView: View {
     @Environment(HistoryStore.self) private var historyStore
     let course: Course
 
+    @Environment(\.dismiss) private var dismiss
     @State private var showRecording = false
+    @State private var showDeleteConfirm = false
 
     private var courseRecords: [TranscriptRecord] {
         historyStore.recordsForCourse(course)
@@ -71,6 +73,26 @@ struct CourseDetailView: View {
         }
         .navigationDestination(isPresented: $showRecording) {
             RecordingView(course: course)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(role: .destructive, action: { showDeleteConfirm = true }) {
+                    Image(systemName: "trash")
+                }
+            }
+        }
+        .confirmationDialog(
+            "Delete Course",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                historyStore.deleteCourse(course)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Are you sure you want to delete this course? All recordings will be removed.")
         }
     }
 }

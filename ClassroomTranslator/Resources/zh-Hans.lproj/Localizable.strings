@@ -2,6 +2,9 @@
 
 /* APP */
 "Classroom Translator" = "LingoClass";
+"App Language" = "App 语言";
+"Follow System" = "跟随系统";
+"Restart the app to apply the language change." = "重启 App 后生效。";
 
 /* 导航 */
 "My Courses" = "我的课程";
@@ -44,6 +47,8 @@
 "Professor's Accent" = "教授口音";
 "Accent" = "口音";
 "Select the accent that best matches your professor" = "选择与教授最接近的口音";
+"Delete Course" = "删除课程";
+"Are you sure you want to delete this course? All recordings will be removed." = "确定删除这个课程吗？所有录音都会被移除。";
 "New Recording" = "新建录音";
 "No recordings yet" = "暂无录音";
 "Start First Recording" = "开始第一次录音";

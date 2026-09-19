@@ -12,6 +12,7 @@ struct SettingsView: View {
     @AppStorage("recognitionLanguage") private var recognitionLanguage: String = "auto"
     @AppStorage("translationTarget") private var translationTarget: String = "zh-Hans"
     @AppStorage("autoScroll") private var autoScroll: Bool = true
+    @AppStorage("appLanguage") private var appLanguage: String = "zh-Hans"
     
     @State private var isDownloadingAll = false
     @State private var downloadProgress = ""
@@ -80,6 +81,20 @@ struct SettingsView: View {
             Divider()
             
             Form {
+                Section("App Language") {
+                    Picker("Language", selection: $appLanguage) {
+                        Text("中文").tag("zh-Hans")
+                        Text("English").tag("en")
+                        Text("Follow System").tag("system")
+                    }
+                    .onChange(of: appLanguage) { _, _ in
+                        ClassroomTranslatorApp.applyAppLanguage()
+                    }
+                    Text("Restart the app to apply the language change.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 Section("Subtitle Display") {
                     HStack {
                         Text("Font Size")
