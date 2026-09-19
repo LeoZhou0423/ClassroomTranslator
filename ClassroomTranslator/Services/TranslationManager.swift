@@ -59,7 +59,7 @@ final class TranslationManager {
                     }
                     guard modelReady == true else { return text }
                     let response = try await session.translate(text)
-                    return response.targetText.applyingTransform(.simplified, reverse: false) ?? response.targetText
+                    return response.targetText
                 } catch {
                     print("Translation failed: \(error)")
                     modelReady = false

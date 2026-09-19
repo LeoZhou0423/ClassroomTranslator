@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Segment Model
 
 private struct Segment: Identifiable, Hashable {
-    let id = UUID()
+    var id = UUID()
     var english: String
     var chinese: String
 }
@@ -128,7 +128,9 @@ struct RecordingView: View {
                         let merged = self.segments[lastIdx].english + finalText
                         let punctuatedMerged = await PunctuationService.punctuate(merged)
                         let translated = await self.translationManager.translate(punctuatedMerged)
-                        self.segments[lastIdx] = Segment(id: self.segments[lastIdx].id, english: punctuatedMerged, chinese: translated)
+                        var merged = Segment(english: punctuatedMerged, chinese: translated)
+                        merged.id = self.segments[lastIdx].id
+                        self.segments[lastIdx] = merged
                         self.historyStore.addSegmentIfNew(TranscriptSegment(original: punctuatedMerged, translated: translated))
                         self.subtitleWindowController?.appendSegment(original: punctuatedMerged, translated: translated)
                     } else {
