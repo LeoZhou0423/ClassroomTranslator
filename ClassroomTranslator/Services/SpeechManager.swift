@@ -90,9 +90,11 @@ final class SpeechManager {
         lastPartialText = ""
     }
 
-    /// 切换识别语言（口音）。系统会自动下载对应模型，这里加提示。
+    /// 切换识别语言（口音）。"auto" 不是合法 locale，直接忽略
+    /// （Auto 走 startAutoDetectRecording，不走这里）。
     func switchLanguage(to languageCode: String) {
         guard languageCode != currentLanguageCode else { return }
+        guard languageCode != "auto", languageCode != "auto-detect" else { return }
 
         if let newRecognizer = SFSpeechRecognizer(locale: Locale(identifier: languageCode)) {
             speechRecognizer = newRecognizer

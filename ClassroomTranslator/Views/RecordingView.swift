@@ -57,6 +57,8 @@ struct RecordingView: View {
             .frame(width: 320)
             .disabled(isRecording || isPaused || isPreparing)
             .onChange(of: currentAccentCode) { _, newCode in
+                // 录音中不切换（Auto 检测完会程序化赋值，此时识别器已经是对的）
+                guard !isRecording && !isPaused else { return }
                 speechManager.switchLanguage(to: newCode)
             }
             Spacer()
@@ -212,9 +214,7 @@ struct RecordingView: View {
                     }
 
                     // 先加标点，再翻译
-                    let punctuated = await withCheckedContinuation { cont in
-                        PunctuationService.punctuate(newEnglish) { cont.resume(returning: $0) }
-                    }
+                    let punctuated = await PunctuationService.punctuate(newEnglish)
                     let translated = await translationManager.translate(punctuated)
                     let trimmed = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -226,8 +226,9 @@ struct RecordingView: View {
                     }
                     currentPartialNew = ""
                 } else {
-                    // partial 也是累积全文，diff 出当前新部分
+                    // partial 也是累积全文，diff 出当前新部分；无变化不刷新
                     let newPart = extractNewSentence(fullText: fullText)
+                    guard newPart != currentPartialNew else { return }
                     currentPartialNew = newPart
                     controller.updateCurrentText(newPart)
                 }
@@ -246,6 +247,7 @@ struct RecordingView: View {
 
         // 策略2：识别器修正了前面的词，找 lastFinalizedFullText 末尾与 fullText 开头的最大重叠
         let maxCheck = min(lastFinalizedFullText.count, fullText.count, 100)
+        guard maxCheck >= 1 else { return fullText }
         for offset in (1...maxCheck).reversed() {
             let suffix = String(lastFinalizedFullText.suffix(offset))
             if fullText.hasPrefix(suffix) {
