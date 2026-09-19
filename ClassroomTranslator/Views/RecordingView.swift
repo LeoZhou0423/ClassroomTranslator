@@ -47,7 +47,7 @@ struct RecordingView: View {
                 Task { @MainActor in
                     currentAccentCode = course.accentCode
                     speechManager.switchLanguage(to: course.accentCode)
-                    setupSubtitleWindow()
+                    setupCallbacks()
                 }
             }
             .sheet(isPresented: $showHistory) { HistoryView() }
@@ -210,9 +210,10 @@ struct RecordingView: View {
         dismiss()
     }
 
-    private func setupSubtitleWindow() {
-        let controller = SubtitleWindowController()
-        subtitleWindowController = controller
+    /// 只挂回调，不创建任何 AppKit 面板。
+    /// 悬浮窗改成懒加载：第一次点击 Show Overlay 才建，避免
+    /// 页面 push 转场期间创建第二个 NSWindow 触发显示周期异常。
+    private func setupCallbacks() {
         speechManager.onRecordingInterrupted = {
             Task { @MainActor in
                 isRecording = false
@@ -225,40 +226,43 @@ struct RecordingView: View {
                 statusMessage = message
             }
         }
-        speechManager.onSegmentRecognized = { fullText, isFinal in
+        speechManager.onSegmentRecognized = { [weak self] fullText, isFinal in
             Task { @MainActor in
+                guard let self else { return }
                 if isFinal {
                     // fullText 是累积全文，diff 出新句子
-                    let newEnglish = extractNewSentence(fullText: fullText)
-                    lastFinalizedFullText = fullText
+                    let newEnglish = self.extractNewSentence(fullText: fullText)
+                    self.lastFinalizedFullText = fullText
 
                     guard !newEnglish.trimmingCharacters(in: .whitespaces).isEmpty else {
-                        currentPartialNew = ""
+                        self.currentPartialNew = ""
                         return
                     }
 
                     // 先加标点，再翻译
                     let punctuated = await PunctuationService.punctuate(newEnglish)
-                    let translated = await translationManager.translate(punctuated)
+                    let translated = await self.translationManager.translate(punctuated)
                     let trimmed = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
 
                     // 去重
-                    if segments.last?.english != trimmed {
-                        segments.append((english: trimmed, chinese: translated))
-                        historyStore.addSegmentIfNew(TranscriptSegment(original: trimmed, translated: translated))
+                    if self.segments.last?.english != trimmed {
+                        self.segments.append((english: trimmed, chinese: translated))
+                        self.historyStore.addSegmentIfNew(TranscriptSegment(original: trimmed, translated: translated))
                         // AppKit 侧推迟到下一个 runloop，避免和 SwiftUI 布局周期重入
+                        let controller = self.subtitleWindowController
                         DispatchQueue.main.async {
-                            controller.appendSegment(original: trimmed, translated: translated)
+                            controller?.appendSegment(original: trimmed, translated: translated)
                         }
                     }
-                    currentPartialNew = ""
+                    self.currentPartialNew = ""
                 } else {
                     // partial 也是累积全文，diff 出当前新部分；无变化不刷新
-                    let newPart = extractNewSentence(fullText: fullText)
-                    guard newPart != currentPartialNew else { return }
-                    currentPartialNew = newPart
+                    let newPart = self.extractNewSentence(fullText: fullText)
+                    guard newPart != self.currentPartialNew else { return }
+                    self.currentPartialNew = newPart
+                    let controller = self.subtitleWindowController
                     DispatchQueue.main.async {
-                        controller.updateCurrentText(newPart)
+                        controller?.updateCurrentText(newPart)
                     }
                 }
             }
@@ -428,6 +432,9 @@ struct RecordingView: View {
     }
 
     private func toggleOverlay() {
+        if subtitleWindowController == nil {
+            subtitleWindowController = SubtitleWindowController()
+        }
         if subtitleWindowController?.window?.isVisible == true { subtitleWindowController?.hideWindow() }
         else { subtitleWindowController?.showWindow() }
     }
