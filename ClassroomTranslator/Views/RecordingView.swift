@@ -136,10 +136,11 @@ struct RecordingView: View {
         }
     }
 
-    /// 本地分句：确保句子有结尾标点（不依赖 rpunct）
+    /// 本地分句 + 标点修正（不依赖 rpunct）
     private static func ensureEndingPunctuation(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard let last = trimmed.last else { return text }
+        var result = fixInternalPunctuation(text)
+        let trimmed = result.trimmingCharacters(in: .whitespaces)
+        guard let last = trimmed.last else { return result }
         if ".!?。！？…".contains(last) { return trimmed }
         let lower = trimmed.lowercased()
         if lower.hasPrefix("what") || lower.hasPrefix("how") || lower.hasPrefix("why")
@@ -150,6 +151,27 @@ struct RecordingView: View {
             return trimmed + "?"
         }
         return trimmed + "."
+    }
+
+    /// 把不该是逗号的地方改成句号
+    private static func fixInternalPunctuation(_ text: String) -> String {
+        let conjunctions = ["and ", "but ", "so ", "or ", "yet ", "because ", "although ",
+                            "while ", "when ", "if ", "then ", "therefore ", "however ",
+                            "moreover ", "furthermore ", "nevertheless ", "also "]
+        var result = text
+        for conj in conjunctions {
+            let pattern = ", " + conj
+            while let range = result.range(of: pattern, options: .caseInsensitive) {
+                let afterConj = result[range.upperBound...]
+                let words = afterConj.prefix(while: { !$0.isNewline && $0 != "." && $0 != "!" && $0 != "?" })
+                if words.split(separator: " ").count >= 2 {
+                    result.replaceSubrange(range.lowerBound..<range.upperBound, with: ". " + conj)
+                } else {
+                    break
+                }
+            }
+        }
+        return result
     }
 
     private func startRecording() {

@@ -218,22 +218,29 @@ final class SpeechManager {
         if result.isFinal {
             debounceWorkItem?.cancel()
             debounceWorkItem = nil
-            let text = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else {
+            let incremental: String
+            if !committedText.isEmpty, fullText.hasPrefix(committedText) {
+                incremental = String(fullText.dropFirst(committedText.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                incremental = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            guard !incremental.isEmpty else {
                 currentText = ""
                 resetPauseModel()
+                committedText = fullText
                 return
             }
-            if isDuplicate(text) {
+            if isDuplicate(incremental) {
                 currentText = ""
                 resetPauseModel()
+                committedText = fullText
                 return
             }
-            finalSegments.append(text)
-            onSegmentRecognized?(text, true)
+            finalSegments.append(incremental)
+            onSegmentRecognized?(incremental, true)
             currentText = ""
             resetPauseModel()
-            committedText = fullText  // 必须在 resetPauseModel 之后设置，否则被清空
+            committedText = fullText
         } else {
             let text: String
             if !committedText.isEmpty {

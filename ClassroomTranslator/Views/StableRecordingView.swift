@@ -329,8 +329,9 @@ final class StableRecordingViewController: NSViewController {
     }
 
     private static func ensureEndingPunctuation(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard let last = trimmed.last else { return text }
+        var result = fixInternalPunctuation(text)
+        let trimmed = result.trimmingCharacters(in: .whitespaces)
+        guard let last = trimmed.last else { return result }
         if ".!?。！？…".contains(last) { return trimmed }
         let lower = trimmed.lowercased()
         if lower.hasPrefix("what") || lower.hasPrefix("how") || lower.hasPrefix("why")
@@ -341,6 +342,26 @@ final class StableRecordingViewController: NSViewController {
             return trimmed + "?"
         }
         return trimmed + "."
+    }
+
+    private static func fixInternalPunctuation(_ text: String) -> String {
+        let conjunctions = ["and ", "but ", "so ", "or ", "yet ", "because ", "although ",
+                            "while ", "when ", "if ", "then ", "therefore ", "however ",
+                            "moreover ", "furthermore ", "nevertheless ", "also "]
+        var result = text
+        for conj in conjunctions {
+            let pattern = ", " + conj
+            while let range = result.range(of: pattern, options: .caseInsensitive) {
+                let afterConj = result[range.upperBound...]
+                let words = afterConj.prefix(while: { !$0.isNewline && $0 != "." && $0 != "!" && $0 != "?" })
+                if words.split(separator: " ").count >= 2 {
+                    result.replaceSubrange(range.lowerBound..<range.upperBound, with: ". " + conj)
+                } else {
+                    break
+                }
+            }
+        }
+        return result
     }
 
     private func refreshTranscript() {
