@@ -1,18 +1,15 @@
 import Foundation
 import AVFoundation
-import CoreMedia
 import Speech
 
-/// Captures microphone samples without AVAudioEngine. AVCaptureSession uses a
-/// separate capture path and avoids the AVAudioEngine input-node failures seen
-/// on macOS 26/27.
-final class AudioEngineDriver: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
-    private let queue = DispatchQueue(label: "com.classroomtranslator.audioCapture")
-    private var session: AVCaptureSession?
-    private var output: AVCaptureAudioDataOutput?
-    private var pump: (@Sendable (CMSampleBuffer) -> Void)?
-    private var observers: [NSObjectProtocol] = []
-    private var interruption: (@Sendable () -> Void)?
+/// Owns the complete microphone and Speech pipeline on one background queue.
+/// AVAudioEngine provides PCM buffers in the format expected by Speech; none of
+/// its potentially blocking setup work runs on the main thread.
+final class AudioEngineDriver: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.classroomtranslator.audioSpeech")
+    private var engine: AVAudioEngine?
+    private var tapInstalled = false
+    private var configurationObserver: NSObjectProtocol?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognizer: SFSpeechRecognizer?
@@ -31,50 +28,49 @@ final class AudioEngineDriver: NSObject, AVCaptureAudioDataOutputSampleBufferDel
                           recognizer.isAvailable else {
                         throw AudioEngineError.recognizerUnavailable
                     }
+
                     let request = SFSpeechAudioBufferRecognitionRequest()
                     request.shouldReportPartialResults = true
                     request.taskHint = .dictation
                     let recognitionQueue = OperationQueue()
-                    recognitionQueue.name = "com.classroomtranslator.speechRecognition"
+                    recognitionQueue.name = "com.classroomtranslator.speechResults"
                     recognitionQueue.maxConcurrentOperationCount = 1
                     recognitionQueue.underlyingQueue = self.queue
                     recognizer.queue = recognitionQueue
-                    let task = recognizer.recognitionTask(with: request, resultHandler: onRecognition)
+                    let recognitionTask = recognizer.recognitionTask(with: request, resultHandler: onRecognition)
 
-                    guard let device = AVCaptureDevice.default(for: .audio) else {
-                        throw AudioEngineError.noInputDevice
+                    let engine = AVAudioEngine()
+                    let input = engine.inputNode
+                    let format = input.outputFormat(forBus: 0)
+                    guard format.sampleRate > 0, format.channelCount > 0 else {
+                        throw AudioEngineError.formatUnavailable
                     }
-                    let input = try AVCaptureDeviceInput(device: device)
-                    let output = AVCaptureAudioDataOutput()
-                    let session = AVCaptureSession()
-
-                    session.beginConfiguration()
-                    guard session.canAddInput(input), session.canAddOutput(output) else {
-                        session.commitConfiguration()
-                        throw AudioEngineError.configurationFailed
+                    input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable [weak request] buffer, _ in
+                        request?.append(buffer)
                     }
-                    session.addInput(input)
-                    session.addOutput(output)
-                    output.setSampleBufferDelegate(self, queue: self.queue)
-                    session.commitConfiguration()
+                    self.tapInstalled = true
 
-                    self.session = session
-                    self.output = output
+                    self.engine = engine
                     self.recognizer = recognizer
                     self.recognitionQueue = recognitionQueue
                     self.recognitionRequest = request
-                    self.recognitionTask = task
-                    self.pump = { [weak request] sampleBuffer in
-                        request?.appendAudioSampleBuffer(sampleBuffer)
+                    self.recognitionTask = recognitionTask
+                    self.configurationObserver = NotificationCenter.default.addObserver(
+                        forName: .AVAudioEngineConfigurationChange,
+                        object: engine,
+                        queue: nil
+                    ) { [weak self, weak engine] _ in
+                        guard let self else { return }
+                        self.queue.async {
+                            guard let engine, self.engine === engine, !engine.isRunning else { return }
+                            self.stopLocked()
+                            onInterruption()
+                        }
                     }
-                    self.interruption = onInterruption
-                    self.observe(session)
 
-                    // startRunning is intentionally kept off the main actor.
-                    session.startRunning()
-                    guard session.isRunning else {
-                        throw AudioEngineError.startFailed
-                    }
+                    engine.prepare()
+                    try engine.start()
+                    guard engine.isRunning else { throw AudioEngineError.startFailed }
                     continuation.resume()
                 } catch {
                     self.stopLocked()
@@ -88,41 +84,11 @@ final class AudioEngineDriver: NSObject, AVCaptureAudioDataOutputSampleBufferDel
         queue.async { self.stopLocked() }
     }
 
-    func captureOutput(
-        _ output: AVCaptureOutput,
-        didOutput sampleBuffer: CMSampleBuffer,
-        from connection: AVCaptureConnection
-    ) {
-        guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
-        pump?(sampleBuffer)
-    }
-
-    private func observe(_ session: AVCaptureSession) {
-        let center = NotificationCenter.default
-        let names: [Notification.Name] = [
-            .AVCaptureSessionRuntimeError,
-            .AVCaptureSessionWasInterrupted
-        ]
-        observers = names.map { name in
-            center.addObserver(forName: name, object: session, queue: nil) { [weak self, weak session] _ in
-                guard let self else { return }
-                self.queue.async {
-                    guard let session, self.session === session else { return }
-                    let callback = self.interruption
-                    self.stopLocked()
-                    callback?()
-                }
-            }
-        }
-    }
-
     private func stopLocked() {
-        let center = NotificationCenter.default
-        observers.forEach(center.removeObserver)
-        observers.removeAll()
-        output?.setSampleBufferDelegate(nil, queue: nil)
-        pump = nil
-        interruption = nil
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
+        }
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionRequest = nil
@@ -130,36 +96,39 @@ final class AudioEngineDriver: NSObject, AVCaptureAudioDataOutputSampleBufferDel
         recognizer = nil
         recognitionQueue?.cancelAllOperations()
         recognitionQueue = nil
-        if let session, session.isRunning { session.stopRunning() }
-        output = nil
-        session = nil
+
+        if let engine {
+            if engine.isRunning { engine.stop() }
+            if tapInstalled { engine.inputNode.removeTap(onBus: 0) }
+        }
+        tapInstalled = false
+        engine = nil
     }
 
     deinit {
-        observers.forEach(NotificationCenter.default.removeObserver)
-        output?.setSampleBufferDelegate(nil, queue: nil)
-        if let session {
-            queue.async {
-                if session.isRunning { session.stopRunning() }
-            }
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+        }
+        guard let engine else { return }
+        let hadTap = tapInstalled
+        queue.async {
+            if engine.isRunning { engine.stop() }
+            if hadTap { engine.inputNode.removeTap(onBus: 0) }
         }
     }
 }
 
 enum AudioEngineError: LocalizedError {
-    case noInputDevice
-    case configurationFailed
+    case formatUnavailable
     case startFailed
     case recognizerUnavailable
 
     var errorDescription: String? {
         switch self {
-        case .noInputDevice:
-            return String(localized: "No microphone or audio input device was found.")
-        case .configurationFailed:
-            return String(localized: "Failed to configure microphone capture.")
+        case .formatUnavailable:
+            return String(localized: "Invalid audio format")
         case .startFailed:
-            return String(localized: "Failed to start microphone capture.")
+            return String(localized: "Failed to start the audio engine")
         case .recognizerUnavailable:
             return String(localized: "Speech recognition is unavailable on this device.")
         }
