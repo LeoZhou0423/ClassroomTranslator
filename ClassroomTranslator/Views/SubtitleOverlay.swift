@@ -3,7 +3,7 @@ import AppKit
 
 @MainActor
 final class SubtitleWindowController: NSWindowController {
-    private let textView = NSTextView()
+    private let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 580, height: 180))
     private var overlayWasVisible = false
     private var currentPartialRange: NSRange?
 
@@ -28,8 +28,7 @@ final class SubtitleWindowController: NSWindowController {
 
         self.init(window: window)
 
-        // 纯 AppKit 字幕视图：ScrollView + TextView，零 SwiftUI 参与
-        let scrollView = NSScrollView()
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
@@ -40,8 +39,9 @@ final class SubtitleWindowController: NSWindowController {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.drawsBackground = false
-        textView.textContainerInset = NSSize(width: 0, height: 8)
+        textView.textContainerInset = NSSize(width: 10, height: 8)
         textView.textContainer?.widthTracksTextView = true
+        textView.autoresizingMask = [.width]
 
         scrollView.documentView = textView
         window.contentView = scrollView
@@ -91,20 +91,25 @@ final class SubtitleWindowController: NSWindowController {
     }
 
     func updateCurrentText(_ text: String) {
-        // 移除旧 partial
-        removeCurrentPartial()
-
-        guard !text.isEmpty else { return }
-        let fontSize = UserDefaults.standard.double(forKey: "fontSize").clamped(to: 12...36, default: 20)
-
-        if let storage = textView.textStorage, storage.length > 0 {
-            storage.append(NSAttributedString(string: "\n", attributes: [.foregroundColor: NSColor.clear]))
+        guard !text.isEmpty else {
+            removeCurrentPartial()
+            return
         }
-
+        let fontSize = UserDefaults.standard.double(forKey: "fontSize").clamped(to: 12...36, default: 20)
         let partialAttr = NSAttributedString(string: text, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow))
-        let startLocation = textView.textStorage?.length ?? 0
-        textView.textStorage?.append(partialAttr)
-        currentPartialRange = NSRange(location: startLocation, length: partialAttr.length)
+
+        if let range = currentPartialRange, let storage = textView.textStorage,
+           range.location + range.length <= storage.length {
+            storage.replaceCharacters(in: range, with: partialAttr)
+            currentPartialRange = NSRange(location: range.location, length: partialAttr.length)
+        } else {
+            if let storage = textView.textStorage, storage.length > 0 {
+                storage.append(NSAttributedString(string: "\n", attributes: [.foregroundColor: NSColor.clear]))
+            }
+            let startLocation = textView.textStorage?.length ?? 0
+            textView.textStorage?.append(partialAttr)
+            currentPartialRange = NSRange(location: startLocation, length: partialAttr.length)
+        }
         scrollToBottom()
     }
 

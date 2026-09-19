@@ -25,7 +25,6 @@ struct RecordingView: View {
     @State private var prepareGeneration = 0
     @State private var statusMessage = ""
     @State private var segments: [Segment] = []
-    @State private var lastFinalizedFullText = ""
     @State private var currentPartialNew = ""
     @State private var showHistory = false
     @State private var showSettings = false
@@ -113,48 +112,30 @@ struct RecordingView: View {
                 statusMessage = message
             }
         }
-        speechManager.onSegmentRecognized = { fullText, isFinal in
+        speechManager.onSegmentRecognized = { text, isFinal in
             Task { @MainActor in
                 if isFinal {
-                    let newEnglish = self.extractNewSentence(fullText: fullText)
-                    self.lastFinalizedFullText = fullText
-                    guard !newEnglish.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else {
                         self.currentPartialNew = ""
                         return
                     }
-                    let punctuated = await PunctuationService.punctuate(newEnglish)
+                    let punctuated = await PunctuationService.punctuate(trimmed)
                     let translated = await self.translationManager.translate(punctuated)
-                    let trimmed = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if self.segments.last?.english != trimmed {
-                        self.segments.append(Segment(english: trimmed, chinese: translated))
-                        self.historyStore.addSegmentIfNew(TranscriptSegment(original: trimmed, translated: translated))
-                        self.subtitleWindowController?.appendSegment(original: trimmed, translated: translated)
+                    let finalText = punctuated.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if self.segments.last?.english != finalText {
+                        self.segments.append(Segment(english: finalText, chinese: translated))
+                        self.historyStore.addSegmentIfNew(TranscriptSegment(original: finalText, translated: translated))
+                        self.subtitleWindowController?.appendSegment(original: finalText, translated: translated)
                     }
                     self.currentPartialNew = ""
                 } else {
-                    let newPart = self.extractNewSentence(fullText: fullText)
-                    guard newPart != self.currentPartialNew else { return }
-                    self.currentPartialNew = newPart
-                    self.subtitleWindowController?.updateCurrentText(newPart)
+                    guard text != self.currentPartialNew else { return }
+                    self.currentPartialNew = text
+                    self.subtitleWindowController?.updateCurrentText(text)
                 }
             }
         }
-    }
-
-    private func extractNewSentence(fullText: String) -> String {
-        guard !lastFinalizedFullText.isEmpty else { return fullText }
-        if fullText.hasPrefix(lastFinalizedFullText) {
-            return String(fullText.dropFirst(lastFinalizedFullText.count)).trimmingCharacters(in: .whitespaces)
-        }
-        let maxCheck = min(lastFinalizedFullText.count, fullText.count, 100)
-        guard maxCheck >= 1 else { return fullText }
-        for offset in (1...maxCheck).reversed() {
-            let suffix = String(lastFinalizedFullText.suffix(offset))
-            if fullText.hasPrefix(suffix) {
-                return String(fullText.dropFirst(suffix.count)).trimmingCharacters(in: .whitespaces)
-            }
-        }
-        return fullText
     }
 
     private func startRecording() {
@@ -258,7 +239,6 @@ struct RecordingView: View {
         isRecording = false
         isPaused = false
         currentPartialNew = ""
-        lastFinalizedFullText = ""
         if pendingPartial.isEmpty {
             onClose()
         } else {
@@ -406,15 +386,22 @@ private struct TranscriptView: View {
                         .background(Color(nsColor: .controlBackgroundColor))
                         .cornerRadius(8)
                     }
-                    if !currentPartialNew.isEmpty {
-                        Text(currentPartialNew)
-                            .font(.system(size: 14, weight: .regular))
-                            .foregroundColor(.secondary)
-                            .padding(10)
-                            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                            .cornerRadius(8)
-                            .id("current")
-                    }
+                    Text(currentPartialNew)
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundColor(.secondary)
+                        .padding(currentPartialNew.isEmpty ? 0 : 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            currentPartialNew.isEmpty
+                                ? Color.clear
+                                : Color(nsColor: .controlBackgroundColor).opacity(0.5)
+                        )
+                        .cornerRadius(8)
+                        .opacity(currentPartialNew.isEmpty ? 0 : 1)
+                        .frame(height: currentPartialNew.isEmpty ? 0 : nil)
+                        .clipped()
+                        .animation(.easeInOut(duration: 0.1), value: currentPartialNew)
+                        .id("current")
                 }
                 .padding()
             }

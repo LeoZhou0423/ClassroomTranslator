@@ -25,6 +25,7 @@ final class SpeechManager {
     // MARK: - 自适应停顿检测模型
     private var debounceWorkItem: DispatchWorkItem?
     private var lastPartialText = ""
+    private var committedText = ""
     private var lastPartialTime: TimeInterval = 0
     private var emaInterval: Double = 0
     private var intervalCount = 0
@@ -77,6 +78,7 @@ final class SpeechManager {
         minInterval = 0.3
         lastPartialTime = 0
         lastPartialText = ""
+        committedText = ""
     }
 
     /// 切换识别语言（口音）。"auto" 不是合法 locale，直接忽略
@@ -209,21 +211,92 @@ final class SpeechManager {
             return
         }
         guard let result else { return }
-        let text = result.bestTranscription.formattedString
-        guard text != lastPartialText || result.isFinal else { return }
-        lastPartialText = text
+        let fullText = result.bestTranscription.formattedString
+        guard fullText != lastPartialText || result.isFinal else { return }
+        lastPartialText = fullText
+        let text: String
+        if !committedText.isEmpty {
+            let commonLen = Self.commonPrefixLength(committedText, fullText)
+            if commonLen > 0 {
+                text = String(fullText.dropFirst(commonLen)).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                text = fullText
+            }
+        } else {
+            text = fullText
+        }
+        guard !text.isEmpty || result.isFinal else { return }
 
         if result.isFinal {
             debounceWorkItem?.cancel()
             debounceWorkItem = nil
-            finalSegments.append(text)
+            if !text.isEmpty {
+                finalSegments.append(text)
+                onSegmentRecognized?(text, true)
+            }
             currentText = ""
-            onSegmentRecognized?(text, true)
             resetPauseModel()
         } else {
             currentText = text
             onSegmentRecognized?(text, false)
+            if !committedText.isEmpty {
+                tryMidUtteranceCommit(fullText: fullText, segments: result.bestTranscription.segments)
+            }
+            scheduleAutomaticSentenceBreak(fullText: fullText, visibleText: text)
         }
+    }
+
+    private static func commonPrefixLength(_ a: String, _ b: String) -> Int {
+        let aChars = Array(a)
+        let bChars = Array(b)
+        let limit = min(aChars.count, bChars.count)
+        var i = 0
+        while i < limit && aChars[i] == bChars[i] { i += 1 }
+        return i
+    }
+
+    private func tryMidUtteranceCommit(fullText: String, segments: [SFTranscriptionSegment]) {
+        guard segments.count >= 2, !committedText.isEmpty else { return }
+        for i in (1..<segments.count).reversed() {
+            let prevEnd = segments[i - 1].timestamp + segments[i - 1].duration
+            let gap = segments[i].timestamp - prevEnd
+            guard gap >= 0.5 else { continue }
+            let splitPos = segments[i].substringRange.location
+            guard splitPos > 0, splitPos < fullText.count else { continue }
+            let beforeGap = String(fullText.prefix(splitPos)).trimmingCharacters(in: .whitespaces)
+            let afterGap = String(fullText.dropFirst(splitPos)).trimmingCharacters(in: .whitespaces)
+            guard beforeGap.count > committedText.count else { continue }
+            let newSentence = String(beforeGap.dropFirst(committedText.count)).trimmingCharacters(in: .whitespaces)
+            guard !newSentence.isEmpty else { continue }
+            debounceWorkItem?.cancel()
+            debounceWorkItem = nil
+            committedText = beforeGap
+            finalSegments.append(newSentence)
+            onSegmentRecognized?(newSentence, true)
+            currentText = afterGap
+            return
+        }
+    }
+
+    private func scheduleAutomaticSentenceBreak(fullText: String, visibleText: String) {
+        debounceWorkItem?.cancel()
+        let delay: TimeInterval = {
+            if Self.hasSentenceEnding(visibleText) { return 0.4 }
+            if visibleText.count >= 80 { return 0.5 }
+            if visibleText.count >= 40 { return 0.7 }
+            return 0.9
+        }()
+        let item = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self, self.isRecording, self.lastPartialText == fullText else { return }
+                self.committedText = fullText
+                self.currentText = ""
+                self.finalSegments.append(visibleText)
+                self.onSegmentRecognized?(visibleText, true)
+            }
+        }
+        debounceWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     func stopRecording() {
