@@ -2,15 +2,10 @@ import SwiftUI
 import AppKit
 
 @MainActor
-final class SubtitleState: ObservableObject {
-    @Published var segments: [(original: String, translated: String)] = []
-    @Published var currentText: String = ""
-}
-
-@MainActor
-class SubtitleWindowController: NSWindowController {
-    private let state = SubtitleState()
+final class SubtitleWindowController: NSWindowController {
+    private let textView = NSTextView()
     private var overlayWasVisible = false
+    private var currentPartialRange: NSRange?
 
     convenience init() {
         let window = NSPanel(
@@ -33,18 +28,23 @@ class SubtitleWindowController: NSWindowController {
 
         self.init(window: window)
 
-        let subtitleView = SubtitleView(state: state)
-        let hostingView = NSHostingView(rootView: subtitleView)
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView = hostingView
-        if let content = window.contentView {
-            NSLayoutConstraint.activate([
-                hostingView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-                hostingView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-                hostingView.topAnchor.constraint(equalTo: content.topAnchor),
-                hostingView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            ])
-        }
+        // 纯 AppKit 字幕视图：ScrollView + TextView，零 SwiftUI 参与
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.drawsBackground = false
+        scrollView.autoresizingMask = [.width, .height]
+
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 0, height: 8)
+        textView.textContainer?.widthTracksTextView = true
+
+        scrollView.documentView = textView
+        window.contentView = scrollView
 
         NotificationCenter.default.addObserver(self, selector: #selector(mainWindowWillEnterFullScreen(_:)), name: NSWindow.willEnterFullScreenNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(mainWindowDidExitFullScreen(_:)), name: NSWindow.didExitFullScreenNotification, object: nil)
@@ -72,18 +72,62 @@ class SubtitleWindowController: NSWindowController {
 
     func appendSegment(original: String, translated: String) {
         guard !translated.isEmpty else { return }
-        if let last = state.segments.last, last.translated == translated { return }
-        state.segments.append((original: original, translated: translated))
-        state.currentText = ""
+        let fontSize = UserDefaults.standard.double(forKey: "fontSize").clamped(to: 12...36, default: 20)
+
+        // 移除正在显示的 partial（如有）
+        removeCurrentPartial()
+
+        let attrString = NSMutableAttributedString()
+        if textView.string.isEmpty {
+            attrString.append(NSAttributedString(string: translated, attributes: subtitleAttrs(fontSize: fontSize, color: .white)))
+        } else {
+            attrString.append(NSAttributedString(string: "\n\n", attributes: [.foregroundColor: NSColor.clear]))
+            attrString.append(NSAttributedString(string: translated, attributes: subtitleAttrs(fontSize: fontSize, color: .white)))
+        }
+        textView.textStorage?.append(attrString)
+        currentPartialRange = nil
+        scrollToBottom()
     }
 
     func updateCurrentText(_ text: String) {
-        state.currentText = text
+        // 移除旧 partial
+        removeCurrentPartial()
+
+        guard !text.isEmpty else { return }
+        let fontSize = UserDefaults.standard.double(forKey: "fontSize").clamped(to: 12...36, default: 20)
+
+        if let storage = textView.textStorage, storage.length > 0 {
+            storage.append(NSAttributedString(string: "\n", attributes: [.foregroundColor: NSColor.clear]))
+        }
+
+        let partialAttr = NSAttributedString(string: text, attributes: subtitleAttrs(fontSize: fontSize - 4, color: .systemYellow))
+        let startLocation = textView.textStorage?.length ?? 0
+        textView.textStorage?.append(partialAttr)
+        currentPartialRange = NSRange(location: startLocation, length: partialAttr.length)
+        scrollToBottom()
+    }
+
+    private func removeCurrentPartial() {
+        guard let range = currentPartialRange, let storage = textView.textStorage,
+              range.location + range.length <= storage.length else {
+            currentPartialRange = nil
+            return
+        }
+        // 也删除 partial 前的分隔换行符
+        var removeRange = range
+        if range.location > 0 {
+            let before = NSRange(location: range.location - 1, length: 1)
+            if storage.attributedSubstring(from: before).string == "\n" {
+                removeRange = NSRange(location: range.location - 1, length: range.length + 1)
+            }
+        }
+        storage.deleteCharacters(in: removeRange)
+        currentPartialRange = nil
     }
 
     func clearAll() {
-        state.segments.removeAll()
-        state.currentText = ""
+        textView.string = ""
+        currentPartialRange = nil
     }
 
     func showWindow() {
@@ -93,35 +137,24 @@ class SubtitleWindowController: NSWindowController {
     func hideWindow() {
         window?.orderOut(nil)
     }
-}
 
-struct SubtitleView: View {
-    @ObservedObject var state: SubtitleState
-    @AppStorage("fontSize") private var fontSize: Double = 20
-    @AppStorage("overlayOpacity") private var overlayOpacity: Double = 0.85
-
-    private var lastTranslated: String {
-        state.segments.last?.translated ?? ""
+    private func scrollToBottom() {
+        DispatchQueue.main.async { [textView] in
+            textView.scrollToEndOfDocument(nil)
+        }
     }
 
-    var body: some View {
-        VStack(spacing: 8) {
-            Text(lastTranslated)
-                .font(.system(size: fontSize, weight: .semibold))
-                .foregroundColor(.white)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-                .padding(.horizontal, 20)
-                .opacity(lastTranslated.isEmpty ? 0 : 1)
+    private func subtitleAttrs(fontSize: Double, color: NSColor) -> [NSAttributedString.Key: Any] {
+        [
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+            .foregroundColor: color,
+        ]
+    }
+}
 
-            Text(state.currentText)
-                .font(.system(size: fontSize - 4, weight: .regular))
-                .foregroundColor(.yellow)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .padding(.horizontal, 20)
-                .opacity(state.currentText.isEmpty ? 0 : 1)
-        }
-        .background(Color.black.opacity(overlayOpacity))
+private extension Double {
+    func clamped(to range: ClosedRange<Double>, default defaultVal: Double) -> Double {
+        guard self >= range.lowerBound && self <= range.upperBound else { return defaultVal }
+        return self
     }
 }
