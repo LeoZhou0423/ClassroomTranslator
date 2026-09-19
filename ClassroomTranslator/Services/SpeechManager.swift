@@ -15,7 +15,7 @@ final class SpeechManager {
     /// 语言模型状态变化回调（UI 显示"正在下载模型..."等提示）
     var onLanguageModelStatusChanged: ((String) -> Void)?
 
-    private var speechRecognizer: SFSpeechRecognizer
+    private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     /// 音频引擎全部在后台队列跑，避免 start() 阻塞主线程
@@ -59,9 +59,17 @@ final class SpeechManager {
     private var bestLocale: String?
 
     init() {
-        let savedLanguage = UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "en-GB"
+        var savedLanguage = UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "en-GB"
+        // "auto" 不是合法 locale，绝不能拿去建识别器（之前这里 force unwrap 会崩）
+        if savedLanguage == "auto" || savedLanguage == "auto-detect" {
+            savedLanguage = "en-US"
+        }
         currentLanguageCode = savedLanguage
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: savedLanguage)) ?? SFSpeechRecognizer()!
+        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: savedLanguage))
+            ?? SFSpeechRecognizer()
+        if speechRecognizer == nil {
+            print("Warning: no speech recognizer available on this device")
+        }
         // SpeechManager 与主窗口同生命周期；用 block 观察者 + Task 跳回主 actor，
         // 避免在非隔离回调里直接碰 MainActor 内容
         NotificationCenter.default.addObserver(
@@ -189,6 +197,11 @@ final class SpeechManager {
     func startRecording() async throws {
         if isRecording { return }
 
+        // 识别器不可用（设备不支持/被限制）：直接报，不崩
+        guard let recognizer = speechRecognizer else {
+            throw SpeechError.recognizerUnavailable
+        }
+
         // 没有麦克风/输入设备时直接失败，而不是访问引擎触发异常崩溃
         guard AVCaptureDevice.default(for: .audio) != nil else {
             throw SpeechError.noInputDevice
@@ -205,7 +218,7 @@ final class SpeechManager {
         request.taskHint = .dictation
         recognitionRequest = request
 
-        recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor in
                 guard let self = self else { return }
 
@@ -435,6 +448,7 @@ enum SpeechError: LocalizedError {
     case permissionDeniedSpeech
     case permissionDeniedMic
     case noInputDevice
+    case recognizerUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -450,6 +464,8 @@ enum SpeechError: LocalizedError {
             return String(localized: "Microphone permission was denied.")
         case .noInputDevice:
             return String(localized: "No microphone or audio input device was found.")
+        case .recognizerUnavailable:
+            return String(localized: "Speech recognition is unavailable on this device.")
         }
     }
 }
