@@ -129,8 +129,13 @@ struct RecordingView: View {
                 }
                 .padding()
             }
-            .onChange(of: segments.count) { _, _ in
-                withAnimation { proxy.scrollTo(segments.count - 1, anchor: .bottom) }
+            .onChange(of: segments.count) { _, newCount in
+                // 推迟到下一个 runloop：在布局周期内直接 scrollTo 会触发
+                // AppKit 显示周期异常（NSWindow Objective-C exception -> abort）
+                guard autoScroll, newCount > 0 else { return }
+                DispatchQueue.main.async {
+                    withAnimation { proxy.scrollTo(newCount - 1, anchor: .bottom) }
+                }
             }
         }
     }
@@ -235,7 +240,10 @@ struct RecordingView: View {
                     if segments.last?.english != trimmed {
                         segments.append((english: trimmed, chinese: translated))
                         historyStore.addSegmentIfNew(TranscriptSegment(original: trimmed, translated: translated))
-                        controller.appendSegment(original: trimmed, translated: translated)
+                        // AppKit 侧推迟到下一个 runloop，避免和 SwiftUI 布局周期重入
+                        DispatchQueue.main.async {
+                            controller.appendSegment(original: trimmed, translated: translated)
+                        }
                     }
                     currentPartialNew = ""
                 } else {
@@ -243,7 +251,9 @@ struct RecordingView: View {
                     let newPart = extractNewSentence(fullText: fullText)
                     guard newPart != currentPartialNew else { return }
                     currentPartialNew = newPart
-                    controller.updateCurrentText(newPart)
+                    DispatchQueue.main.async {
+                        controller.updateCurrentText(newPart)
+                    }
                 }
             }
         }
@@ -368,7 +378,9 @@ struct RecordingView: View {
                     if segments.last?.english != englishToSave {
                         segments.append((english: englishToSave, chinese: translated))
                         historyStore.addSegmentIfNew(TranscriptSegment(original: englishToSave, translated: translated))
-                        subtitleWindowController?.appendSegment(original: englishToSave, translated: translated)
+                        DispatchQueue.main.async {
+                            subtitleWindowController?.appendSegment(original: englishToSave, translated: translated)
+                        }
                     }
                 }
             }
