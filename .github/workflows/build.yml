@@ -21,26 +21,36 @@ jobs:
       
     - name: Create App Bundle
       run: |
-        mkdir -p ClassroomTranslator.app/Contents/MacOS
-        mkdir -p ClassroomTranslator.app/Contents/Resources
-        cp .build/release/ClassroomTranslator ClassroomTranslator.app/Contents/MacOS/
+        mkdir -p LingoClass.app/Contents/MacOS
+        mkdir -p LingoClass.app/Contents/Resources
+        cp .build/release/ClassroomTranslator LingoClass.app/Contents/MacOS/LingoClass
         if [ -d ClassroomTranslator/Resources ]; then
-          cp -R ClassroomTranslator/Resources/*.lproj ClassroomTranslator.app/Contents/Resources/
+          cp -R ClassroomTranslator/Resources/*.lproj LingoClass.app/Contents/Resources/
+        fi
+        if [ -f ClassroomTranslator/Resources/AppIcon.png ]; then
+          mkdir -p LingoClass.app/Contents/Resources/AppIcon.appiconset
+          cp ClassroomTranslator/Resources/AppIcon.png LingoClass.app/Contents/Resources/AppIcon.appiconset/AppIcon.png
+          cat > LingoClass.app/Contents/Resources/AppIcon.appiconset/Contents.json << 'ICON'
+          {
+            "images" : [{"idiom" : "mac", "scale" : "1x", "size" : "16x16"}, {"idiom" : "mac", "scale" : "2x", "size" : "16x16"}, {"idiom" : "mac", "scale" : "1x", "size" : "32x32"}, {"idiom" : "mac", "scale" : "2x", "size" : "32x32"}, {"idiom" : "mac", "scale" : "1x", "size" : "128x128"}, {"idiom" : "mac", "scale" : "2x", "size" : "128x128"}, {"idiom" : "mac", "scale" : "1x", "size" : "256x256"}, {"idiom" : "mac", "scale" : "2x", "size" : "256x256"}, {"idiom" : "mac", "scale" : "1x", "size" : "512x512"}, {"idiom" : "mac", "scale" : "2x", "size" : "512x512"}],
+            "info" : {"author" : "xcode", "version" : 1}
+          }
+          ICON
         fi
         
     - name: Create Info.plist
       run: |
-        cat > ClassroomTranslator.app/Contents/Info.plist << 'PLIST'
+        cat > LingoClass.app/Contents/Info.plist << 'PLIST'
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
         <dict>
             <key>CFBundleName</key>
-            <string>ClassroomTranslator</string>
+            <string>LingoClass</string>
             <key>CFBundleDisplayName</key>
-            <string>Classroom Translator</string>
+            <string>LingoClass</string>
             <key>CFBundleIdentifier</key>
-            <string>com.user.classroom-translator</string>
+            <string>com.user.lingoclass</string>
             <key>CFBundleVersion</key>
             <string>1.0.0</string>
             <key>CFBundleShortVersionString</key>
@@ -48,7 +58,7 @@ jobs:
             <key>CFBundlePackageType</key>
             <string>APPL</string>
             <key>CFBundleExecutable</key>
-            <string>ClassroomTranslator</string>
+            <string>LingoClass</string>
             <key>LSMinimumSystemVersion</key>
             <string>14.0</string>
             <key>CFBundleDevelopmentRegion</key>
@@ -68,17 +78,17 @@ jobs:
         
     - name: Ad-hoc Sign App Bundle
       run: |
-        chmod +x ClassroomTranslator.app/Contents/MacOS/ClassroomTranslator
-        codesign --force --deep --sign - ClassroomTranslator.app
-        codesign --verify --deep --strict ClassroomTranslator.app
-        codesign -dv ClassroomTranslator.app
+        chmod +x LingoClass.app/Contents/MacOS/LingoClass
+        codesign --force --deep --sign - LingoClass.app
+        codesign --verify --deep --strict LingoClass.app
+        codesign -dv LingoClass.app
         
     - name: Create DMG
-      run: hdiutil create -volname "ClassroomTranslator" -srcfolder ClassroomTranslator.app -ov -format UDZO ClassroomTranslator.dmg
+      run: hdiutil create -volname "LingoClass" -srcfolder LingoClass.app -ov -format UDZO LingoClass.dmg
         
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ClassroomTranslator-macOS
-        path: ClassroomTranslator.dmg
+        name: LingoClass-macOS
+        path: LingoClass.dmg
         retention-days: 30
