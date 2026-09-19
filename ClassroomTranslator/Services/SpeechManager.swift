@@ -23,17 +23,17 @@ final class SpeechManager {
     private let driver = AudioEngineDriver()
 
     // MARK: - 自适应停顿检测模型
-    // 用 EMA 跟踪 partial result 的更新间隔，动态判断"停顿"
     private var debounceWorkItem: DispatchWorkItem?
     private var lastPartialText = ""
     private var lastPartialTime: TimeInterval = 0
-    private var emaInterval: Double = 0       // 指数移动平均：最近更新间隔
-    private var intervalCount = 0             // 已收集的间隔数（越多越自信）
-    private var minInterval: Double = 0.3     // 动态下限：快速说话也不会误判
-    private let emaAlpha = 0.3                // 平滑系数（越大越跟踪最新值）
-    private let kBase = 3.5                   // 基础倍数：间隔的几倍算停顿
-    private let kMin = 2.0                    // 最小倍数（数据多时收紧）
-    private let warmupThreshold = 5           // 前 N 次用保守值
+    private var emaInterval: Double = 0
+    private var intervalCount = 0
+    private var minInterval: Double = 0.3
+    private let emaAlpha = 0.4                // 更跟最新值，快速适应语速变化
+    private let kBase = 4.0                   // 基础倍数：间隔的 4 倍算停顿
+    private let kMin = 2.5                    // 最小倍数
+    private let warmupThreshold = 3           // 更快进入自适应模式
+    private let warmupPause: TimeInterval = 1.5  // 冷启动停顿阈值（秒）
 
     /// 当前使用的语言代码
     private(set) var currentLanguageCode: String
@@ -225,7 +225,7 @@ final class SpeechManager {
                             if self.lastPartialTime > 0, self.intervalCount >= self.warmupThreshold {
                                 pauseDetected = gap > threshold
                             } else {
-                                pauseDetected = self.lastPartialTime > 0 && gap > 2.0
+                                pauseDetected = self.lastPartialTime > 0 && gap > self.warmupPause
                             }
 
                             if pauseDetected && text.count >= 3 {

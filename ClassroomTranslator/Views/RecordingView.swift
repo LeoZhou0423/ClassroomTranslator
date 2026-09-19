@@ -31,13 +31,9 @@ struct RecordingView: View {
             .frame(minWidth: 400, minHeight: 300)
             .background(Color(nsColor: .windowBackgroundColor))
             .onAppear {
-                // Auto 模式默认英音，手动模式用设置的口音
-                if recognitionLanguage == "auto" {
-                    currentAccentCode = "en-GB"
-                } else {
-                    currentAccentCode = recognitionLanguage
-                }
-                speechManager.switchLanguage(to: currentAccentCode)
+                // 用课程设置的口音，设置页的 Auto/手动选项只影响下载
+                currentAccentCode = course.accentCode
+                speechManager.switchLanguage(to: course.accentCode)
                 setupSubtitleWindow()
             }
             .sheet(isPresented: $showHistory) { HistoryView() }
@@ -95,7 +91,6 @@ struct RecordingView: View {
     private var transcriptView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                // 已确认的累积文本
                 if !accumulatedEnglish.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(accumulatedEnglish).font(.system(size: 14, weight: .medium))
@@ -107,17 +102,13 @@ struct RecordingView: View {
                     .background(Color(nsColor: .controlBackgroundColor))
                     .cornerRadius(6)
                 }
-                // 当前 partial：只显示超出 accumulated 的部分
                 if !currentEnglish.isEmpty {
-                    let diff = currentEnglish.dropFirst(min(accumulatedEnglish.count, currentEnglish.count))
-                    if !diff.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(String(diff)).font(.system(size: 14, weight: .medium)).foregroundColor(.orange)
-                        }
-                        .padding(8)
-                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                        .cornerRadius(6)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(currentEnglish).font(.system(size: 14, weight: .medium))
                     }
+                    .padding(8)
+                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                    .cornerRadius(6)
                 }
             }
             .padding()
