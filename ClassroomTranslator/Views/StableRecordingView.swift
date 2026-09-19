@@ -228,15 +228,15 @@ final class StableRecordingViewController: NSViewController {
             if isFinal {
                 Task { @MainActor in
                     let punctuated = await PunctuationService.punctuate(text)
-                    let translated = await translationManager.translate(punctuated)
-                    finalizedText += "\n\n\(punctuated)\n\(translated)"
-                    partialText = ""
-                    historyStore.addSegmentIfNew(TranscriptSegment(original: punctuated, translated: translated))
-                    refreshTranscript()
+                    let translated = await self.translationManager.translate(punctuated)
+                    self.finalizedText += "\n\n\(punctuated)\n\(translated)"
+                    self.partialText = ""
+                    self.historyStore.addSegmentIfNew(TranscriptSegment(original: punctuated, translated: translated))
+                    self.refreshTranscript()
                 }
             } else {
-                partialText = text
-                refreshTranscript()
+                self.partialText = text
+                self.refreshTranscript()
             }
         }
     }
