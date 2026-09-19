@@ -6,10 +6,11 @@ struct NewCourseView: View {
     var onCreate: (Course) -> Void
 
     @State private var courseName = ""
-    @State private var accentCode = "en-US"
+    @State private var accentCode = "auto"
     @State private var selectedDate = Date()
 
     private let accents: [(name: String, code: String)] = [
+        ("Auto (detect while recording)", "auto"),
         ("American", "en-US"),
         ("British", "en-GB"),
         ("Australian", "en-AU"),

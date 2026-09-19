@@ -61,6 +61,8 @@
 "Your saved transcripts will appear here" = "已保存的转写记录会显示在这里";
 
 /* 口音名称 */
+"Auto" = "自动";
+"Auto (detect while recording)" = "自动（录音时检测）";
 "American" = "美式";
 "British" = "英式";
 "Australian" = "澳式";

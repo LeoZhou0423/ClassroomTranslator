@@ -23,9 +23,8 @@ struct RecordingView: View {
     @State private var showHistory = false
     @State private var showSettings = false
     @State private var currentAccentCode = "en-GB"
-    @AppStorage("recognitionLanguage") private var recognitionLanguage: String = "auto"
 
-    private let quickAccents = ["en-US", "en-GB", "en-AU", "en-IN", "zh-Hans"]
+    private let quickAccents = ["auto", "en-US", "en-GB", "en-AU", "en-IN", "zh-Hans"]
 
     var body: some View {
         VStack(spacing: 0) { headerBar; Divider(); mainContent; Divider(); controlBar }
@@ -48,19 +47,17 @@ struct RecordingView: View {
             }
             .buttonStyle(.borderless)
             Text(course.name).font(.headline)
-            if recognitionLanguage == "auto" {
-                Picker("Accent", selection: $currentAccentCode) {
-                    ForEach(quickAccents, id: \.self) { code in
-                        Text(shortAccentName(code)).tag(code)
-                    }
+            // 口音选择：Auto 走并行检测，手动直接用指定口音；录音中禁用
+            Picker("Accent", selection: $currentAccentCode) {
+                ForEach(quickAccents, id: \.self) { code in
+                    Text(shortAccentName(code)).tag(code)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 260)
-                .onChange(of: currentAccentCode) { _, newCode in
-                    speechManager.switchLanguage(to: newCode)
-                }
-            } else {
-                Text("(\(course.accentName))").font(.caption).foregroundColor(.secondary)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 320)
+            .disabled(isRecording || isPaused || isPreparing)
+            .onChange(of: currentAccentCode) { _, newCode in
+                speechManager.switchLanguage(to: newCode)
             }
             Spacer()
             Button(action: { showHistory = true }) { Label("History", systemImage: "clock") }.buttonStyle(.borderless)
@@ -403,7 +400,7 @@ struct RecordingView: View {
     }
 
     private func shortAccentName(_ code: String) -> String {
-        let map = ["en-US": "US", "en-GB": "UK", "en-AU": "AU", "en-IN": "IN", "zh-Hans": "中"]
+        let map = ["auto": "Auto", "en-US": "US", "en-GB": "UK", "en-AU": "AU", "en-IN": "IN", "zh-Hans": "中"]
         return map[code] ?? code
     }
 }

@@ -13,6 +13,7 @@ final class Course {
 
     var accentName: String {
         let map: [String: String] = [
+            "auto": "Auto",
             "en-US": "American", "en-GB": "British", "en-AU": "Australian",
             "en-NZ": "New Zealand", "en-IE": "Irish", "en-ZA": "South African",
             "en-CA": "Canadian", "en-IN": "Indian", "zh-Hans": "Chinese",
