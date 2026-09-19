@@ -40,21 +40,7 @@ jobs:
           cp ClassroomTranslator/Resources/AppIcon.png LingoClass.app/Contents/Resources/Assets.xcassets/AppIcon.appiconset/icon_128x128.png
           cp ClassroomTranslator/Resources/AppIcon.png LingoClass.app/Contents/Resources/Assets.xcassets/AppIcon.appiconset/icon_256x256.png
           cp ClassroomTranslator/Resources/AppIcon.png LingoClass.app/Contents/Resources/Assets.xcassets/AppIcon.appiconset/icon_512x512.png
-          python3 -c "
-        import json
-        imgs = []
-        sizes = [('icon_16x16.png','16x16','1x'),('icon_16x16@2x.png','16x16','2x'),('icon_32x32.png','32x32','1x'),('icon_32x32@2x.png','32x32','2x'),('icon_128x128.png','128x128','1x'),('icon_128x128@2x.png','128x128','2x'),('icon_256x256.png','256x256','1x'),('icon_256x256@2x.png','256x256','2x'),('icon_512x512.png','512x512','1x'),('icon_512x512@2x.png','512x512','2x')]
-        for fn,sz,sc in sizes:
-            imgs.append({'idiom':'mac','filename':fn,'scale':sc,'size':sz})
-        data = {'images':imgs,'info':{'author':'xcode','version':1}}
-        with open('LingoClass.app/Contents/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json','w') as f:
-            json.dump(data,f,indent=2)
-        "
-          python3 -c "
-import json
-with open('LingoClass.app/Contents/Resources/Assets.xcassets/Contents.json','w') as f:
-    json.dump({'info':{'author':'xcode','version':1}},f)
-"
+          python3 -c "import json,os;os.makedirs('LingoClass.app/Contents/Resources/Assets.xcassets',exist_ok=True);imgs=[{'idiom':'mac','filename':f,'scale':s,'size':sz} for f,sz,s in [('icon_16x16.png','16x16','1x'),('icon_16x16@2x.png','16x16','2x'),('icon_32x32.png','32x32','1x'),('icon_32x32@2x.png','32x32','2x'),('icon_128x128.png','128x128','1x'),('icon_128x128@2x.png','128x128','2x'),('icon_256x256.png','256x256','1x'),('icon_256x256@2x.png','256x256','2x'),('icon_512x512.png','512x512','1x'),('icon_512x512@2x.png','512x512','2x')]];open('LingoClass.app/Contents/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json','w').write(json.dumps({'images':imgs,'info':{'author':'xcode','version':1}}));open('LingoClass.app/Contents/Resources/Assets.xcassets/Contents.json','w').write(json.dumps({'info':{'author':'xcode','version':1}}))"
         fi
         
     - name: Create Info.plist
