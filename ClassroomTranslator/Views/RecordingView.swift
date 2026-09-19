@@ -28,6 +28,7 @@ struct RecordingView: View {
     @State private var showHistory = false
     @State private var showSettings = false
     @State private var currentAccentCode = "en-GB"
+    @State private var isOverlayVisible = false
 
     private let allAccents: [(name: String, code: String)] = [
         ("Auto (detect while recording)", "auto"),
@@ -155,8 +156,8 @@ struct RecordingView: View {
                     toggleOverlay()
                 }
             }) {
-                Image(systemName: subtitleWindowController?.window?.isVisible == true ? "eye.slash" : "eye")
-                Text(subtitleWindowController?.window?.isVisible == true ? "Hide Overlay" : "Show Overlay")
+                Image(systemName: isOverlayVisible ? "eye.slash" : "eye")
+                Text(isOverlayVisible ? "Hide Overlay" : "Show Overlay")
             }
             .buttonStyle(.bordered)
             if !statusMessage.isEmpty {
@@ -377,20 +378,9 @@ struct RecordingView: View {
     }
 
     private func endRecording() {
-        // 翻译最后一段 partial
-        if !currentPartialNew.isEmpty {
-            let englishToSave = currentPartialNew.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !englishToSave.isEmpty {
-                Task {
-                    let translated = await translationManager.translate(englishToSave)
-                    if segments.last?.english != englishToSave {
-                        segments.append(Segment(english: englishToSave, chinese: translated))
-                        historyStore.addSegmentIfNew(TranscriptSegment(original: englishToSave, translated: translated))
-                        subtitleWindowController?.appendSegment(original: englishToSave, translated: translated)
-                    }
-                }
-            }
-        }
+        // 先快照 pending partial，再停录音、清状态，避免 detached Task
+        // 在 dismiss 转场动画的 layout 期间回写 @State 触发约束更新重入。
+        let pendingPartial = currentPartialNew.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if speechManager.currentLanguageCode == "auto-detect" {
             speechManager.stopAutoDetectRecording()
@@ -402,7 +392,22 @@ struct RecordingView: View {
         isPaused = false
         currentPartialNew = ""
         lastFinalizedFullText = ""
-        dismiss()
+
+        if pendingPartial.isEmpty {
+            dismiss()
+        } else {
+            Task { @MainActor in
+                let translated = await translationManager.translate(pendingPartial)
+                if segments.last?.english != pendingPartial {
+                    segments.append(Segment(english: pendingPartial, chinese: translated))
+                    historyStore.addSegmentIfNew(TranscriptSegment(original: pendingPartial, translated: translated))
+                    subtitleWindowController?.appendSegment(original: pendingPartial, translated: translated)
+                }
+                // 等状态更新彻底落地，再 dismiss，避免转场 layout 期间被回写打断
+                await Task.yield()
+                dismiss()
+            }
+        }
     }
 
     private static func message(for error: Error, fallback: String) -> String {
@@ -428,16 +433,19 @@ struct RecordingView: View {
     }
 
     private func toggleOverlay() {
-        // 推迟到下一个 runloop，避免 NSWindow 创建/显示和 SwiftUI 布局周期重入
+        // 推迟到下一个 runloop，避免 NSWindow 创建/显示和 SwiftUI 布局周期重入。
+        // body 只读 @State 的 isOverlayVisible，不再直接读 AppKit 的 window.isVisible。
         DispatchQueue.main.async { [self] in
             if subtitleWindowController == nil {
                 subtitleWindowController = SubtitleWindowController()
             }
             if subtitleWindowController?.window?.isVisible == true {
                 subtitleWindowController?.hideWindow()
+                isOverlayVisible = false
             } else {
                 DispatchQueue.main.async {
                     self.subtitleWindowController?.showWindow()
+                    self.isOverlayVisible = true
                 }
             }
         }
