@@ -273,7 +273,7 @@ final class SpeechManager {
     /// 只在长时间无新结果时才提交（fallback），正常情况靠 isFinal 提交
     private func scheduleFallbackCommit(fullText: String, visibleText: String) {
         debounceWorkItem?.cancel()
-        let delay: TimeInterval = Self.hasSentenceEnding(visibleText) ? 2.0 : 5.0
+        let delay: TimeInterval = Self.hasSentenceEnding(visibleText) ? 1.5 : 3.0
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self, self.isRecording, self.lastPartialText == fullText else { return }

@@ -122,10 +122,14 @@ struct RecordingView: View {
                     }
                     let punctuated = await PunctuationService.punctuate(trimmed)
                     let sentences = Self.splitIntoSentences(punctuated)
-                    for sentence in sentences {
-                        let s = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !s.isEmpty, s.count > 3 else { continue }
-                        await self.commitSentence(s)
+                    if sentences.count <= 1 {
+                        await self.commitSentence(Self.ensureEndingPunctuation(trimmed))
+                    } else {
+                        for sentence in sentences {
+                            let s = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !s.isEmpty, s.count > 3 else { continue }
+                            await self.commitSentence(s)
+                        }
                     }
                     self.currentPartialNew = ""
                 } else {
@@ -135,6 +139,22 @@ struct RecordingView: View {
                 }
             }
         }
+    }
+
+    /// rpunct 没标点时兜底：确保句子有结尾标点
+    private static func ensureEndingPunctuation(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard let last = trimmed.last else { return text }
+        if ".!?。！？…".contains(last) { return trimmed }
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("what") || lower.hasPrefix("how") || lower.hasPrefix("why")
+            || lower.hasPrefix("where") || lower.hasPrefix("when") || lower.hasPrefix("who")
+            || lower.hasPrefix("can ") || lower.hasPrefix("could ") || lower.hasPrefix("would")
+            || lower.hasPrefix("is ") || lower.hasPrefix("are ") || lower.hasPrefix("do ")
+            || lower.hasPrefix("does ") || lower.hasPrefix("did ") {
+            return trimmed + "?"
+        }
+        return trimmed + "."
     }
 
     /// 用 NLP 标点分割句子，而不是靠时间间隔
