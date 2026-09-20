@@ -46,6 +46,13 @@ final class LiveTranscriptPolicyTests: XCTestCase {
         )
     }
 
+    func testBoundaryCleanupPreservesNewSentenceEndingPunctuation() {
+        XCTAssertEqual(
+            RecognitionTextDelta.unseenText(after: "Hello.", in: "Hello, everyone in class!"),
+            "everyone in class!"
+        )
+    }
+
     func testNewRecognitionContextIsNotMistakenForDuplicate() {
         XCTAssertEqual(
             RecognitionTextDelta.unseenText(after: "The first topic is complete.", in: "Now begin a new topic."),

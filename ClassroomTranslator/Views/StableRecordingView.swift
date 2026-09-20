@@ -463,7 +463,7 @@ final class StableRecordingViewController: NSViewController {
     }
 
     private static func ensureEndingPunctuation(_ text: String) -> String {
-        var result = fixInternalPunctuation(text)
+        let result = fixInternalPunctuation(text)
         let trimmed = result.trimmingCharacters(in: .whitespaces)
         guard let last = trimmed.last else { return result }
         if ".!?。！？…".contains(last) { return trimmed }

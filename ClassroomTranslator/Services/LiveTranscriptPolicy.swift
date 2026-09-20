@@ -14,10 +14,10 @@ enum RecognitionTextDelta {
         if current.hasPrefix(previous) {
             let previousEndInCurrent = current.index(current.startIndex, offsetBy: previous.count)
             guard isWordBoundary(in: current, at: previousEndInCurrent) else { return current }
-            let suffix = clean(String(current[previousEndInCurrent...]))
+            let suffix = cleanDelta(String(current[previousEndInCurrent...]))
             let previousEndInSuffix = suffix.index(suffix.startIndex, offsetBy: min(previous.count, suffix.count))
             if suffix.hasPrefix(previous), isWordBoundary(in: suffix, at: previousEndInSuffix) {
-                return clean(String(suffix[previousEndInSuffix...]))
+                return cleanDelta(String(suffix[previousEndInSuffix...]))
             }
             return suffix
         }
@@ -29,7 +29,7 @@ enum RecognitionTextDelta {
         if newWords.count >= oldWords.count,
            Array(newWords.prefix(oldWords.count).map(\.normalized)) == oldWords.map(\.normalized) {
             let end = newWords[oldWords.count - 1].range.upperBound
-            return clean(String(current[end...]))
+            return cleanDelta(String(current[end...]))
         }
 
         // Speech frequently revises the beginning of an already committed
@@ -43,7 +43,7 @@ enum RecognitionTextDelta {
                     let candidate = newWords[start..<(start + length)].map(\.normalized)
                     if candidate == oldSuffix {
                         let end = newWords[start + length - 1].range.upperBound
-                        return clean(String(current[end...]))
+                        return cleanDelta(String(current[end...]))
                     }
                 }
             }
@@ -75,6 +75,18 @@ enum RecognitionTextDelta {
     private static func clean(_ text: String) -> String {
         text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Recognition revisions often replace the punctuation attached to the
+    /// last committed word (for example `Hello.` -> `Hello, everyone`). The
+    /// replacement mark belongs to the committed boundary, not the new text.
+    private static func cleanDelta(_ text: String) -> String {
+        let normalized = clean(text)
+        let boundaryMarks = CharacterSet(charactersIn: ",.;:!?，。；：！？")
+        guard let start = normalized.unicodeScalars.firstIndex(where: { !boundaryMarks.contains($0) }) else {
+            return ""
+        }
+        return String(normalized.unicodeScalars[start...])
     }
 
     private static func isWordBoundary(in text: String, at index: String.Index) -> Bool {
