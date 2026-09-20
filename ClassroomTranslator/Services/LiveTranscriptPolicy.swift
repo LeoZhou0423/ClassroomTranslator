@@ -86,7 +86,7 @@ enum RecognitionTextDelta {
         guard let start = normalized.unicodeScalars.firstIndex(where: { !boundaryMarks.contains($0) }) else {
             return ""
         }
-        return String(normalized.unicodeScalars[start...])
+        return clean(String(normalized.unicodeScalars[start...]))
     }
 
     private static func isWordBoundary(in text: String, at index: String.Index) -> Bool {
