@@ -7,7 +7,6 @@ import AVFoundation
 final class SpeechManager {
     var isRecording = false
     var currentText = ""
-    var finalSegments: [String] = []
     var onSegmentRecognized: ((String, Bool) -> Void)?
     /// 录音被系统打断（锁屏/睡眠/音频设备变化/识别服务报错）时回调，
     /// UI 层据此把状态同步回来，避免界面卡在"录音中"
@@ -22,19 +21,13 @@ final class SpeechManager {
     private var isStarting = false
     private var recordingGeneration = 0
 
-    // MARK: - 自适应停顿检测模型
+    // MARK: - Pause-based fallback commit
     private var debounceWorkItem: DispatchWorkItem?
     private var lastPartialText = ""
+    /// Last complete recognizer snapshot already committed to the transcript.
+    /// This must survive pause-timer resets so a later cumulative result cannot
+    /// replay old words.
     private var committedText = ""
-    private var lastPartialTime: TimeInterval = 0
-    private var emaInterval: Double = 0
-    private var intervalCount = 0
-    private var minInterval: Double = 0.3
-    private let emaAlpha = 0.4
-    private let kBase = 4.0
-    private let kMin = 2.5
-    private let warmupThreshold = 3
-    private let warmupPause: TimeInterval = 1.5
     /// 句末标点集合（断句必须有这些才真正分句）
     private static let sentenceEndingPunctuation: Set<Character> = [".", "!", "?", "。", "！", "？", "…", ".", "!", "?", ".", "!", "?", ")", "]", "」", "』", "\"", "'", "\u{201D}", "\u{2019}"]
     private static let sentenceEnders = CharacterSet(charactersIn: ".!?。！？…")
@@ -73,13 +66,9 @@ final class SpeechManager {
         onRecordingInterrupted?()
     }
 
-    private func resetPauseModel() {
-        emaInterval = 0
-        intervalCount = 0
-        minInterval = 0.3
-        lastPartialTime = 0
+    private func resetPauseModel(clearRecognitionContext: Bool = false) {
         lastPartialText = ""
-        committedText = ""
+        if clearRecognitionContext { committedText = "" }
     }
 
     /// 切换识别语言（口音）。"auto" 不是合法 locale，直接忽略
@@ -219,17 +208,8 @@ final class SpeechManager {
         if result.isFinal {
             debounceWorkItem?.cancel()
             debounceWorkItem = nil
-            let incremental: String
-            if !committedText.isEmpty, fullText.hasPrefix(committedText) {
-                incremental = String(fullText.dropFirst(committedText.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            } else if !committedText.isEmpty {
-                let commonLen = Self.commonPrefixLength(committedText, fullText)
-                incremental = commonLen > 5
-                    ? String(fullText.dropFirst(commonLen)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    : fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-            } else {
-                incremental = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+            defer { restartRecognitionAfterFinalResult() }
+            let incremental = RecognitionTextDelta.unseenText(after: committedText, in: fullText)
             guard !incremental.trimmingCharacters(in: Self.sentenceEnders).isEmpty else {
                 currentText = ""
                 resetPauseModel()
@@ -242,13 +222,6 @@ final class SpeechManager {
                 committedText = fullText
                 return
             }
-            if isDuplicate(incremental) {
-                currentText = ""
-                resetPauseModel()
-                committedText = fullText
-                return
-            }
-            finalSegments.append(incremental)
             onSegmentRecognized?(incremental, true)
             currentText = ""
             resetPauseModel()
@@ -256,10 +229,7 @@ final class SpeechManager {
         } else {
             let text: String
             if !committedText.isEmpty {
-                let commonLen = Self.commonPrefixLength(committedText, fullText)
-                text = commonLen > 0
-                    ? String(fullText.dropFirst(commonLen)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    : fullText
+                text = RecognitionTextDelta.unseenText(after: committedText, in: fullText)
             } else {
                 text = fullText
             }
@@ -270,55 +240,22 @@ final class SpeechManager {
         }
     }
 
-    private func isDuplicate(_ text: String) -> Bool {
-        let lower = text.lowercased()
-        for segment in finalSegments {
-            let segLower = segment.lowercased()
-            if lower == segLower { return true }
-            if lower.hasSuffix(segLower), lower.count - segLower.count < 15 { return true }
-            if segLower.hasSuffix(lower), segLower.count - lower.count < 15 { return true }
-        }
-        return false
-    }
-
-    private static func commonPrefixLength(_ a: String, _ b: String) -> Int {
-        let aChars = Array(a)
-        let bChars = Array(b)
-        let limit = min(aChars.count, bChars.count)
-        var i = 0
-        while i < limit && aChars[i] == bChars[i] { i += 1 }
-        return i
-    }
-
     /// 只在长时间无新结果时才提交（fallback），正常情况靠 isFinal 提交
     private func scheduleFallbackCommit(fullText: String, visibleText: String) {
         debounceWorkItem?.cancel()
         let delay: TimeInterval = {
-            if Self.hasSentenceEnding(visibleText) { return 0.8 }
-            if visibleText.count >= 60 { return 1.0 }
-            if visibleText.count >= 30 { return 1.2 }
-            return 1.5
+            if Self.hasSentenceEnding(visibleText) { return 1.2 }
+            if visibleText.count >= 100 { return 2.0 }
+            return 3.0
         }()
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self, self.isRecording, self.lastPartialText == fullText else { return }
-                let incremental: String
-                if !self.committedText.isEmpty, fullText.hasPrefix(self.committedText) {
-                    incremental = String(fullText.dropFirst(self.committedText.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-                } else if !self.committedText.isEmpty {
-                    let commonLen = Self.commonPrefixLength(self.committedText, fullText)
-                    incremental = commonLen > 5
-                        ? String(fullText.dropFirst(commonLen)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        : fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-                } else {
-                    incremental = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
+                let incremental = RecognitionTextDelta.unseenText(after: self.committedText, in: fullText)
                 guard !incremental.trimmingCharacters(in: Self.sentenceEnders).isEmpty,
-                      !incremental.isEmpty,
-                      !self.isDuplicate(incremental) else { return }
+                      !incremental.isEmpty else { return }
                 self.committedText = fullText
                 self.currentText = ""
-                self.finalSegments.append(incremental)
                 self.onSegmentRecognized?(incremental, true)
             }
         }
@@ -326,19 +263,37 @@ final class SpeechManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
+    /// A final SFSpeech result closes that recognition task even though the
+    /// microphone engine may still be running. Start a fresh task so long
+    /// lectures continue producing results after a spontaneous finalization.
+    private func restartRecognitionAfterFinalResult() {
+        guard isRecording, !isStarting else { return }
+        isRecording = false
+        resetPauseModel(clearRecognitionContext: true)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.startRecording()
+            } catch {
+                self.stopRecording()
+                self.onRecordingInterrupted?()
+            }
+        }
+    }
+
     func stopRecording() {
         // Invalidate callbacks before cancel(), including a start still awaiting the engine.
         recordingGeneration += 1
         debounceWorkItem?.cancel()
         debounceWorkItem = nil
-        resetPauseModel()
+        resetPauseModel(clearRecognitionContext: true)
         driver.stop()
         isRecording = false
     }
 
     func clearSegments() {
-        finalSegments.removeAll()
         currentText = ""
+        resetPauseModel(clearRecognitionContext: true)
     }
 
     // MARK: - Auto language compatibility

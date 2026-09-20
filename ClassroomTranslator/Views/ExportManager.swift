@@ -5,23 +5,28 @@ struct ExportManager {
     enum ExportError: LocalizedError {
         case unableToCreateDocument
         case archiveFailed
+        case cancelled
 
         var errorDescription: String? {
             switch self {
             case .unableToCreateDocument: return String(localized: "Unable to create the Word document.")
             case .archiveFailed: return String(localized: "Unable to package the Word document.")
+            case .cancelled: return String(localized: "Export cancelled.")
             }
         }
     }
 
-    static func exportSingle(record: TranscriptRecord) {
+    static func exportSingle(record: TranscriptRecord, completion: ((Result<URL, Error>) -> Void)? = nil) {
         let panel = NSSavePanel()
         panel.title = String(localized: "Export Transcript")
         panel.nameFieldStringValue = "\(record.title).txt"
         panel.allowedContentTypes = [.plainText]
         
         panel.begin { result in
-            guard result == .OK, let url = panel.url else { return }
+            guard result == .OK, let url = panel.url else {
+                completion?(.failure(ExportError.cancelled))
+                return
+            }
             
             let dateLabel = String(localized: "Date:")
             let titleLabel = String(localized: "Title:")
@@ -36,18 +41,26 @@ struct ExportManager {
             \(record.bilingualTranscript)
             """
             
-            try? content.write(to: url, atomically: true, encoding: .utf8)
+            do {
+                try content.write(to: url, atomically: true, encoding: .utf8)
+                completion?(.success(url))
+            } catch {
+                completion?(.failure(error))
+            }
         }
     }
     
-    static func exportBatch(records: [TranscriptRecord]) {
+    static func exportBatch(records: [TranscriptRecord], completion: ((Result<URL, Error>) -> Void)? = nil) {
         let panel = NSSavePanel()
         panel.title = String(localized: "Export Transcripts")
         panel.nameFieldStringValue = "Transcripts_\(DateFormatter.exportFormatter.string(from: Date())).txt"
         panel.allowedContentTypes = [.plainText]
         
         panel.begin { result in
-            guard result == .OK, let url = panel.url else { return }
+            guard result == .OK, let url = panel.url else {
+                completion?(.failure(ExportError.cancelled))
+                return
+            }
             
             let headerTitle = String(localized: "Classroom Transcripts Export")
             let exportedLabel = String(localized: "Exported:")
@@ -72,7 +85,12 @@ struct ExportManager {
                 """
             }
             
-            try? content.write(to: url, atomically: true, encoding: .utf8)
+            do {
+                try content.write(to: url, atomically: true, encoding: .utf8)
+                completion?(.success(url))
+            } catch {
+                completion?(.failure(error))
+            }
         }
     }
 
@@ -84,7 +102,10 @@ struct ExportManager {
             panel.allowedContentTypes = [wordType]
         }
         panel.begin { result in
-            guard result == .OK, let url = panel.url else { return }
+            guard result == .OK, let url = panel.url else {
+                completion?(.failure(ExportError.cancelled))
+                return
+            }
             let snapshot = WordSnapshot(
                 title: record.title,
                 courseName: record.course?.name ?? "",

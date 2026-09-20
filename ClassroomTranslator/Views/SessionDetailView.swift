@@ -6,6 +6,7 @@ struct SessionDetailView: View {
         let id: UUID
         var original: String
         var translated: String
+        let originalAtLoad: String
         let timestamp: Date
         let isFinal: Bool
     }
@@ -24,7 +25,7 @@ struct SessionDetailView: View {
         self.record = record
         _title = State(initialValue: record.title)
         _drafts = State(initialValue: record.segments.map {
-            DraftSegment(id: $0.id, original: $0.original, translated: $0.translated, timestamp: $0.timestamp, isFinal: $0.isFinal)
+            DraftSegment(id: $0.id, original: $0.original, translated: $0.translated, originalAtLoad: $0.original, timestamp: $0.timestamp, isFinal: $0.isFinal)
         })
     }
 
@@ -32,7 +33,7 @@ struct SessionDetailView: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 if isEditing {
-                    TextField("Course title", text: $title).font(.headline)
+                    TextField("Recording title", text: $title).font(.headline)
                 } else {
                     Text(record.title).font(.headline)
                 }
@@ -58,6 +59,12 @@ struct SessionDetailView: View {
                                 TextEditor(text: $segment.original).frame(minHeight: 58)
                                 Text("Translation").font(.caption).foregroundColor(.secondary)
                                 TextEditor(text: $segment.translated).frame(minHeight: 58)
+                                if segment.original != segment.originalAtLoad || segment.translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    Button("Retranslate this segment") {
+                                        Task { await retranslate(segmentID: segment.id) }
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
                             } else {
                                 Text(segment.original).font(.system(size: 14, weight: .medium))
                                 Text(segment.translated).font(.system(size: 13)).foregroundColor(.blue)
@@ -84,12 +91,16 @@ struct SessionDetailView: View {
                     }
                     .disabled(isFillingTranslations || isEditing)
                 }
-                Button { ExportManager.exportSingle(record: record) } label: { Label("Export Text", systemImage: "doc.plaintext") }
+                Button { exportText() } label: { Label("Export Text", systemImage: "doc.plaintext") }
                     .buttonStyle(.bordered).disabled(isEditing)
             }.padding()
         }
         .frame(minWidth: 620, minHeight: 480)
-        .modifier(TranslationSessionCompat(manager: translationManager))
+        .modifier(TranslationSessionCompat(
+            manager: translationManager,
+            sourceLanguage: record.course?.accentCode,
+            targetLanguage: record.course?.effectiveTargetLanguageCode
+        ))
         .task {
             if drafts.contains(where: { $0.translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
                 await translateMissingSegments()
@@ -110,7 +121,7 @@ struct SessionDetailView: View {
 
     private func cancelEditing() {
         title = record.title
-        drafts = record.segments.map { DraftSegment(id: $0.id, original: $0.original, translated: $0.translated, timestamp: $0.timestamp, isFinal: $0.isFinal) }
+        drafts = record.segments.map { DraftSegment(id: $0.id, original: $0.original, translated: $0.translated, originalAtLoad: $0.original, timestamp: $0.timestamp, isFinal: $0.isFinal) }
         isEditing = false
     }
 
@@ -119,6 +130,16 @@ struct SessionDetailView: View {
         ExportManager.exportWord(record: record) { result in
             switch result {
             case .success: feedback = String(localized: "Word document exported")
+            case .failure(let error): feedback = error.localizedDescription
+            }
+        }
+    }
+
+    private func exportText() {
+        feedback = String(localized: "Choose where to save…")
+        ExportManager.exportSingle(record: record) { result in
+            switch result {
+            case .success: feedback = String(localized: "Text document exported")
             case .failure(let error): feedback = error.localizedDescription
             }
         }
@@ -148,5 +169,17 @@ struct SessionDetailView: View {
         historyStore.save()
         isFillingTranslations = false
         feedback = String(localized: "Translations updated")
+    }
+
+    private func retranslate(segmentID: UUID) async {
+        guard let index = drafts.firstIndex(where: { $0.id == segmentID }) else { return }
+        feedback = String(localized: "Translating…")
+        let translated = await translationManager.translate(drafts[index].original)
+        guard !translated.isEmpty else {
+            feedback = String(localized: "Translation service is not ready. Try again.")
+            return
+        }
+        drafts[index].translated = translated
+        feedback = String(localized: "Translation updated")
     }
 }

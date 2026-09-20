@@ -47,7 +47,11 @@ final class RecordingStartupStep {
         continuation.resume(returning: error)
     }
 
-    enum StartupError: Error {
+    enum StartupError: LocalizedError {
         case timedOut
+
+        var errorDescription: String? {
+            String(localized: "Recording took too long to start.")
+        }
     }
 }

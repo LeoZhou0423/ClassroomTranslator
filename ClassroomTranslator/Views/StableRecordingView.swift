@@ -31,8 +31,6 @@ struct StableRecordingView: NSViewControllerRepresentable {
 
 @MainActor
 final class StableRecordingViewController: NSViewController {
-    private enum State { case idle, starting, recording, paused, ended }
-
     private let course: Course
     private let historyStore: HistoryStore
     private let translationManager: TranslationManager
@@ -48,19 +46,25 @@ final class StableRecordingViewController: NSViewController {
     private let pauseButton = NSButton(title: String(localized: "Pause"), target: nil, action: nil)
     private let endButton = NSButton(title: String(localized: "End Session"), target: nil, action: nil)
     private let closeButton = NSButton(title: String(localized: "Back"), target: nil, action: nil)
+    private let overlayButton = NSButton(title: String(localized: "Hide Overlay"), target: nil, action: nil)
 
-    private var state: State = .idle
+    private var sessionState = RecordingSessionState()
+    private var activeRecord: TranscriptRecord?
     private var finalizedText = ""
-    private var lastCommittedEnglish = ""
+    private var renderedFinalizedText = ""
+    private var liveTranscriptRange: NSRange?
+    private var hasRenderedTranscript = false
     private var partialText = ""
     private var partialTranslation = ""
-    private var partialTranslationTask: Task<Void, Never>?
-    private var finalTranslationTasks: [Task<Void, Never>] = []
+    private var translationCoordinator: LiveTranslationCoordinator!
     private var partialRevision = 0
     private var generation = 0
     private var timer: Timer?
-    private var startedAt: Date?
-    private var elapsedBeforePause: TimeInterval = 0
+    private var checkpointTimer: Timer?
+    private var overlayVisible = true
+    private var lastEnqueuedFinalRevision = -1
+    private var translationGeneration = 0
+    private var minimumValidPartialRevision = 0
 
     init(course: Course, historyStore: HistoryStore, translationManager: TranslationManager, onClose: @escaping () -> Void) {
         self.course = course
@@ -68,6 +72,10 @@ final class StableRecordingViewController: NSViewController {
         self.translationManager = translationManager
         self.onClose = onClose
         super.init(nibName: nil, bundle: nil)
+        translationCoordinator = LiveTranslationCoordinator { [weak self] text in
+            guard let self else { return "" }
+            return await self.translationManager.translate(text)
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -79,10 +87,13 @@ final class StableRecordingViewController: NSViewController {
         closeButton.target = self
         closeButton.action = #selector(closePressed)
         closeButton.bezelStyle = .rounded
+        overlayButton.target = self
+        overlayButton.action = #selector(toggleOverlayPressed)
+        overlayButton.bezelStyle = .rounded
 
         let title = NSTextField(labelWithString: course.name)
         title.font = .systemFont(ofSize: 17, weight: .semibold)
-        let accent = NSTextField(labelWithString: course.accentName)
+        let accent = NSTextField(labelWithString: "\(course.accentName) → \(course.targetLanguageName)")
         accent.textColor = .secondaryLabelColor
 
         let header = NSStackView(views: [closeButton, title, accent])
@@ -131,7 +142,7 @@ final class StableRecordingViewController: NSViewController {
         endButton.action = #selector(endPressed)
         endButton.bezelStyle = .rounded
 
-        let controls = NSStackView(views: [statusLabel, levelIndicator, elapsedLabel, startButton, pauseButton, endButton])
+        let controls = NSStackView(views: [statusLabel, levelIndicator, elapsedLabel, overlayButton, startButton, pauseButton, endButton])
         controls.orientation = .horizontal
         controls.spacing = 12
         statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -154,14 +165,14 @@ final class StableRecordingViewController: NSViewController {
     }
 
     @objc private func startPressed() {
-        guard state == .idle || state == .paused else { return }
+        guard sessionState.phase == .idle || sessionState.phase == .paused || sessionState.phase == .interrupted else { return }
         beginRecording()
     }
 
     private func beginRecording() {
         generation += 1
         let currentGeneration = generation
-        state = .starting
+        sessionState.beginStarting()
         statusLabel.stringValue = String(localized: "Requesting speech recognition permission…")
         renderState()
 
@@ -178,25 +189,28 @@ final class StableRecordingViewController: NSViewController {
             }
             statusLabel.stringValue = String(localized: "Connecting microphone…")
             do {
-                if course.accentCode == "auto" {
-                    try await speechManager.startAutoDetectRecording()
-                } else {
-                    speechManager.switchLanguage(to: course.accentCode)
-                    try await speechManager.startRecording()
-                }
-                guard currentGeneration == generation, state == .starting else {
+                let startError = await RecordingStartupStep.run(
+                    timeoutNanoseconds: 20_000_000_000,
+                    onTimeout: { self.speechManager.stopRecording() },
+                    operation: {
+                        if self.course.accentCode == "auto" {
+                            try await self.speechManager.startAutoDetectRecording()
+                        } else {
+                            self.speechManager.switchLanguage(to: self.course.accentCode)
+                            try await self.speechManager.startRecording()
+                        }
+                    }
+                )
+                if let startError { throw startError }
+                guard currentGeneration == generation, sessionState.phase == .starting else {
                     speechManager.stopRecording()
                     return
                 }
-                if historyStore.currentRecord == nil {
-                    historyStore.startNewRecord(in: course)
-                }
-                state = .recording
-                startedAt = Date()
-                lastCommittedEnglish = ""
+                ensureActiveRecord()
+                sessionState.start()
                 startTimer()
-                subtitleWindow.clearAll()
-                subtitleWindow.showWindow()
+                startCheckpointTimer()
+                if overlayVisible { subtitleWindow.showWindow() }
                 statusLabel.stringValue = String(localized: "Recording · speak now")
                 renderState()
             } catch {
@@ -208,18 +222,24 @@ final class StableRecordingViewController: NSViewController {
     private func failStart(_ message: String, generation: Int) {
         guard generation == self.generation else { return }
         speechManager.stopRecording()
+        translationCoordinator.cancelPartials()
         accumulateElapsed()
         subtitleWindow.hideWindow()
-        state = .idle
+        sessionState.failStart(resumable: activeRecord != nil)
         statusLabel.stringValue = message
         renderState()
     }
 
     @objc private func pausePressed() {
-        guard state == .recording else { return }
+        guard sessionState.phase == .recording else { return }
         generation += 1
+        queueCurrentPartialIfNeeded()
         speechManager.stopRecording()
-        state = .paused
+        translationCoordinator.cancelPartials()
+        minimumValidPartialRevision = partialRevision + 1
+        sessionState.pause()
+        stopTimers()
+        checkpointActiveRecord()
         statusLabel.stringValue = String(localized: "Recording paused")
         renderState()
     }
@@ -229,32 +249,54 @@ final class StableRecordingViewController: NSViewController {
     }
 
     @objc private func closePressed() {
-        finishAndClose()
+        guard sessionState.phase == .recording
+                || sessionState.phase == .starting
+                || sessionState.phase == .paused
+                || sessionState.phase == .interrupted else {
+            finishAndClose()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "End and save this recording?")
+        alert.informativeText = String(localized: "The current transcript will be saved before returning.")
+        alert.addButton(withTitle: String(localized: "Save and End"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        if let window = view.window {
+            alert.beginSheetModal(for: window) { [weak self] response in
+                if response == .alertFirstButtonReturn { self?.finishAndClose() }
+            }
+        } else {
+            finishAndClose()
+        }
+    }
+
+    @objc private func toggleOverlayPressed() {
+        overlayVisible.toggle()
+        if overlayVisible { subtitleWindow.showWindow() } else { subtitleWindow.hideWindow() }
+        overlayButton.title = overlayVisible ? String(localized: "Hide Overlay") : String(localized: "Show Overlay")
     }
 
     private func finishAndClose() {
-        guard state != .ended else { return }
-        state = .ended
+        guard sessionState.phase != .ended else { return }
+        queueCurrentPartialIfNeeded()
+        sessionState.end()
         generation += 1
         speechManager.stopRecording()
         accumulateElapsed()
-        lastCommittedEnglish = ""
+        stopTimers()
         subtitleWindow.hideWindow()
         renderState()
         statusLabel.stringValue = String(localized: "Finishing translation and saving…")
         Task { @MainActor [weak self] in
             guard let self else { return }
-            for task in finalTranslationTasks { await task.value }
-            let remainder = partialText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !remainder.isEmpty {
-                let translated = await translationManager.translate(remainder)
-                historyStore.addSegmentIfNew(TranscriptSegment(original: remainder, translated: translated))
-                finalizedText += "\n\n\(remainder)\n\(translated)"
-                partialText = ""
-                partialTranslation = ""
-                refreshTranscript()
+            _ = await RecordingStartupStep.run(
+                timeoutNanoseconds: 10_000_000_000,
+                onTimeout: { self.translationCoordinator.cancelAll() },
+                operation: { await self.translationCoordinator.waitUntilIdle() }
+            )
+            if let record = activeRecord {
+                historyStore.finishRecord(record, duration: sessionState.elapsed())
             }
-            historyStore.stopCurrentRecord()
             statusLabel.stringValue = String(localized: "Saved")
             try? await Task.sleep(for: .milliseconds(450))
             onClose()
@@ -263,13 +305,27 @@ final class StableRecordingViewController: NSViewController {
 
     func shutDown() {
         generation += 1
+        translationGeneration += 1
+        translationCoordinator.activateGeneration(translationGeneration)
+        let alreadyEnded = sessionState.phase == .ended
+        if sessionState.phase == .recording {
+            queueCurrentPartialIfNeeded()
+            sessionState.interrupt()
+        }
         speechManager.stopRecording()
-        partialTranslationTask?.cancel()
-        partialTranslationTask = nil
-        lastCommittedEnglish = ""
+        translationCoordinator.cancelAll()
+        if let activeRecord {
+            if alreadyEnded {
+                historyStore.checkpoint(activeRecord, duration: sessionState.elapsed())
+            } else {
+                historyStore.finishRecord(activeRecord, duration: sessionState.elapsed())
+            }
+        }
         subtitleWindow.hideWindow()
         timer?.invalidate()
         timer = nil
+        checkpointTimer?.invalidate()
+        checkpointTimer = nil
         speechManager.onSegmentRecognized = nil
         speechManager.onRecordingInterrupted = nil
         speechManager.onLanguageModelStatusChanged = nil
@@ -278,15 +334,20 @@ final class StableRecordingViewController: NSViewController {
 
     private func configureCallbacks() {
         speechManager.onAudioLevelChanged = { [weak self] level in
-            guard let self, state == .recording else { return }
+            guard let self, sessionState.phase == .recording else { return }
             levelIndicator.doubleValue = Double(level)
             if level > 0.03 && partialText.isEmpty {
                 statusLabel.stringValue = String(localized: "Sound detected · recognizing…")
             }
         }
         speechManager.onRecordingInterrupted = { [weak self] in
-            guard let self, state != .ended else { return }
-            state = .idle
+            guard let self, sessionState.phase != .ended else { return }
+            queueCurrentPartialIfNeeded()
+            translationCoordinator.cancelPartials()
+            minimumValidPartialRevision = partialRevision + 1
+            sessionState.interrupt()
+            stopTimers()
+            checkpointActiveRecord()
             statusLabel.stringValue = String(localized: "Recording was interrupted. Tap Start to resume.")
             renderState()
         }
@@ -295,37 +356,110 @@ final class StableRecordingViewController: NSViewController {
             statusLabel.stringValue = message
         }
         speechManager.onSegmentRecognized = { [weak self] text, isFinal in
-            guard let self else { return }
+            guard let self, self.sessionState.phase == .recording else { return }
+            self.ensureActiveRecord()
+            self.partialRevision += 1
+            let eventRevision = self.partialRevision
             if isFinal {
-                partialRevision += 1
-                let task = Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else {
-                        self.partialText = ""
-                        self.partialTranslation = ""
-                        self.refreshTranscript()
-                        return
-                    }
-                    let sentence = Self.ensureEndingPunctuation(trimmed)
-                    let translated = await self.translationManager.translate(sentence)
-                    self.finalizedText += "\n\n\(sentence)\n\(translated)"
-                    self.lastCommittedEnglish = sentence
-                    self.historyStore.addSegmentIfNew(TranscriptSegment(original: sentence, translated: translated))
-                    self.subtitleWindow.appendSegment(original: sentence, translated: translated)
-                    self.partialText = ""
-                    self.partialTranslation = ""
-                    self.refreshTranscript()
-                }
-                finalTranslationTasks.append(task)
+                self.enqueueFinal(text, revision: eventRevision)
             } else {
                 self.partialText = text
                 self.partialTranslation = ""
                 self.refreshTranscript()
-                self.subtitleWindow.updateCurrentText(original: text, translated: "")
-                self.translatePartial(text)
+                let cue = SubtitleCueBuilder.cue(from: text, maximumWords: self.subtitleMaximumWords)
+                self.submitPartialTranslation(text, cue: cue, revision: eventRevision)
             }
         }
+    }
+
+    private func enqueueFinal(_ text: String, revision: Int) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        lastEnqueuedFinalRevision = revision
+        ensureActiveRecord()
+        let sentence = Self.ensureEndingPunctuation(trimmed)
+        let cue = SubtitleCueBuilder.cue(from: sentence, maximumWords: subtitleMaximumWords)
+        let segment = TranscriptSegment(original: sentence, translated: "")
+        if let activeRecord {
+            historyStore.addSegmentIfNew(segment, to: activeRecord)
+            rebuildFinalizedText(from: activeRecord)
+        }
+        if partialText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
+            partialText = ""
+            partialTranslation = ""
+        }
+        refreshTranscript()
+        translationCoordinator.submit(.init(
+            kind: .final,
+            text: sentence,
+            cue: cue,
+            revision: revision,
+            generation: translationGeneration,
+            segmentID: segment.id,
+            completion: { [weak self] response in self?.handleTranslation(response) }
+        ))
+    }
+
+    private func submitPartialTranslation(_ text: String, cue: String, revision: Int) {
+        translationCoordinator.submit(.init(
+            kind: .partial,
+            text: text,
+            cue: cue,
+            revision: revision,
+            generation: translationGeneration,
+            completion: { [weak self] response in self?.handleTranslation(response) }
+        ))
+    }
+
+    private func handleTranslation(_ response: LiveTranslationCoordinator.Response) {
+        guard response.request.generation == translationGeneration else { return }
+        if response.request.kind == .partial {
+            guard sessionState.phase == .recording,
+                  response.request.revision >= minimumValidPartialRevision else { return }
+        }
+        if !response.succeeded, response.request.kind == .partial {
+            statusLabel.stringValue = String(localized: "Translation unavailable · transcript is still being saved")
+            return
+        }
+        if response.succeeded, overlayVisible {
+            subtitleWindow.showStableCue(original: response.request.text, translated: response.translatedText)
+        }
+
+        switch response.request.kind {
+        case .partial:
+            if partialText == response.request.text {
+                partialTranslation = response.translatedText
+                refreshTranscript()
+            }
+        case .final:
+            if let record = activeRecord, let segmentID = response.request.segmentID {
+                historyStore.updateTranslation(for: segmentID, to: response.translatedText, in: record)
+                rebuildFinalizedText(from: record)
+            }
+            if partialText.trimmingCharacters(in: .whitespacesAndNewlines) == response.request.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                || partialRevision == response.request.revision {
+                partialText = ""
+                partialTranslation = ""
+            }
+            refreshTranscript()
+            if sessionState.phase == .paused || sessionState.phase == .interrupted {
+                checkpointActiveRecord()
+            }
+        }
+        if sessionState.phase == .recording {
+            statusLabel.stringValue = response.succeeded
+                ? String(localized: "Recording · live translation")
+                : String(localized: "Translation unavailable · transcript saved without translation")
+        } else if sessionState.phase == .paused {
+            statusLabel.stringValue = String(localized: "Recording paused")
+        }
+    }
+
+    private func queueCurrentPartialIfNeeded() {
+        let text = partialText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, partialRevision != lastEnqueuedFinalRevision else { return }
+        partialRevision += 1
+        enqueueFinal(text, revision: partialRevision)
     }
 
     private static func ensureEndingPunctuation(_ text: String) -> String {
@@ -367,47 +501,44 @@ final class StableRecordingViewController: NSViewController {
     private func refreshTranscript() {
         let full = finalizedText.trimmingCharacters(in: .whitespacesAndNewlines)
         let live = partialTranslation.isEmpty ? partialText : "\(partialText)\n\(partialTranslation)"
-        transcriptView.string = live.isEmpty ? full : "\(full)\(full.isEmpty ? "" : "\n\n")\(live)"
-        transcriptView.scrollToEndOfDocument(nil)
-    }
+        guard let storage = transcriptView.textStorage else { return }
 
-    private func removeLastFinalizedSegment() {
-        if let range = finalizedText.range(of: "\n\n", options: .backwards) {
-            finalizedText = String(finalizedText[..<range.lowerBound])
-        } else {
-            finalizedText = ""
+        if !hasRenderedTranscript || full != renderedFinalizedText {
+            storage.setAttributedString(NSAttributedString(string: full))
+            renderedFinalizedText = full
+            liveTranscriptRange = nil
+            hasRenderedTranscript = true
+        } else if let range = liveTranscriptRange, range.location + range.length <= storage.length {
+            storage.deleteCharacters(in: range)
+            liveTranscriptRange = nil
         }
-    }
 
-    private static let sentenceEndingPunctuation: Set<Character> = [".", "!", "?", "。", "！", "？", "…", ")", "]", "」", "』", "\"", "'", "\u{201D}", "\u{2019}"]
-
-    private static func hasSentenceEnding(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard let last = trimmed.last else { return false }
-        return sentenceEndingPunctuation.contains(last)
-    }
-
-    private func translatePartial(_ text: String) {
-        partialRevision += 1
-        let revision = partialRevision
-        partialTranslationTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(350))
-            guard let self, !Task.isCancelled, revision == partialRevision else { return }
-            let translated = await translationManager.translate(text)
-            guard !Task.isCancelled, revision == partialRevision, partialText == text, state == .recording else { return }
-            partialTranslation = translated
-            refreshTranscript()
-            subtitleWindow.updateCurrentText(original: text, translated: translated)
-            statusLabel.stringValue = String(localized: "Recording · live translation")
+        if !live.isEmpty {
+            let prefix = storage.length > 0 ? "\n\n" : ""
+            let start = storage.length
+            let value = prefix + live
+            storage.append(NSAttributedString(string: value))
+            liveTranscriptRange = NSRange(location: start, length: (value as NSString).length)
         }
+
+        if SubtitleDisplayConfiguration().autoScroll { transcriptView.scrollToEndOfDocument(nil) }
+    }
+
+    private func rebuildFinalizedText(from record: TranscriptRecord) {
+        finalizedText = record.segments.map { segment in
+            let translation = segment.translated.trimmingCharacters(in: .whitespacesAndNewlines)
+            return translation.isEmpty ? segment.original : "\(segment.original)\n\(translation)"
+        }.joined(separator: "\n\n")
     }
 
     private func renderState() {
-        startButton.isEnabled = state == .idle || state == .paused
-        startButton.title = state == .paused ? String(localized: "Resume") : String(localized: "Start")
-        pauseButton.isEnabled = state == .recording
-        endButton.isEnabled = state == .recording || state == .paused || state == .starting
-        closeButton.isEnabled = state != .ended
+        let phase = sessionState.phase
+        startButton.isEnabled = phase == .idle || phase == .paused || phase == .interrupted
+        startButton.title = (phase == .paused || phase == .interrupted) ? String(localized: "Resume") : String(localized: "Start")
+        pauseButton.isEnabled = phase == .recording
+        endButton.isEnabled = phase == .recording || phase == .paused || phase == .starting || phase == .interrupted
+        closeButton.isEnabled = phase != .ended
+        overlayButton.isEnabled = phase != .ended
     }
 
     private func startTimer() {
@@ -419,8 +550,6 @@ final class StableRecordingViewController: NSViewController {
     }
 
     private func accumulateElapsed() {
-        if let startedAt { elapsedBeforePause += Date().timeIntervalSince(startedAt) }
-        startedAt = nil
         timer?.invalidate()
         timer = nil
         levelIndicator.doubleValue = 0
@@ -428,7 +557,42 @@ final class StableRecordingViewController: NSViewController {
     }
 
     private func refreshElapsed() {
-        let total = elapsedBeforePause + (startedAt.map { Date().timeIntervalSince($0) } ?? 0)
+        let total = sessionState.elapsed()
         elapsedLabel.stringValue = String(format: "%02d:%02d", Int(total) / 60, Int(total) % 60)
+    }
+
+    private var subtitleMaximumWords: Int {
+        SubtitleDisplayConfiguration().maximumWords
+    }
+
+    private func startCheckpointTimer() {
+        checkpointTimer?.invalidate()
+        checkpointTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkpointActiveRecord() }
+        }
+    }
+
+    private func stopTimers() {
+        timer?.invalidate()
+        timer = nil
+        checkpointTimer?.invalidate()
+        checkpointTimer = nil
+        levelIndicator.doubleValue = 0
+        refreshElapsed()
+    }
+
+    private func checkpointActiveRecord() {
+        guard let activeRecord else { return }
+        historyStore.checkpoint(activeRecord, duration: sessionState.elapsed())
+    }
+
+    private func ensureActiveRecord() {
+        guard activeRecord == nil else { return }
+        activeRecord = historyStore.startNewRecord(in: course)
+        translationGeneration += 1
+        translationCoordinator.activateGeneration(translationGeneration)
+        partialText = ""
+        partialTranslation = ""
+        subtitleWindow.clearAll()
     }
 }

@@ -6,23 +6,11 @@ struct NewCourseView: View {
     var onCreate: (Course) -> Void
 
     @State private var courseName = ""
-    @State private var accentCode = "auto"
+    @State private var accentCode = LanguageOptions.supportedSource(
+        UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "auto"
+    )
+    @State private var targetLanguageCode = UserDefaults.standard.string(forKey: "translationTarget") ?? "zh-Hans"
     @State private var selectedDate = Date()
-
-    private let accents: [(name: String, code: String)] = [
-        ("Auto (detect while recording)", "auto"),
-        ("American", "en-US"),
-        ("British", "en-GB"),
-        ("Australian", "en-AU"),
-        ("New Zealand", "en-NZ"),
-        ("Irish", "en-IE"),
-        ("South African", "en-ZA"),
-        ("Canadian", "en-CA"),
-        ("Indian", "en-IN"),
-        ("Chinese", "zh-Hans"),
-        ("Japanese", "ja-JP"),
-        ("Korean", "ko-KR"),
-    ]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,11 +41,19 @@ struct NewCourseView: View {
                         .foregroundColor(.secondary)
 
                     Picker("Accent", selection: $accentCode) {
-                        ForEach(accents, id: \.code) { accent in
+                        ForEach(LanguageOptions.sources) { accent in
                             Text(LocalizedStringKey(accent.name)).tag(accent.code)
                         }
                     }
-                    .pickerStyle(.inline)
+                    .pickerStyle(.menu)
+                }
+
+                Section("Translation") {
+                    Picker("Target Language", selection: $targetLanguageCode) {
+                        ForEach(LanguageOptions.targets) { language in
+                            Text(language.name).tag(language.code)
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -68,7 +64,12 @@ struct NewCourseView: View {
     private func createCourse() {
         let name = courseName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
-        let course = Course(name: name, accentCode: accentCode, createdAt: selectedDate)
+        let course = Course(
+            name: name,
+            accentCode: accentCode,
+            targetLanguageCode: targetLanguageCode,
+            createdAt: selectedDate
+        )
         historyStore.addCourse(course)
         onCreate(course)
     }

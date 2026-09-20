@@ -22,6 +22,11 @@
 "No Courses Yet" = "暂无课程";
 "Tap + to create your first course" = "点击 + 创建第一个课程";
 "New Course" = "新建课程";
+"Courses" = "课程";
+"All Recordings" = "全部录音";
+"Select a course from the sidebar" = "请从侧边栏选择课程";
+"Each new recording is saved as a separate transcript." = "每次新录音都会保存为独立转录记录。";
+"Create a course to start translating lectures." = "创建课程后即可开始课堂转录和翻译。";
 
 /* 录音界面 */
 "Ready to Listen" = "准备就绪";
@@ -37,6 +42,17 @@
 "Hide Overlay" = "隐藏悬浮窗";
 "Recording paused" = "录音已暂停";
 "Recording interrupted. Tap Start to resume." = "录音被系统打断，点\"开始\"可继续。";
+"Recording · speak now" = "录音中 · 请开始讲话";
+"Recording · live translation" = "录音中 · 实时翻译";
+"Sound detected · recognizing…" = "检测到声音 · 正在识别…";
+"Connecting microphone…" = "正在连接麦克风…";
+"Translation unavailable · transcript is still being saved" = "翻译暂不可用 · 转录仍会保存";
+"Translation unavailable · transcript saved without translation" = "翻译暂不可用 · 已保存原文转录";
+"Finishing translation and saving…" = "正在完成翻译并保存…";
+"Saved" = "已保存";
+"End and save this recording?" = "结束并保存本次录音？";
+"The current transcript will be saved before returning." = "返回前会保存当前转录内容。";
+"Save and End" = "保存并结束";
 "Detecting accent…" = "正在检测口音…";
 "Accent detection timed out." = "口音检测超时。";
 
@@ -50,7 +66,16 @@
 "Delete Course" = "删除课程";
 "Are you sure you want to delete this course? All recordings will be removed." = "确定删除这个课程吗？所有录音都会被移除。";
 "New Recording" = "新建录音";
+"Course Settings" = "课程设置";
+"Teacher Language / Model" = "老师语言 / 识别模型";
+"Delete Recording" = "删除录音";
+"This recording and its transcript will be permanently deleted." = "该录音及转录将被永久删除。";
+"Search recordings" = "搜索录音";
+"No Matching Recordings" = "没有匹配的录音";
 "No recordings yet" = "暂无录音";
+"Start a recording to create the first transcript." = "开始录音以创建第一条转录记录。";
+"Try a different search term." = "请尝试其他搜索词。";
+"View or Edit" = "查看或编辑";
 "Start First Recording" = "开始第一次录音";
 "sessions" = "次录音";
 "segments" = "条记录";
@@ -62,7 +87,6 @@
 
 /* 口音名称 */
 "Auto" = "自动";
-"Auto (detect while recording)" = "自动（录音时检测）";
 "American" = "美式";
 "British" = "英式";
 "Australian" = "澳式";
@@ -92,9 +116,11 @@
 "Subtitle Display" = "字幕显示";
 "Font Size" = "字号";
 "Overlay Opacity" = "悬浮窗不透明度";
+"Show original text" = "显示原文";
+"Auto English selects one stable model from the system region" = "自动英语会按系统地区选择一个稳定识别模型";
 "Auto Scroll" = "自动滚动";
+"Short subtitle length: %lld words" = "短字幕长度：%lld 个词";
 "Speech Recognition - Teacher's Accent" = "语音识别 - 教授口音";
-"Auto mode tries all English accents while recording" = "自动模式会在录音时尝试所有英语口音";
 "English Accent" = "英语口音";
 "Download All English Models" = "下载所有英语模型";
 "Other Languages" = "其他语言";
@@ -105,7 +131,7 @@
 "About" = "关于";
 "Version" = "版本";
 "Speech Engine" = "语音引擎";
-"Apple SpeechAnalyzer" = "Apple SpeechAnalyzer";
+"Apple SFSpeechRecognizer" = "Apple SFSpeechRecognizer";
 "Supported Accents" = "支持的口音";
 "accents" = "个口音";
 "English" = "英语";
@@ -123,6 +149,8 @@
 "Requesting model download…" = "正在请求下载模型…";
 "Models are ready." = "模型已就绪。";
 "Model download is unavailable. Please download the translation languages in System Settings or the Translate app." = "无法通过应用下载模型，请到系统设置或翻译 App 下载语言包。";
+"Realtime system translation requires macOS 15 or later. Speech transcripts can still be recorded." = "系统实时翻译需要 macOS 15 或更高版本；语音转录仍可正常保存。";
+"Realtime translation requires macOS 15 or later and downloaded language models." = "实时翻译需要 macOS 15 或更高版本及已下载的语言模型。";
 
 /* 导出 */
 "Export Transcript" = "导出转写记录";
@@ -132,6 +160,17 @@
 "Date:" = "日期：";
 "Title:" = "标题：";
 "Duration:" = "时长：";
+"Export cancelled." = "已取消导出。";
+"Exported successfully: %@" = "导出成功：%@";
+"Export Word" = "导出 Word";
+"Export Text" = "导出文本";
+"Unable to create the Word document." = "无法创建 Word 文档。";
+"Unable to package the Word document." = "无法打包 Word 文档。";
+"Text document exported" = "文本文件已导出";
+"Word document exported" = "Word 文档已导出";
+"Choose where to save…" = "请选择保存位置…";
+"Translation updated" = "译文已更新";
+"Retranslate this segment" = "重新翻译此段";
 
 /* 错误 */
 "Invalid audio format" = "音频格式无效";

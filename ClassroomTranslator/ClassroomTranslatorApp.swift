@@ -23,10 +23,20 @@ struct ClassroomTranslatorApp: App {
             HomeView()
                 .environment(historyStore)
         }
-        .defaultSize(width: 700, height: 500)
+        .defaultSize(width: 1000, height: 650)
 
         Settings {
-            SettingsView()
+            AppSettingsHost()
         }
+    }
+}
+
+@MainActor
+private struct AppSettingsHost: View {
+    @State private var translationManager = TranslationManager()
+
+    var body: some View {
+        SettingsView(translationManager: translationManager)
+            .modifier(TranslationSessionCompat(manager: translationManager))
     }
 }

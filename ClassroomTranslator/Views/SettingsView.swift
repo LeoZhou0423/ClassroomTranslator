@@ -1,9 +1,11 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     /// 主窗口传入；App 级 Settings 场景下为 nil，此时隐藏模型状态行
     var translationManager: TranslationManager?
+    var showsDoneButton = true
     /// 下载按钮的即时反馈文案，避免“点了没反应”
     @State private var modelStatusMessage = ""
     
@@ -12,56 +14,12 @@ struct SettingsView: View {
     @AppStorage("recognitionLanguage") private var recognitionLanguage: String = "auto"
     @AppStorage("translationTarget") private var translationTarget: String = "zh-Hans"
     @AppStorage("autoScroll") private var autoScroll: Bool = true
+    @AppStorage("subtitleMaxWords") private var subtitleMaxWords: Int = 12
+    @AppStorage("showSubtitleOriginal") private var showSubtitleOriginal: Bool = true
     @AppStorage("appLanguage") private var appLanguage: String = "zh-Hans"
     
     @State private var isDownloadingAll = false
     @State private var downloadProgress = ""
-    
-    /// English accent options
-    private let englishAccents: [(name: String, code: String)] = [
-        ("Auto (detect while recording)", "auto"),
-        ("🇺🇸 English (US) - American", "en-US"),
-        ("🇬🇧 English (UK) - British", "en-GB"),
-        ("🇦🇺 English (AU) - Australian", "en-AU"),
-        ("🇳🇿 English (NZ) - New Zealand", "en-NZ"),
-        ("🇮🇪 English (IE) - Irish", "en-IE"),
-        ("🇿🇦 English (ZA) - South African", "en-ZA"),
-        ("🇨🇦 English (CA) - Canadian", "en-CA"),
-        
-        // 亚洲地区英语口音
-        ("🇮🇳 English (IN) - Indian", "en-IN"),
-        ("🇵🇭 English (PH) - Filipino", "en-PH"),
-        ("🇸🇬 English (SG) - Singaporean", "en-SG"),
-        ("🇲🇾 English (MY) - Malaysian", "en-MY"),
-        
-        // 日韩地区
-        ("🇯🇵 English (JP) - Japanese", "en-JP"),
-        ("🇰🇷 English (KR) - Korean", "en-KR"),
-        
-        // 中东地区
-        ("🇦🇪 English (AE) - UAE", "en-AE"),
-        ("🇸🇦 English (SA) - Saudi", "en-SA"),
-        ("🇮🇱 English (IL) - Israeli", "en-IL"),
-        ("🇹🇷 English (TR) - Turkish", "en-TR"),
-        ("🇪🇬 English (EG) - Egyptian", "en-EG"),
-        ("🇶🇦 English (QA) - Qatari", "en-QA"),
-        ("🇰🇼 English (KW) - Kuwaiti", "en-KW"),
-        ("🇧🇭 English (BH) - Bahraini", "en-BH"),
-        ("🇴🇲 English (OM) - Omani", "en-OM"),
-        ("🇯🇴 English (JO) - Jordanian", "en-JO"),
-        ("🇱🇧 English (LB) - Lebanese", "en-LB"),
-    ]
-    
-    /// Other languages
-    private let otherLanguages: [(name: String, code: String)] = [
-        ("中文 (Mandarin)", "zh-Hans"),
-        ("日本語 (Japanese)", "ja-JP"),
-        ("한국어 (Korean)", "ko-KR"),
-        ("हिन्दी (Hindi)", "hi-IN"),
-        ("العربية (Arabic)", "ar-SA"),
-        ("Türkçe (Turkish)", "tr-TR"),
-        ("Bahasa Indonesia", "id-ID"),
-    ]
     
     var body: some View {
         VStack(spacing: 0) {
@@ -71,10 +29,10 @@ struct SettingsView: View {
                 
                 Spacer()
                 
-                Button("Done") {
-                    dismiss()
+                if showsDoneButton {
+                    Button("Done") { dismiss() }
+                        .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
             }
             .padding()
             
@@ -113,18 +71,22 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                     }
                     Slider(value: $overlayOpacity, in: 0.3...1.0, step: 0.05)
+
+                    Stepper("Short subtitle length: \(subtitleMaxWords) words", value: $subtitleMaxWords, in: 6...18)
+
+                    Toggle("Show original text", isOn: $showSubtitleOriginal)
                     
                     Toggle("Auto Scroll", isOn: $autoScroll)
                 }
                 
-                Section("Speech Recognition - Teacher's Accent") {
-                    Text("Auto mode tries all English accents while recording")
+                Section("Teacher Language / Model") {
+                    Text("Auto English selects one stable model from the system region")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     
-                    Picker("English Accent", selection: $recognitionLanguage) {
-                        ForEach(englishAccents, id: \.code) { accent in
-                            Text(accent.name).tag(accent.code)
+                    Picker("Language", selection: $recognitionLanguage) {
+                        ForEach(LanguageOptions.sources) { language in
+                            Text(language.name).tag(language.code)
                         }
                     }
                     
@@ -140,61 +102,51 @@ struct SettingsView: View {
                     }
                 }
                 
-                Section("Other Languages") {
-                    Text("Or select if teacher speaks another language")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    Picker("Language", selection: $recognitionLanguage) {
-                        ForEach(otherLanguages, id: \.code) { lang in
-                            Text(lang.name).tag(lang.code)
-                        }
-                    }
-                }
-                
                 Section("Translation") {
                     Picker("Target Language", selection: $translationTarget) {
-                        Text("中文 (Simplified)").tag("zh-Hans")
-                        Text("中文 (Traditional)").tag("zh-Hant")
-                        Text("日本語").tag("ja-JP")
-                        Text("한국어").tag("ko-KR")
-                        Text("English").tag("en-GB")
-                        Text("العربية").tag("ar-SA")
-                        Text("Türkçe").tag("tr-TR")
+                        ForEach(LanguageOptions.targets) { language in
+                            Text(language.name).tag(language.code)
+                        }
                     }
                     
-                    if let manager = translationManager {
-                        HStack {
-                            Text("Model Status")
-                            Spacer()
-                            Text(modelStatusText(manager.modelReady))
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Button("Download Language Models") {
-                            startModelDownload(manager)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(manager.modelReady == true)
-                        
-                        if !manager.hasSession {
-                            Button("Download Language Packs in System Settings…") {
-                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.localization") {
-                                    NSWorkspace.shared.open(url)
-                                }
+                    if #available(macOS 15, *) {
+                        if let manager = translationManager {
+                            HStack {
+                                Text("Model Status")
+                                Spacer()
+                                Text(modelStatusText(manager.modelReady))
+                                    .foregroundColor(.secondary)
                             }
-                            .buttonStyle(.link)
-                        }
-                        
-                        if !modelStatusMessage.isEmpty {
-                            Text(modelStatusMessage)
+
+                            Button("Download Language Models") {
+                                startModelDownload(manager)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(manager.modelReady == true)
+
+                            if !manager.hasSession {
+                                Button("Download Language Packs in System Settings…") {
+                                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.localization") {
+                                        NSWorkspace.shared.open(url)
+                                    }
+                                }
+                                .buttonStyle(.link)
+                            }
+
+                            if !modelStatusMessage.isEmpty {
+                                Text(modelStatusMessage)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Text("Models download in the background. You can also pre-download them in the Translate app.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
-                        
-                        Text("Models download in the background. You can also pre-download them in the Translate app.")
+                    } else {
+                        Text("Realtime system translation requires macOS 15 or later. Speech transcripts can still be recorded.")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.orange)
                     }
                 }
                 
@@ -209,14 +161,14 @@ struct SettingsView: View {
                     HStack {
                         Text("Speech Engine")
                         Spacer()
-                        Text("Apple SpeechAnalyzer")
+                        Text("Apple SFSpeechRecognizer")
                             .foregroundColor(.secondary)
                     }
                     
                     HStack {
                         Text("Supported Accents")
                         Spacer()
-                        Text("\(englishAccents.count) accents")
+                        Text("\(LanguageOptions.sources.count) languages/models")
                             .foregroundColor(.secondary)
                     }
                 }
@@ -225,6 +177,7 @@ struct SettingsView: View {
         }
         .frame(minWidth: 450, minHeight: 550)
         .task {
+            recognitionLanguage = LanguageOptions.supportedSource(recognitionLanguage)
             await translationManager?.refreshModelStatus()
         }
     }

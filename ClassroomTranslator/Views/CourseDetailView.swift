@@ -2,106 +2,186 @@ import SwiftUI
 
 struct CourseDetailView: View {
     @Environment(HistoryStore.self) private var historyStore
-    @Environment(\.dismiss) private var dismiss
     let course: Course
+    var onDelete: (() -> Void)?
 
     @State private var showRecording = false
     @State private var showDeleteConfirm = false
+    @State private var showCourseSettings = false
     @State private var recordingTranslationManager = TranslationManager()
     @State private var selectedRecord: TranscriptRecord?
+    @State private var recordToDelete: TranscriptRecord?
+    @State private var searchText = ""
+    @State private var exportFeedback = ""
 
     var body: some View {
         Group {
             if showRecording {
-                StableRecordingView(
-                    course: course,
-                    historyStore: historyStore,
-                    translationManager: recordingTranslationManager,
-                    onClose: { showRecording = false }
-                )
-                .modifier(TranslationSessionCompat(manager: recordingTranslationManager))
+                StableRecordingView(course: course, historyStore: historyStore, translationManager: recordingTranslationManager) {
+                    showRecording = false
+                }
+                .modifier(TranslationSessionCompat(
+                    manager: recordingTranslationManager,
+                    sourceLanguage: course.accentCode,
+                    targetLanguage: course.effectiveTargetLanguageCode
+                ))
             } else {
                 courseOverview
             }
         }
-        .toolbar {
-            if !showRecording {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(role: .destructive, action: { showDeleteConfirm = true }) {
-                        Image(systemName: "trash")
-                    }
-                }
-            }
+        .sheet(item: $selectedRecord) { SessionDetailView(record: $0) }
+        .sheet(isPresented: $showCourseSettings) {
+            CourseSettingsEditor(course: course).environment(historyStore)
         }
+        .confirmationDialog("Delete Recording", isPresented: Binding(
+            get: { recordToDelete != nil },
+            set: { if !$0 { recordToDelete = nil } }
+        ), titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                if let recordToDelete { historyStore.deleteRecord(recordToDelete) }
+                recordToDelete = nil
+            }
+            Button("Cancel", role: .cancel) { recordToDelete = nil }
+        } message: { Text("This recording and its transcript will be permanently deleted.") }
+        .alert("Export", isPresented: Binding(
+            get: { !exportFeedback.isEmpty },
+            set: { if !$0 { exportFeedback = "" } }
+        )) {
+            Button("OK") { exportFeedback = "" }
+        } message: { Text(exportFeedback) }
         .confirmationDialog("Delete Course", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 historyStore.deleteCourse(course)
-                dismiss()
+                onDelete?()
             }
             Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Are you sure you want to delete this course? All recordings will be removed.")
-        }
-        .sheet(item: $selectedRecord) { record in
-            SessionDetailView(record: record)
-        }
+        } message: { Text("Are you sure you want to delete this course? All recordings will be removed.") }
     }
 
     private var courseOverview: some View {
-        let latestRecord = historyStore.recordsForCourse(course).first
-        return VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
                     Text(course.name).font(.title2).bold()
-                    Label(course.accentName, systemImage: "waveform")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    HStack {
+                        Label(course.accentName, systemImage: "waveform")
+                        Label(course.targetLanguageName, systemImage: "character.bubble")
+                    }
+                    .font(.caption).foregroundColor(.secondary)
                 }
                 Spacer()
-                Button(action: { showRecording = true }) {
-                    Label("New Recording", systemImage: "mic.fill")
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding()
+                Button { showCourseSettings = true } label: { Label("Course Settings", systemImage: "slider.horizontal.3") }
+                Button { showRecording = true } label: { Label("New Recording", systemImage: "mic.fill") }
+                    .buttonStyle(.borderedProminent)
+            }.padding()
             Divider()
-            if let record = latestRecord, !record.segments.isEmpty {
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("Latest recording").font(.headline)
-                        Spacer()
-                        Button { selectedRecord = record } label: { Label("Edit", systemImage: "pencil") }
-                        Button { ExportManager.exportWord(record: record) } label: { Label("Export Word", systemImage: "doc.richtext") }
-                            .buttonStyle(.borderedProminent)
-                    }.padding()
-                    ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text(record.fullTranscript)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                            .background(Color(nsColor: .controlBackgroundColor))
-                            .cornerRadius(8)
-                        Text(record.fullTranslation)
-                            .foregroundColor(.blue)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                            .background(Color.blue.opacity(0.05))
-                            .cornerRadius(8)
-                    }
-                    .padding()
-                    }
-                }
-            } else {
-                VStack(spacing: 16) {
-                    Image(systemName: "mic.circle")
-                        .font(.system(size: 50))
-                        .foregroundColor(.secondary)
-                    Text("No recordings yet").foregroundColor(.secondary)
-                    Button("Start First Recording") { showRecording = true }
-                        .buttonStyle(.bordered)
-                }
+
+            if filteredRecords.isEmpty {
+                ContentUnavailableView(
+                    searchText.isEmpty ? "No recordings yet" : "No Matching Recordings",
+                    systemImage: searchText.isEmpty ? "mic.circle" : "magnifyingglass",
+                    description: Text(searchText.isEmpty ? "Start a recording to create the first transcript." : "Try a different search term.")
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(filteredRecords) { record in
+                    HStack(spacing: 12) {
+                        Button { selectedRecord = record } label: {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(record.title).font(.headline)
+                                Text(record.date.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption).foregroundColor(.secondary)
+                                Text(record.fullTranscript).font(.caption).foregroundColor(.secondary).lineLimit(2)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }.buttonStyle(.plain)
+                        Menu {
+                            Button("View or Edit") { selectedRecord = record }
+                            Button("Export Word") { exportWord(record) }
+                            Button("Export Text") { exportText(record) }
+                            Divider()
+                            Button("Delete", role: .destructive) { recordToDelete = record }
+                        } label: { Image(systemName: "ellipsis.circle") }
+                    }.padding(.vertical, 4)
+                }
             }
         }
+        .searchable(text: $searchText, prompt: "Search recordings")
+        .toolbar {
+            ToolbarItem(placement: .secondaryAction) {
+                Button(role: .destructive) { showDeleteConfirm = true } label: { Image(systemName: "trash") }
+            }
+        }
+    }
+
+    private var filteredRecords: [TranscriptRecord] {
+        let records = historyStore.recordsForCourse(course).sorted { $0.date > $1.date }
+        guard !searchText.isEmpty else { return records }
+        return records.filter {
+            $0.title.localizedCaseInsensitiveContains(searchText)
+                || $0.fullTranscript.localizedCaseInsensitiveContains(searchText)
+                || $0.fullTranslation.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+
+    private func exportWord(_ record: TranscriptRecord) {
+        ExportManager.exportWord(record: record) { exportFeedback = exportMessage(for: $0) }
+    }
+
+    private func exportText(_ record: TranscriptRecord) {
+        ExportManager.exportSingle(record: record) { exportFeedback = exportMessage(for: $0) }
+    }
+
+    private func exportMessage(for result: Result<URL, Error>) -> String {
+        switch result {
+        case .success(let url): return String(localized: "Exported successfully: \(url.lastPathComponent)")
+        case .failure(let error): return error.localizedDescription
+        }
+    }
+}
+
+private struct CourseSettingsEditor: View {
+    @Environment(HistoryStore.self) private var historyStore
+    @Environment(\.dismiss) private var dismiss
+    let course: Course
+    @State private var name: String
+    @State private var source: String
+    @State private var target: String
+
+    init(course: Course) {
+        self.course = course
+        _name = State(initialValue: course.name)
+        _source = State(initialValue: course.accentCode)
+        _target = State(initialValue: course.effectiveTargetLanguageCode)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Text("Course Settings").font(.headline)
+                Spacer()
+                Button("Save", action: save).buttonStyle(.borderedProminent)
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }.padding()
+            Divider()
+            Form {
+                TextField("Course Name", text: $name)
+                Picker("Teacher Language / Model", selection: $source) {
+                    ForEach(LanguageOptions.sources) { Text($0.name).tag($0.code) }
+                }
+                Picker("Target Language", selection: $target) {
+                    ForEach(LanguageOptions.targets) { Text($0.name).tag($0.code) }
+                }
+            }.formStyle(.grouped)
+        }.frame(width: 480, height: 360)
+    }
+
+    private func save() {
+        course.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        course.accentCode = source
+        course.targetLanguageCode = target
+        historyStore.save()
+        dismiss()
     }
 }

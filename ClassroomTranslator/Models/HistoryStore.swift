@@ -8,25 +8,26 @@ import Observation
 final class HistoryStore {
     var courses: [Course] = []
     var records: [TranscriptRecord] = []
-    @ObservationIgnored private(set) var currentRecord: TranscriptRecord?
+    var lastErrorMessage = ""
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
     /// 防止 save() → fetchRecords() 同步通知观察者导致布局重入
     private var isSaving = false
 
-    init() {
-        setupContainer()
+    init(isStoredInMemoryOnly: Bool = false) {
+        setupContainer(isStoredInMemoryOnly: isStoredInMemoryOnly)
     }
 
-    private func setupContainer() {
-        let config = ModelConfiguration(isStoredInMemoryOnly: false)
+    private func setupContainer(isStoredInMemoryOnly: Bool) {
+        let config = ModelConfiguration(isStoredInMemoryOnly: isStoredInMemoryOnly)
         do {
             modelContainer = try ModelContainer(for: Course.self, TranscriptRecord.self, configurations: config)
             modelContext = modelContainer?.mainContext
             fetchCourses()
             fetchRecords()
+            migrateCourseTargetsIfNeeded()
         } catch {
-            print("Failed to setup model container: \(error)")
+            lastErrorMessage = error.localizedDescription
         }
     }
 
@@ -37,12 +38,16 @@ final class HistoryStore {
         do {
             courses = try modelContext?.fetch(descriptor) ?? []
         } catch {
-            print("Failed to fetch courses: \(error)")
+            lastErrorMessage = error.localizedDescription
         }
     }
 
     func addCourse(_ course: Course) {
+        if course.targetLanguageCode == nil {
+            course.targetLanguageCode = UserDefaults.standard.string(forKey: "translationTarget") ?? "zh-Hans"
+        }
         modelContext?.insert(course)
+        if !courses.contains(where: { $0.id == course.id }) { courses.insert(course, at: 0) }
         save()
     }
 
@@ -59,7 +64,7 @@ final class HistoryStore {
         do {
             records = try modelContext?.fetch(descriptor) ?? []
         } catch {
-            print("Failed to fetch records: \(error)")
+            lastErrorMessage = error.localizedDescription
         }
     }
 
@@ -67,38 +72,50 @@ final class HistoryStore {
         records.filter { $0.course?.id == course.id }
     }
 
-    func startNewRecord(in course: Course, title: String = "") {
-        if let existing = recordsForCourse(course).first {
-            currentRecord = existing
-            return
-        }
+    @discardableResult
+    func startNewRecord(in course: Course, title: String = "") -> TranscriptRecord {
         let record = TranscriptRecord(date: Date(), title: title.isEmpty ? formatTitle(Date()) : title)
         record.course = course
-        currentRecord = record
         modelContext?.insert(record)
-        // Keep recording startup free of SwiftData saves and observable array
-        // refreshes. On macOS 26/27 those updates can re-enter the hidden
-        // CourseDetailView while RecordingView is being laid out.
+        checkpoint(record)
+        return record
     }
 
-    func addSegmentIfNew(_ segment: TranscriptSegment) {
-        guard let record = currentRecord else { return }
+    func addSegmentIfNew(_ segment: TranscriptSegment, to record: TranscriptRecord) {
         var segs = record.segments
-        if let last = segs.last, last.original == segment.original { return }
+        if segs.contains(where: { $0.id == segment.id }) { return }
         segs.append(segment)
         record.segments = segs
-        record.duration = Date().timeIntervalSince(record.date)
-        // Persist once when recording ends. Per-segment saves invalidate the
-        // course view while the recording screen is being laid out.
     }
 
-    func addSegment(_ segment: TranscriptSegment) {
-        addSegmentIfNew(segment)
+    func updateTranslation(for segmentID: UUID, to translation: String, in record: TranscriptRecord) {
+        var segments = record.segments
+        guard let index = segments.firstIndex(where: { $0.id == segmentID }) else { return }
+        let old = segments[index]
+        segments[index] = TranscriptSegment(
+            id: old.id,
+            original: old.original,
+            translated: translation,
+            timestamp: old.timestamp,
+            isFinal: old.isFinal
+        )
+        record.segments = segments
     }
 
-    func stopCurrentRecord() {
-        currentRecord = nil
-        save()
+    func checkpoint(_ record: TranscriptRecord, duration: TimeInterval? = nil) {
+        if let duration { record.duration = duration }
+        do {
+            try modelContext?.save()
+            lastErrorMessage = ""
+        } catch {
+            lastErrorMessage = error.localizedDescription
+        }
+    }
+
+    func finishRecord(_ record: TranscriptRecord, duration: TimeInterval) {
+        checkpoint(record, duration: duration)
+        fetchCourses()
+        fetchRecords()
     }
 
     func deleteRecord(_ record: TranscriptRecord) {
@@ -111,12 +128,32 @@ final class HistoryStore {
         guard !isSaving else { return } // 防重入
         isSaving = true
         defer { isSaving = false }
-        try? modelContext?.save()
+        do {
+            try modelContext?.save()
+            lastErrorMessage = ""
+        } catch {
+            lastErrorMessage = error.localizedDescription
+        }
         // 延迟 fetch，让当前布局完成
         Task { @MainActor in
             self.fetchCourses()
             self.fetchRecords()
         }
+    }
+
+    private func migrateCourseTargetsIfNeeded() {
+        let fallback = UserDefaults.standard.string(forKey: "translationTarget") ?? "zh-Hans"
+        var changed = false
+        for course in courses where course.targetLanguageCode == nil {
+            course.targetLanguageCode = fallback
+            changed = true
+        }
+        if changed { checkpointMigration() }
+    }
+
+    private func checkpointMigration() {
+        do { try modelContext?.save() }
+        catch { lastErrorMessage = error.localizedDescription }
     }
 
     private func formatTitle(_ date: Date) -> String {

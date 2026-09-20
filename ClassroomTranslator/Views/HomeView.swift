@@ -1,135 +1,116 @@
 import SwiftUI
 
 struct HomeView: View {
+    private enum Destination: Hashable {
+        case courses
+        case history
+        case settings
+        case course(UUID)
+    }
+
     @Environment(HistoryStore.self) private var historyStore
+    @State private var selection: Destination? = .courses
     @State private var showNewCourse = false
-    @State private var selectedCourse: Course?
-    @State private var navigateToCourse = false
     @State private var courseToDelete: Course?
-    @State private var showDeleteConfirm = false
+    @State private var settingsTranslationManager = TranslationManager()
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if historyStore.courses.isEmpty {
-                    emptyState
-                } else {
-                    courseList
+        NavigationSplitView {
+            List(selection: $selection) {
+                Section {
+                    Label("Courses", systemImage: "books.vertical").tag(Destination.courses)
+                    Label("All Recordings", systemImage: "clock.arrow.circlepath").tag(Destination.history)
+                    Label("Settings", systemImage: "gearshape").tag(Destination.settings)
+                }
+
+                Section("My Courses") {
+                    ForEach(historyStore.courses) { course in
+                        HStack {
+                            Image(systemName: "book.fill").foregroundColor(.accentColor)
+                            VStack(alignment: .leading) {
+                                Text(course.name)
+                                Text("\(historyStore.recordsForCourse(course).count) recordings")
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                        }
+                        .tag(Destination.course(course.id))
+                        .contextMenu {
+                            Button("Delete Course", role: .destructive) {
+                                courseToDelete = course
+                            }
+                        }
+                    }
                 }
             }
-            .navigationTitle("My Courses")
+            .navigationTitle("LingoClass")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button(action: { showNewCourse = true }) {
-                        Image(systemName: "plus")
-                    }
+                    Button { showNewCourse = true } label: { Label("New Course", systemImage: "plus") }
                 }
             }
-            .navigationDestination(isPresented: $showNewCourse) {
-                NewCourseView(onCreate: { course in
-                    showNewCourse = false
-                    selectedCourse = course
-                    Task { @MainActor in navigateToCourse = true }
-                })
-            }
-            .navigationDestination(isPresented: $navigateToCourse) {
-                if let course = selectedCourse {
-                    CourseDetailView(course: course)
-                }
+            .navigationSplitViewColumnWidth(min: 210, ideal: 260)
+        } detail: {
+            detail
+        }
+        .sheet(isPresented: $showNewCourse) {
+            NewCourseView { course in
+                showNewCourse = false
+                selection = .course(course.id)
             }
         }
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "book.closed")
-                .font(.system(size: 60))
-                .foregroundColor(.secondary)
-            Text("No Courses Yet")
-                .font(.title2)
-                .foregroundColor(.secondary)
-            Text("Tap + to create your first course")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            Button(action: { showNewCourse = true }) {
-                Label("New Course", systemImage: "plus.circle.fill")
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var courseList: some View {
-        List {
-            ForEach(historyStore.courses) { course in
-                Button(action: {
-                    selectedCourse = course
-                    navigateToCourse = true
-                }) {
-                    courseRow(course)
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    Button(role: .destructive, action: {
-                        courseToDelete = course
-                        showDeleteConfirm = true
-                    }) {
-                        Label("Delete Course", systemImage: "trash")
-                    }
-                }
-            }
-            .onDelete(perform: deleteCourses)
-        }
-        .listStyle(.inset)
-        .confirmationDialog(
-            "Delete Course",
-            isPresented: $showDeleteConfirm,
-            titleVisibility: .visible
-        ) {
+        .confirmationDialog("Delete Course", isPresented: Binding(
+            get: { courseToDelete != nil }, set: { if !$0 { courseToDelete = nil } }
+        ), titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
-                if let course = courseToDelete {
-                    historyStore.deleteCourse(course)
-                    courseToDelete = nil
+                if let courseToDelete {
+                    historyStore.deleteCourse(courseToDelete)
+                    if selection == .course(courseToDelete.id) { selection = .courses }
                 }
+                courseToDelete = nil
             }
             Button("Cancel", role: .cancel) { courseToDelete = nil }
         } message: {
             Text("Are you sure you want to delete this course? All recordings will be removed.")
         }
+        .modifier(TranslationSessionCompat(manager: settingsTranslationManager))
+        .alert("Storage Error", isPresented: Binding(
+            get: { !historyStore.lastErrorMessage.isEmpty },
+            set: { if !$0 { historyStore.lastErrorMessage = "" } }
+        )) {
+            Button("OK") { historyStore.lastErrorMessage = "" }
+        } message: {
+            Text(historyStore.lastErrorMessage)
+        }
     }
 
-    private func courseRow(_ course: Course) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "book.fill")
-                    .font(.title2)
-                    .foregroundColor(.accentColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(course.name)
-                        .font(.title3).bold()
-                    Text(course.createdAt.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .foregroundColor(.secondary)
+    @ViewBuilder
+    private var detail: some View {
+        switch selection {
+        case .course(let id):
+            if let course = historyStore.courses.first(where: { $0.id == id }) {
+                CourseDetailView(course: course) { selection = .courses }
+            } else {
+                coursesOverview
             }
-            HStack(spacing: 16) {
-                Label(course.accentName, systemImage: "waveform")
-                Label("\(historyStore.recordsForCourse(course).count) 次录音",
-                      systemImage: "mic.fill")
-            }
-            .font(.subheadline)
-            .foregroundColor(.secondary)
+        case .history:
+            HistoryView(showsDoneButton: false)
+        case .settings:
+            SettingsView(translationManager: settingsTranslationManager, showsDoneButton: false)
+        case .courses, .none:
+            coursesOverview
         }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 8)
     }
 
-    private func deleteCourses(at offsets: IndexSet) {
-        for index in offsets {
-            historyStore.deleteCourse(historyStore.courses[index])
-        }
+    private var coursesOverview: some View {
+        VStack(spacing: 18) {
+            if historyStore.courses.isEmpty {
+                ContentUnavailableView("No Courses Yet", systemImage: "book.closed", description: Text("Create a course to start translating lectures."))
+                Button("New Course") { showNewCourse = true }.buttonStyle(.borderedProminent)
+            } else {
+                Image(systemName: "books.vertical.fill").font(.system(size: 48)).foregroundColor(.accentColor)
+                Text("Select a course from the sidebar").font(.title2)
+                Text("Each new recording is saved as a separate transcript.").foregroundColor(.secondary)
+            }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
