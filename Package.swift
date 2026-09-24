@@ -7,7 +7,6 @@ let package = Package(
     platforms: [
         .macOS(.v26)
     ],
-    swiftLanguageModes: [.v5],
     products: [
         .executable(name: "ClassroomTranslator", targets: ["ClassroomTranslator"])
     ],
@@ -27,5 +26,6 @@ let package = Package(
             dependencies: ["ClassroomTranslator"],
             path: "Tests/ClassroomTranslatorTests"
         )
-    ]
+    ],
+    swiftLanguageModes: [.v5]
 )
