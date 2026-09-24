@@ -263,7 +263,7 @@ final class SpeechManager {
         guard fullText != lastPartialText else { return }
         lastPartialText = fullText
 
-        let text: String
+        var text: String
         if committedText.isEmpty {
             text = fullText
         } else {

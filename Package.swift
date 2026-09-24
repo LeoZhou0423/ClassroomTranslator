@@ -4,6 +4,7 @@ import PackageDescription
 let package = Package(
     name: "ClassroomTranslator",
     defaultLocalization: "en",
+    swiftLanguageModes: [.v5],
     platforms: [
         .macOS(.v26)
     ],
