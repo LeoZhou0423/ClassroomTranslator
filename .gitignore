@@ -26,3 +26,8 @@ xcuserdata/
 *.moved-aside
 *.xcuserstate
 *.xcscmblueprint
+
+# Local model conversion cache
+Tools/accent/models/
+__pycache__/
+*.pyc

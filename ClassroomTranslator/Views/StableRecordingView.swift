@@ -173,6 +173,7 @@ final class StableRecordingViewController: NSViewController {
         generation += 1
         let currentGeneration = generation
         sessionState.beginStarting()
+        speechManager.configureContext(courseName: course.name)
         statusLabel.stringValue = String(localized: "Requesting speech recognition permission…")
         renderState()
 

@@ -14,6 +14,7 @@ struct TranslationSessionHost<Content: View>: View {
     let content: Content
 
     @AppStorage("recognitionLanguage") private var language = "auto"
+    @AppStorage("detectedRecognitionLanguage") private var detectedLanguage = ""
     @AppStorage("translationTarget") private var target = "zh-Hans"
     @State private var config = TranslationSession.Configuration(
         source: Locale.Language(identifier: "en"),
@@ -27,7 +28,7 @@ struct TranslationSessionHost<Content: View>: View {
         self.content = content
         let savedSource = UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "auto"
         let selectedSource = sourceLanguage ?? savedSource
-        let source = selectedSource == "auto" ? "en-US" : selectedSource
+        let source = TranslationManager.resolveAutoSource(selectedSource)
         let target = targetLanguage ?? UserDefaults.standard.string(forKey: "translationTarget") ?? "zh-Hans"
         let sessionTarget = Self.sessionTarget(source: source, desiredTarget: target)
         _config = State(initialValue: TranslationSession.Configuration(
@@ -40,12 +41,13 @@ struct TranslationSessionHost<Content: View>: View {
         content
             .onAppear {
                 Task { @MainActor in
-                    let source = (sourceLanguage ?? language) == "auto" ? "en-US" : (sourceLanguage ?? language)
+                    let source = TranslationManager.resolveAutoSource(sourceLanguage ?? language)
                     manager.configureLanguagePair(source: source, target: targetLanguage ?? target)
                     syncConfig()
                 }
             }
             .onChange(of: language) { _, _ in Task { @MainActor in syncConfig() } }
+            .onChange(of: detectedLanguage) { _, _ in Task { @MainActor in syncConfig() } }
             .onChange(of: target) { _, _ in Task { @MainActor in syncConfig() } }
             .onChange(of: sourceLanguage) { _, _ in Task { @MainActor in syncConfig() } }
             .onChange(of: targetLanguage) { _, _ in Task { @MainActor in syncConfig() } }
@@ -53,15 +55,15 @@ struct TranslationSessionHost<Content: View>: View {
                 Task { @MainActor in config.invalidate() }
             }
             .translationTask(config) { session in
-                let source = (sourceLanguage ?? language) == "auto" ? "en-US" : (sourceLanguage ?? language)
+                let source = TranslationManager.resolveAutoSource(sourceLanguage ?? language)
                 manager.attach(session: session, sourceLanguage: source, targetLanguage: targetLanguage ?? target)
             }
     }
 
     private func syncConfig() {
-        // auto → en-US；课程指定语言优先于全局设置，避免识别语言和翻译源语言不一致。
+        // Course language wins; auto follows the last detected recognition locale.
         let selectedSource = sourceLanguage ?? language
-        let src = selectedSource == "auto" ? "en-US" : selectedSource
+        let src = TranslationManager.resolveAutoSource(selectedSource)
         let tgt = targetLanguage ?? target
         manager.configureLanguagePair(source: src, target: tgt)
         let sessionTarget = Self.sessionTarget(source: src, desiredTarget: tgt)

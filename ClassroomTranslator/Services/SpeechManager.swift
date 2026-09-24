@@ -15,51 +15,35 @@ final class SpeechManager {
     var onLanguageModelStatusChanged: ((String) -> Void)?
     var onAudioLevelChanged: ((Float) -> Void)?
 
-    /// 音频引擎全部在后台队列跑，避免 start() 阻塞主线程
-    /// （那是"正在启动录音…"假死、全屏黑屏的根因）
     private let driver = AudioEngineDriver()
     private var isStarting = false
     private var recordingGeneration = 0
 
-    // MARK: - Pause-based fallback commit
     private var debounceWorkItem: DispatchWorkItem?
     private var lastPartialText = ""
     /// Last complete recognizer snapshot already committed to the transcript.
-    /// This must survive pause-timer resets so a later cumulative result cannot
-    /// replay old words.
     private var committedText = ""
-    /// 句末标点集合（断句必须有这些才真正分句）
-    private static let sentenceEndingPunctuation: Set<Character> = [".", "!", "?", "。", "！", "？", "…", ".", "!", "?", ".", "!", "?", ")", "]", "」", "』", "\"", "'", "\u{201D}", "\u{2019}"]
-    private static let sentenceEnders = CharacterSet(charactersIn: ".!?。！？…")
+    private var contextCourseName = ""
+    private let accentClassifier: AccentClassifier?
+    private var accentDetectionTask: Task<Void, Never>?
+    private var accentDetectionActive = false
 
-    /// 判断文本是否以句末标点结尾（真正完成了一个完整句意）
-    private static func hasSentenceEnding(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard let last = trimmed.last else { return false }
-        // 句末标点直接返回
-        if sentenceEndingPunctuation.contains(last) { return true }
-        // 英文缩写不误判（如 "U.S." "Dr."）—— 检查倒数第二个字符
-        if last == "." && trimmed.count >= 3 {
-            let idx = trimmed.index(trimmed.endIndex, offsetBy: -2)
-            if trimmed[idx].isUppercase { return false }
-        }
-        return false
-    }
-
-    /// 当前使用的语言代码
     private(set) var currentLanguageCode: String
 
     init() {
-        var savedLanguage = UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "en-GB"
-        // "auto" 不是合法 locale，绝不能拿去建识别器（之前这里 force unwrap 会崩）
+        var savedLanguage = UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "auto"
         if savedLanguage == "auto" || savedLanguage == "auto-detect" {
-            savedLanguage = "en-US"
+            savedLanguage = Self.safeAutomaticEnglishLocale()
         }
         currentLanguageCode = savedLanguage
-
+        accentClassifier = AccentClassifier(bundle: .module)
     }
 
-    /// 音频配置变化（锁屏/睡眠/插拔设备）时，录音已经没了，收尾并通知 UI
+    /// Course title feeds AnalysisContext so domain words bias recognition.
+    func configureContext(courseName: String) {
+        contextCourseName = courseName
+    }
+
     private func handleConfigurationChange() {
         guard isRecording || isStarting else { return }
         stopRecording()
@@ -76,56 +60,51 @@ final class SpeechManager {
     func switchLanguage(to languageCode: String) {
         guard languageCode != currentLanguageCode else { return }
         guard languageCode != "auto", languageCode != "auto-detect" else { return }
-
         currentLanguageCode = languageCode
         onLanguageModelStatusChanged?("")
     }
 
-    /// 检查模型状态并通知 UI
-    private func checkAndNotifyModelStatus(_ recognizer: SFSpeechRecognizer, languageCode: String) async {
-        // supportsOnDeviceRecognition = false 说明模型未下载
-        if recognizer.supportsOnDeviceRecognition {
-            onLanguageModelStatusChanged?("")  // 就绪，清空提示
-        } else {
-            onLanguageModelStatusChanged?("Downloading \(languageCode) speech model…")
-            // 等几秒让系统开始下载，再检查一次
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if recognizer.supportsOnDeviceRecognition {
-                onLanguageModelStatusChanged?("\(languageCode) model ready.")
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                onLanguageModelStatusChanged?("")
-            } else {
-                onLanguageModelStatusChanged?("\(languageCode) model is downloading in the background. You can start recording — it will work once the model finishes.")
-            }
-        }
-    }
-
-    /// Auto 模式：批量下载所有英语口音模型
     static let allEnglishLocales = [
         "en-US", "en-GB", "en-AU", "en-NZ", "en-IE", "en-ZA", "en-CA", "en-IN"
     ]
 
+    static func safeAutomaticEnglishLocale() -> String {
+        AccentClassifier.defaultLocale
+    }
+
     func downloadAllEnglishModels() async -> (ready: Int, total: Int) {
         var ready = 0
         let total = Self.allEnglishLocales.count
-        for code in Self.allEnglishLocales {
-            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: code)) else { continue }
-            if recognizer.supportsOnDeviceRecognition {
+        let installed = Set(DictationTranscriber.installedLocales.map(\.identifier))
+
+        for (index, code) in Self.allEnglishLocales.enumerated() {
+            if installed.contains(code) {
                 ready += 1
-            } else {
-                // 触发系统下载（创建实例即可，系统自动开始）
-                _ = recognizer
-                onLanguageModelStatusChanged?("Downloading \(code)… (\(ready + 1)/\(total))")
-                // 等待模型下载完成（最多15秒）
-                for _ in 0..<15 {
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    if recognizer.supportsOnDeviceRecognition {
-                        ready += 1
-                        break
-                    }
-                }
+                continue
+            }
+            guard let locale = await DictationTranscriber.supportedLocale(
+                equivalentTo: Locale(identifier: code)
+            ) else { continue }
+
+            let transcriber = DictationTranscriber(
+                locale: locale,
+                preset: .progressiveLongDictation
+            )
+            onLanguageModelStatusChanged?("Downloading \(code)… (\(index + 1)/\(total))")
+            let status = await AssetInventory.status(forModules: [transcriber])
+            if status == .installed {
+                ready += 1
+                continue
+            }
+            if status == .unsupported { continue }
+            if let request = try? await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+                try? await request.downloadAndInstall()
+            }
+            if await AssetInventory.status(forModules: [transcriber]) == .installed {
+                ready += 1
             }
         }
+
         onLanguageModelStatusChanged?("\(ready)/\(total) English models ready.")
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         onLanguageModelStatusChanged?("")
@@ -164,28 +143,38 @@ final class SpeechManager {
         let generation = recordingGeneration
         defer { isStarting = false }
 
-        // 没有麦克风/输入设备时直接失败，而不是访问引擎触发异常崩溃
         guard AVCaptureDevice.default(for: .audio) != nil else {
             throw SpeechError.noInputDevice
         }
 
-        // 引擎启动放后台队列；慢/失败都不占用主线程
+        let phrases = currentContextPhrases()
         do {
-            try await driver.start(localeIdentifier: currentLanguageCode, onInterruption: { [weak self] in
-                Task { @MainActor in
-                    guard let self, self.recordingGeneration == generation else { return }
-                    self.handleConfigurationChange()
+            try await driver.start(
+                localeIdentifier: currentLanguageCode,
+                contextPhrases: phrases,
+                onInterruption: { [weak self] in
+                    Task { @MainActor in
+                        guard let self, self.recordingGeneration == generation else { return }
+                        self.handleConfigurationChange()
+                    }
+                },
+                onAudioLevel: { [weak self] level in
+                    Task { @MainActor in
+                        self?.onAudioLevelChanged?(level)
+                    }
+                },
+                onModelStatus: { [weak self] message in
+                    Task { @MainActor in
+                        self?.onLanguageModelStatusChanged?(message)
+                    }
+                },
+                onRecognition: { [weak self] text, isFinal in
+                    Task { @MainActor in
+                        guard let self, self.recordingGeneration == generation else { return }
+                        self.handleRecognition(text: text, isFinal: isFinal)
+                    }
                 }
-            }, onAudioLevel: { [weak self] level in
-                Task { @MainActor in
-                    self?.onAudioLevelChanged?(level)
-                }
-            }, onRecognition: { [weak self] result, error in
-                Task { @MainActor in
-                    guard let self, self.recordingGeneration == generation else { return }
-                    self.handleRecognition(result: result, error: error)
-                }
-            })
+            )
         } catch {
             stopRecording()
             throw error
@@ -194,96 +183,134 @@ final class SpeechManager {
         isRecording = true
     }
 
-    private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
-        if error != nil {
-            stopRecording()
-            onRecordingInterrupted?()
-            return
-        }
-        guard let result else { return }
-        let fullText = result.bestTranscription.formattedString
-        guard fullText != lastPartialText || result.isFinal else { return }
-        lastPartialText = fullText
+    private func currentContextPhrases() -> [String] {
+        RecognitionContextProvider.phrases(
+            courseName: contextCourseName,
+            recentText: committedText
+        )
+    }
 
-        if result.isFinal {
+    private func handleRecognition(text: String, isFinal: Bool) {
+        if isFinal {
             debounceWorkItem?.cancel()
             debounceWorkItem = nil
-            defer { restartRecognitionAfterFinalResult() }
-            let incremental = RecognitionTextDelta.unseenText(after: committedText, in: fullText)
-            guard !incremental.trimmingCharacters(in: Self.sentenceEnders).isEmpty else {
-                currentText = ""
-                resetPauseModel()
-                committedText = fullText
-                return
+            commitFinal(text)
+        } else {
+            updatePartial(fullText: text)
+        }
+    }
+
+    private func commitFinal(_ finalText: String) {
+        var delta: String
+        if committedText.isEmpty {
+            delta = finalText
+            committedText = finalText
+        } else if finalText.hasPrefix(committedText) {
+            delta = RecognitionTextDelta.unseenText(after: committedText, in: finalText)
+            committedText = finalText
+        } else {
+            let extensionDelta = RecognitionTextDelta.unseenText(after: committedText, in: finalText)
+            if extensionDelta != finalText, !extensionDelta.isEmpty, finalText.hasSuffix(extensionDelta) {
+                // Cumulative snapshot that extends committed text via revision anchor.
+                delta = extensionDelta
+                committedText = finalText
+            } else if RecognitionTextDelta.unseenText(after: "", in: finalText) == finalText
+                        && !wordSequenceContains(committedText, finalText) {
+                // Independent finalized passage for a later audio range.
+                delta = finalText
+                committedText = committedText + " " + finalText
+            } else {
+                // Already committed (short correction / replay).
+                delta = extensionDelta
+                if extensionDelta.isEmpty {
+                    currentText = ""
+                    resetPauseModel()
+                    return
+                }
+                committedText = finalText
             }
-            guard !incremental.isEmpty else {
-                currentText = ""
-                resetPauseModel()
-                committedText = fullText
-                return
-            }
-            onSegmentRecognized?(incremental, true)
+        }
+
+        let cleaned = delta.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else {
             currentText = ""
             resetPauseModel()
-            committedText = fullText
-        } else {
-            let text: String
-            if !committedText.isEmpty {
-                text = RecognitionTextDelta.unseenText(after: committedText, in: fullText)
-            } else {
-                text = fullText
-            }
-            guard !text.isEmpty else { return }
-            currentText = text
-            onSegmentRecognized?(text, false)
-            scheduleFallbackCommit(fullText: fullText, visibleText: text)
+            return
         }
+
+        let units = SentenceSplitter.commitUnits(from: cleaned)
+        for unit in units {
+            let piece = unit.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !piece.isEmpty else { continue }
+            onSegmentRecognized?(piece, true)
+        }
+
+        currentText = ""
+        resetPauseModel()
+        pushContextUpdate()
+    }
+
+    private func wordSequenceContains(_ haystack: String, _ needle: String) -> Bool {
+        let normalize: (String) -> String = {
+            $0.lowercased().split(whereSeparator: { $0.isWhitespace || $0.isPunctuation }).joined(separator: " ")
+        }
+        let h = normalize(haystack)
+        let n = normalize(needle)
+        return !n.isEmpty && h.contains(n)
+    }
+
+    private func updatePartial(fullText: String) {
+        guard fullText != lastPartialText else { return }
+        lastPartialText = fullText
+
+        let text: String
+        if committedText.isEmpty {
+            text = fullText
+        } else {
+            text = RecognitionTextDelta.unseenText(after: committedText, in: fullText)
+            // Range-only volatile hypothesis after committed finals: show as new tail.
+            if text.isEmpty, !fullText.isEmpty, !fullText.hasPrefix(committedText) {
+                let candidate = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidate.isEmpty, !committedText.contains(candidate) {
+                    text = candidate
+                }
+            }
+        }
+        guard !text.isEmpty else { return }
+        currentText = text
+        onSegmentRecognized?(text, false)
+        scheduleFallbackCommit(fullText: fullText, visibleText: text)
     }
 
     /// 只在长时间无新结果时才提交（fallback），正常情况靠 isFinal 提交
     private func scheduleFallbackCommit(fullText: String, visibleText: String) {
         debounceWorkItem?.cancel()
         let delay: TimeInterval = {
-            if Self.hasSentenceEnding(visibleText) { return 1.2 }
+            if SentenceSplitter.hasSentenceEnding(visibleText) { return 1.2 }
             if visibleText.count >= 100 { return 2.0 }
             return 3.0
         }()
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self, self.isRecording, self.lastPartialText == fullText else { return }
-                let incremental = RecognitionTextDelta.unseenText(after: self.committedText, in: fullText)
-                guard !incremental.trimmingCharacters(in: Self.sentenceEnders).isEmpty,
-                      !incremental.isEmpty else { return }
-                self.committedText = fullText
-                self.currentText = ""
-                self.onSegmentRecognized?(incremental, true)
+                self.commitFinal(fullText)
             }
         }
         debounceWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
-    /// A final SFSpeech result closes that recognition task even though the
-    /// microphone engine may still be running. Start a fresh task so long
-    /// lectures continue producing results after a spontaneous finalization.
-    private func restartRecognitionAfterFinalResult() {
-        guard isRecording, !isStarting else { return }
-        isRecording = false
-        resetPauseModel(clearRecognitionContext: true)
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                try await self.startRecording()
-            } catch {
-                self.stopRecording()
-                self.onRecordingInterrupted?()
-            }
-        }
+    private func pushContextUpdate() {
+        driver.updateContext(phrases: currentContextPhrases())
     }
 
     func stopRecording() {
-        // Invalidate callbacks before cancel(), including a start still awaiting the engine.
         recordingGeneration += 1
+        accentDetectionActive = false
+        accentDetectionTask?.cancel()
+        accentDetectionTask = nil
+        driver.onAccentSamples = nil
+        driver.setAccentCapture(enabled: false)
         debounceWorkItem?.cancel()
         debounceWorkItem = nil
         resetPauseModel(clearRecognitionContext: true)
@@ -298,25 +325,86 @@ final class SpeechManager {
 
     // MARK: - Auto language compatibility
 
-    /// macOS Speech does not expose safe live locale detection. Running several
-    /// SFSpeechRecognitionTasks against one microphone can deadlock speech services
-    /// on macOS 26/27, so Auto deliberately uses one stable English recognizer.
     func startAutoDetectRecording() async throws {
-        let locale = Self.safeAutomaticEnglishLocale()
-        currentLanguageCode = locale
+        UserDefaults.standard.removeObject(forKey: "detectedRecognitionLanguage")
+        currentLanguageCode = Self.safeAutomaticEnglishLocale()
+        accentDetectionActive = false
+        driver.onAccentSamples = nil
         try await startRecording()
+
+        guard let accentClassifier else {
+            driver.setAccentCapture(enabled: false)
+            return
+        }
+
+        let generation = recordingGeneration
+        driver.onAccentSamples = { [weak self] samples, sampleRate in
+            Task { @MainActor [weak self] in
+                guard let self, self.isRecording, self.recordingGeneration == generation else { return }
+                self.classifyAccent(samples, sampleRate: sampleRate, generation: generation, classifier: accentClassifier)
+            }
+        }
+        driver.setAccentCapture(enabled: true)
     }
 
-    private static func safeAutomaticEnglishLocale() -> String {
-        let region = Locale.current.region?.identifier ?? "US"
-        let candidate = "en-\(region)"
-        return allEnglishLocales.contains(candidate) ? candidate : "en-US"
+    private func classifyAccent(
+        _ samples: [Float],
+        sampleRate: Int,
+        generation: Int,
+        classifier: AccentClassifier
+    ) {
+        guard !accentDetectionActive else { return }
+        accentDetectionActive = true
+        driver.setAccentCapture(enabled: false)
+
+        accentDetectionTask?.cancel()
+        accentDetectionTask = Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                classifier.classify(monoSamples: samples, sampleRate: sampleRate)
+            }.value
+
+            guard !Task.isCancelled, let self else { return }
+            await self.applyDetectedAccent(result, generation: generation)
+        }
+    }
+
+    private func applyDetectedAccent(_ result: AccentClassifier.Result?, generation: Int) async {
+        guard let result,
+              isRecording,
+              recordingGeneration == generation else { return }
+
+        let locale = result.localeIdentifier
+        guard result.confidence >= AccentClassifier.confidenceThreshold,
+              locale != currentLanguageCode else {
+            onLanguageModelStatusChanged?("")
+            return
+        }
+
+        onLanguageModelStatusChanged?("Detected \(locale) (\(result.accent))…")
+        UserDefaults.standard.set(locale, forKey: "detectedRecognitionLanguage")
+        currentLanguageCode = locale
+        driver.onAccentSamples = nil
+
+        if !currentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            commitFinal(currentText)
+        }
+        let savedCommittedText = committedText
+        isRecording = false
+        do {
+            try await startRecording()
+            onLanguageModelStatusChanged?("Detected \(locale).")
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            onLanguageModelStatusChanged?("")
+        } catch {
+            committedText = savedCommittedText
+            isRecording = false
+            onRecordingInterrupted?()
+        }
     }
 
     func stopAutoDetectRecording() {
         stopRecording()
     }
-
 }
 
 enum SpeechError: LocalizedError {

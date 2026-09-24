@@ -6,39 +6,31 @@ on:
   workflow_dispatch:
 
 jobs:
-  compatibility:
-    name: Verify macOS 26
+  build:
+    name: Build and test on macOS 26
     runs-on: macos-26
     steps:
     - uses: actions/checkout@v4
-    - name: Build and test with the current SDK
+
+    - name: Show toolchain
       run: |
         sw_vers
         swift --version
-        swift build -c release
-        swift test
 
-  build:
-    runs-on: macos-15
-    
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      
-    - name: Select Xcode 16.4
-      run: sudo xcode-select -s /Applications/Xcode_16.4.app
-      
     - name: Build Release
       run: swift build -c release
-      
-    - name: Test recording startup
+
+    - name: Test
       run: swift test
-      
+
     - name: Create App Bundle
       run: |
         mkdir -p LingoClass.app/Contents/MacOS
         mkdir -p LingoClass.app/Contents/Resources
         cp .build/release/ClassroomTranslator LingoClass.app/Contents/MacOS/LingoClass
+        if [ -d .build/release/ClassroomTranslator_ClassroomTranslator.bundle ]; then
+          cp -R .build/release/ClassroomTranslator_ClassroomTranslator.bundle LingoClass.app/Contents/Resources/
+        fi
         if [ -d ClassroomTranslator/Resources ]; then
           cp -R ClassroomTranslator/Resources/*.lproj LingoClass.app/Contents/Resources/
         fi
@@ -50,14 +42,12 @@ jobs:
           sips -z 64 64 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_32x32@2x.png > /dev/null
           sips -z 128 128 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_128x128.png > /dev/null
           sips -z 256 256 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_128x128@2x.png > /dev/null
-          sips -z 256 256 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_256x256.png > /dev/null
-          sips -z 512 512 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_256x256@2x.png > /dev/null
-          sips -z 512 512 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_512x512.png > /dev/null
-          sips -z 1024 1024 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_512x512@2x.png > /dev/null
+          sips -z 512 512 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_256x256.png > /dev/null
+          sips -z 1024 1024 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_256x256@2x.png > /dev/null
           iconutil -c icns LingoClass.iconset -o LingoClass.app/Contents/Resources/LingoClass.icns
           rm -rf LingoClass.iconset
         fi
-        
+
     - name: Create Info.plist
       run: |
         python3 -c "
@@ -73,7 +63,7 @@ jobs:
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>CFBundleExecutable</key><string>LingoClass</string>
             <key>CFBundleIconFile</key><string>LingoClass</string>
-            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <key>LSMinimumSystemVersion</key><string>26.0</string>
             <key>CFBundleDevelopmentRegion</key><string>en</string>
             <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string></array>
             <key>NSMicrophoneUsageDescription</key><string>This app needs microphone access to recognize speech.</string>
@@ -83,17 +73,17 @@ jobs:
         with open('LingoClass.app/Contents/Info.plist','w') as f:
             f.write(plist.strip())
         "
-        
+
     - name: Ad-hoc Sign App Bundle
       run: |
         chmod +x LingoClass.app/Contents/MacOS/LingoClass
         codesign --force --deep --sign - LingoClass.app
         codesign --verify --deep --strict LingoClass.app
         codesign -dv LingoClass.app
-        
+
     - name: Create DMG
       run: hdiutil create -volname "LingoClass" -srcfolder LingoClass.app -ov -format UDZO LingoClass.dmg
-        
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:

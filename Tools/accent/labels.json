@@ -1,0 +1,43 @@
+{
+  "order": [
+    "england",
+    "us",
+    "canada",
+    "australia",
+    "indian",
+    "scotland",
+    "ireland",
+    "african",
+    "malaysia",
+    "newzealand",
+    "southatlandtic",
+    "bermuda",
+    "philippines",
+    "hongkong",
+    "wales",
+    "singapore"
+  ],
+  "accentToLocale": {
+    "england": "en-GB",
+    "scotland": "en-GB",
+    "wales": "en-GB",
+    "us": "en-US",
+    "canada": "en-CA",
+    "australia": "en-AU",
+    "indian": "en-IN",
+    "ireland": "en-IE",
+    "african": "en-ZA",
+    "southatlandtic": "en-ZA",
+    "malaysia": "en-GB",
+    "singapore": "en-GB",
+    "hongkong": "en-GB",
+    "bermuda": "en-US",
+    "philippines": "en-US",
+    "newzealand": "en-NZ"
+  },
+  "sampleRate": 16000,
+  "numMels": 80,
+  "embDim": 192,
+  "outNeurons": 16,
+  "inputSeconds": 3.0
+}

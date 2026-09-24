@@ -8,7 +8,7 @@ enum LanguageOptions {
     }
 
     static let sources: [Option] = [
-        Option(name: "Auto English (system region)", code: "auto"),
+        Option(name: "Auto English (detect accent)", code: "auto"),
         Option(name: "English (US)", code: "en-US"),
         Option(name: "English (UK)", code: "en-GB"),
         Option(name: "English (Australia)", code: "en-AU"),

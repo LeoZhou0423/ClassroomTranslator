@@ -51,8 +51,17 @@ final class TranslationManager {
         sessionRefreshToken += 1
     }
 
+    nonisolated static func resolveAutoSource(_ source: String) -> String {
+        guard source == "auto" || source == "auto-detect" else { return source }
+        if let detected = UserDefaults.standard.string(forKey: "detectedRecognitionLanguage"),
+           !detected.isEmpty {
+            return detected
+        }
+        return "en-GB"
+    }
+
     func configureLanguagePair(source: String, target: String) {
-        sourceLanguageCode = source == "auto" ? "en-US" : source
+        sourceLanguageCode = Self.resolveAutoSource(source)
         targetLanguageCode = target
         if Self.baseLanguage(sourceLanguageCode) == Self.baseLanguage(targetLanguageCode) {
             modelReady = true

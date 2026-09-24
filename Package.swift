@@ -5,7 +5,7 @@ let package = Package(
     name: "ClassroomTranslator",
     defaultLocalization: "en",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v26)
     ],
     products: [
         .executable(name: "ClassroomTranslator", targets: ["ClassroomTranslator"])
@@ -15,7 +15,11 @@ let package = Package(
             name: "ClassroomTranslator",
             path: "ClassroomTranslator",
             resources: [
-                .process("Resources")
+                .copy("Resources/AccentECAPA.mlpackage"),
+                .copy("Resources/labels.json"),
+                .copy("Resources/zh-Hans.lproj"),
+                .copy("Resources/AppIcon.svg"),
+                .copy("Resources/AppIcon.png")
             ]
         ),
         .testTarget(

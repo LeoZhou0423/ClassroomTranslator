@@ -80,7 +80,7 @@ struct SettingsView: View {
                 }
                 
                 Section("Teacher Language / Model") {
-                    Text("Auto English selects one stable model from the system region")
+                    Text("Auto English starts with UK English, then detects the teacher’s accent and switches if needed")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     
@@ -161,7 +161,7 @@ struct SettingsView: View {
                     HStack {
                         Text("Speech Engine")
                         Spacer()
-                        Text("Apple SFSpeechRecognizer")
+                        Text("Apple SpeechAnalyzer")
                             .foregroundColor(.secondary)
                     }
                     
