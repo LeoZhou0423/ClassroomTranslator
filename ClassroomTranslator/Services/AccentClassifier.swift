@@ -71,43 +71,41 @@ final class AccentClassifier: @unchecked Sendable {
             return nil
         }
         self.inputName = inputFeature.name
-        self.inputShape = inputFeature.multiArrayConstraint.shape
+        self.inputShape = inputFeature.multiArrayConstraint?.shape ?? []
         guard let outputFeature = modelDescription.outputDescriptionsByName.values.first else {
             return nil
         }
         self.outputName = outputFeature.name
 
-        let meta = model.modelDescription.metadata.userDefined
         let bundledLabelsURL = bundle.url(forResource: "labels", withExtension: "json")
             ?? bundle.url(forResource: "labels", withExtension: "json", subdirectory: "Resources")
-        if let orderJSON = meta["labels"],
-           let data = orderJSON.data(using: .utf8),
-           let arr = try? JSONSerialization.jsonObject(with: data) as? [String] {
-            self.labels = arr
-        } else if let labelsURL = bundledLabelsURL,
-                  let data = try? Data(contentsOf: labelsURL),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let arr = obj["order"] as? [String] {
-            self.labels = arr
-        } else {
-            self.labels = [
-                "england", "us", "canada", "australia", "indian", "scotland",
-                "ireland", "african", "malaysia", "newzealand", "southatlandtic",
-                "bermuda", "philippines", "hongkong", "wales", "singapore",
-            ]
+        var resolvedLabels = [
+            "england", "us", "canada", "australia", "indian", "scotland",
+            "ireland", "african", "malaysia", "newzealand", "southatlandtic",
+            "bermuda", "philippines", "hongkong", "wales", "singapore",
+        ]
+        var resolvedSampleRate = 16_000
+        var resolvedInputSeconds = 3.0
+        var resolvedNumSamples = 48_000
+        if let labelsURL = bundledLabelsURL,
+           let data = try? Data(contentsOf: labelsURL),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let order = object["order"] as? [String], !order.isEmpty {
+                resolvedLabels = order
+            }
+            if let sampleRate = (object["sampleRate"] as? NSNumber)?.intValue, sampleRate > 0 {
+                resolvedSampleRate = sampleRate
+            }
+            if let seconds = (object["inputSeconds"] as? NSNumber)?.doubleValue, seconds > 0 {
+                resolvedInputSeconds = seconds
+                resolvedNumSamples = Int((Double(resolvedSampleRate) * seconds).rounded())
+            }
         }
 
-        self.sampleRate = Int(meta["sampleRate"] ?? "") ?? 16000
-        if let seconds = Double(meta["inputSeconds"] ?? "") {
-            self.inputSeconds = seconds
-        } else {
-            self.inputSeconds = 3.0
-        }
-        if let n = Int(meta["numSamples"] ?? "") {
-            self.numSamples = n
-        } else {
-            self.numSamples = Int((Double(sampleRate) * inputSeconds).rounded())
-        }
+        self.labels = resolvedLabels
+        self.sampleRate = resolvedSampleRate
+        self.inputSeconds = resolvedInputSeconds
+        self.numSamples = resolvedNumSamples
     }
 
     func classify(monoSamples: [Float], sampleRate inputSR: Int = 16000) -> Result? {
@@ -127,16 +125,10 @@ final class AccentClassifier: @unchecked Sendable {
         guard let array = try? MLMultiArray(shape: shape, dataType: .float32) else {
             return nil
         }
-        samples.withUnsafeBufferPointer { buf in
-            let capacity = array.count
-            let dst = array.dataMemory.bindMemory(to: Float.self, capacity: capacity)
-            let count = min(capacity, min(numSamples, buf.count))
-            if let base = buf.baseAddress {
-                dst.update(from: base, count: count)
-            }
-            if count < capacity {
-                for i in count..<capacity { dst[i] = 0 }
-            }
+        let capacity = array.count
+        let count = min(capacity, min(numSamples, samples.count))
+        for index in 0..<capacity {
+            array[index] = NSNumber(value: index < count ? samples[index] : 0)
         }
 
         guard let provider = try? MLDictionaryFeatureProvider(dictionary: [inputName: array]) else {

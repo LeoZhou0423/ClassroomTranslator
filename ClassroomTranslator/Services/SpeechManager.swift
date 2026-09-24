@@ -75,7 +75,7 @@ final class SpeechManager {
     func downloadAllEnglishModels() async -> (ready: Int, total: Int) {
         var ready = 0
         let total = Self.allEnglishLocales.count
-        let installed = Set(DictationTranscriber.installedLocales.map(\.identifier))
+        let installed = Set(await DictationTranscriber.installedLocales.map(\.identifier))
 
         for (index, code) in Self.allEnglishLocales.enumerated() {
             if installed.contains(code) {

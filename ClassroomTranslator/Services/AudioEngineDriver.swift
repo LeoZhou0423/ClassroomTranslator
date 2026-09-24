@@ -20,16 +20,13 @@ final class AudioEngineDriver: @unchecked Sendable {
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var analysisTask: Task<Void, Never>?
     private var resultsTask: Task<Void, Never>?
-    private var audioConverter27: Any?
     private var legacyConverter: AVAudioConverter?
     private var analyzerFormat: AVAudioFormat?
     private var isRunning = false
     private let accentTee = AccentAudioTee(targetSeconds: 2.5)
 
     var running: Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return isRunning
+        stateLock.withLock { isRunning }
     }
 
     var onAccentSamples: (@Sendable ([Float], Int) -> Void)? {
@@ -135,18 +132,17 @@ final class AudioEngineDriver: @unchecked Sendable {
             }
         }
 
-        stateLock.lock()
-        self.analyzer = analyzer
-        self.transcriber = transcriber
-        self.inputContinuation = continuation
-        self.analysisTask = analysisTask
-        self.resultsTask = resultsTask
-        self.analyzerFormat = format
-        stateLock.unlock()
+        stateLock.withLock {
+            self.analyzer = analyzer
+            self.transcriber = transcriber
+            self.inputContinuation = continuation
+            self.analysisTask = analysisTask
+            self.resultsTask = resultsTask
+            self.analyzerFormat = format
+        }
 
         do {
             try await startEngine(
-                modules: [transcriber],
                 analyzerFormat: format,
                 onInterruption: onInterruption,
                 onAudioLevel: onAudioLevel
@@ -156,16 +152,14 @@ final class AudioEngineDriver: @unchecked Sendable {
             throw error
         }
 
-        stateLock.lock()
-        isRunning = true
-        stateLock.unlock()
+        stateLock.withLock {
+            isRunning = true
+        }
     }
 
     /// Hot-update contextual strings so recognition follows recent lecture content.
     func updateContext(phrases: [String]) {
-        stateLock.lock()
-        let analyzer = self.analyzer
-        stateLock.unlock()
+        let analyzer = stateLock.withLock { self.analyzer }
         guard let analyzer, !phrases.isEmpty else { return }
         Task {
             let context = AnalysisContext()
@@ -179,29 +173,28 @@ final class AudioEngineDriver: @unchecked Sendable {
     }
 
     func stopAsync() async {
-        stateLock.lock()
-        isRunning = false
-        // Fresh session should be able to capture accent audio again if re-armed.
         accentTee.disable()
-        let engine = self.engine
-        let hadTap = tapInstalled
-        let observer = configurationObserver
-        let continuation = inputContinuation
-        let analysisTask = self.analysisTask
-        let resultsTask = self.resultsTask
-        let analyzer = self.analyzer
-        self.engine = nil
-        self.tapInstalled = false
-        self.configurationObserver = nil
-        self.inputContinuation = nil
-        self.analysisTask = nil
-        self.resultsTask = nil
-        self.analyzer = nil
-        self.transcriber = nil
-        self.audioConverter27 = nil
-        self.legacyConverter = nil
-        self.analyzerFormat = nil
-        stateLock.unlock()
+        let (engine, hadTap, observer, continuation, analysisTask, resultsTask, analyzer) = stateLock.withLock {
+            isRunning = false
+            let engine = self.engine
+            let hadTap = tapInstalled
+            let observer = configurationObserver
+            let continuation = inputContinuation
+            let analysisTask = self.analysisTask
+            let resultsTask = self.resultsTask
+            let analyzer = self.analyzer
+            self.engine = nil
+            self.tapInstalled = false
+            self.configurationObserver = nil
+            self.inputContinuation = nil
+            self.analysisTask = nil
+            self.resultsTask = nil
+            self.analyzer = nil
+            self.transcriber = nil
+            self.legacyConverter = nil
+            self.analyzerFormat = nil
+            return (engine, hadTap, observer, continuation, analysisTask, resultsTask, analyzer)
+        }
 
         if let observer {
             NotificationCenter.default.removeObserver(observer)
@@ -225,7 +218,6 @@ final class AudioEngineDriver: @unchecked Sendable {
     }
 
     private func startEngine(
-        modules: [any SpeechModule],
         analyzerFormat: AVAudioFormat,
         onInterruption: @escaping @Sendable () -> Void,
         onAudioLevel: @escaping @Sendable (Float) -> Void
@@ -233,28 +225,6 @@ final class AudioEngineDriver: @unchecked Sendable {
         guard let continuation = currentContinuation() else {
             throw AudioEngineError.startFailed
         }
-
-        let converter: Any?
-        if #available(macOS 27, *) {
-            let c = try await AnalyzerInputConverter.converter(compatibleWith: modules)
-            converter = c
-            stateLock.lock()
-            audioConverter27 = c
-            legacyConverter = nil
-            stateLock.unlock()
-        } else {
-            let engineProbe = AVAudioEngine()
-            let inputFormat = engineProbe.inputNode.outputFormat(forBus: 0)
-            guard let avConverter = AVAudioConverter(from: inputFormat, to: analyzerFormat) else {
-                throw AudioEngineError.formatUnavailable
-            }
-            converter = avConverter
-            stateLock.lock()
-            audioConverter27 = nil
-            legacyConverter = avConverter
-            stateLock.unlock()
-        }
-        _ = converter
 
         try await withCheckedThrowingContinuation { (continuationStart: CheckedContinuation<Void, Error>) in
             queue.async {
@@ -266,16 +236,11 @@ final class AudioEngineDriver: @unchecked Sendable {
                         throw AudioEngineError.formatUnavailable
                     }
 
-                    // Rebuild legacy converter against the live input format.
-                    if #available(macOS 27, *) {
-                        // AnalyzerInputConverter handles format conversion.
-                    } else {
-                        guard let avConverter = AVAudioConverter(from: format, to: analyzerFormat) else {
-                            throw AudioEngineError.formatUnavailable
-                        }
-                        self.stateLock.lock()
-                        self.legacyConverter = avConverter
-                        self.stateLock.unlock()
+                    guard let converter = AVAudioConverter(from: format, to: analyzerFormat) else {
+                        throw AudioEngineError.formatUnavailable
+                    }
+                    self.stateLock.withLock {
+                        self.legacyConverter = converter
                     }
 
                     input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -326,9 +291,7 @@ final class AudioEngineDriver: @unchecked Sendable {
     }
 
     private func currentContinuation() -> AsyncStream<AnalyzerInput>.Continuation? {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return inputContinuation
+        stateLock.withLock { inputContinuation }
     }
 
     private func yield(
@@ -336,24 +299,7 @@ final class AudioEngineDriver: @unchecked Sendable {
         analyzerFormat: AVAudioFormat,
         continuation: AsyncStream<AnalyzerInput>.Continuation
     ) {
-        if #available(macOS 27, *) {
-            stateLock.lock()
-            let converter = audioConverter27 as? AnalyzerInputConverter
-            stateLock.unlock()
-            guard let converter else { return }
-            do {
-                for input in try converter.convert(buffer, at: nil) {
-                    continuation.yield(input)
-                }
-            } catch {
-                // Drop buffers that cannot convert; next buffers may recover.
-            }
-            return
-        }
-
-        stateLock.lock()
-        let converter = legacyConverter
-        stateLock.unlock()
+        let converter = stateLock.withLock { legacyConverter }
         guard let converter else { return }
 
         let ratio = analyzerFormat.sampleRate / buffer.format.sampleRate
