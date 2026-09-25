@@ -253,7 +253,7 @@ final class AudioEngineDriver: @unchecked Sendable {
                     let format = input.outputFormat(forBus: 0)
                     guard format.sampleRate > 0,
                           format.channelCount > 0,
-                          format.bytesPerFrame > 0,
+                          format.streamDescription.pointee.mBytesPerFrame > 0,
                           format.isStandard else {
                         throw AudioEngineError.formatUnavailable
                     }

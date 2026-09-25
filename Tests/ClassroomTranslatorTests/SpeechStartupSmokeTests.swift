@@ -22,6 +22,8 @@ final class SpeechStartupSmokeTests: XCTestCase {
         manager.configureContext(courseName: "Machine Learning Systems and Algorithms")
         if let english = installed.first(where: { $0.identifier.hasPrefix("en") }) {
             manager.switchLanguage(to: english.identifier)
+        } else {
+            manager.switchLanguage(to: installed[0].identifier)
         }
 
         do {
