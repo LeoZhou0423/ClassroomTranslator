@@ -176,27 +176,38 @@ final class StableRecordingViewController: NSViewController {
         speechManager.configureContext(courseName: course.name)
         statusLabel.stringValue = String(localized: "Requesting speech recognition permission…")
         renderState()
+        StartupLog.mark("ui.begin accent=\(course.accentCode)")
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            StartupLog.mark("ui.request-speech-permission")
             guard await speechManager.requestSpeechPermission() else {
+                StartupLog.mark("ui.speech-permission-denied")
                 failStart(String(localized: "Speech recognition permission was denied."), generation: currentGeneration)
                 return
             }
             statusLabel.stringValue = String(localized: "Requesting microphone permission…")
+            StartupLog.mark("ui.request-mic-permission")
             guard await speechManager.requestMicPermission() else {
+                StartupLog.mark("ui.mic-permission-denied")
                 failStart(String(localized: "Microphone permission was denied."), generation: currentGeneration)
                 return
             }
             statusLabel.stringValue = String(localized: "Connecting microphone…")
+            StartupLog.mark("ui.start-operation accent=\(self.course.accentCode)")
             do {
                 let startError = await RecordingStartupStep.run(
                     timeoutNanoseconds: 20_000_000_000,
-                    onTimeout: { self.speechManager.stopRecording() },
+                    onTimeout: {
+                        StartupLog.mark("ui.start-timeout")
+                        self.speechManager.stopRecording()
+                    },
                     operation: {
                         if self.course.accentCode == "auto" {
+                            StartupLog.mark("ui.branch:auto")
                             try await self.speechManager.startAutoDetectRecording()
                         } else {
+                            StartupLog.mark("ui.branch:fixed \(self.course.accentCode)")
                             self.speechManager.switchLanguage(to: self.course.accentCode)
                             try await self.speechManager.startRecording()
                         }
@@ -214,7 +225,9 @@ final class StableRecordingViewController: NSViewController {
                 if overlayVisible { subtitleWindow.showWindow() }
                 statusLabel.stringValue = String(localized: "Recording · speak now")
                 renderState()
+                StartupLog.mark("ui.start-complete")
             } catch {
+                StartupLog.mark("ui.start-fail: \(error.localizedDescription)")
                 failStart(error.localizedDescription, generation: currentGeneration)
             }
         }

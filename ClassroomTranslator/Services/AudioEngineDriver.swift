@@ -52,12 +52,15 @@ final class AudioEngineDriver: @unchecked Sendable {
         onRecognition: @escaping RecognitionHandler
     ) async throws {
         await stopAsync()
+        StartupLog.mark("driver.enter locale=\(localeIdentifier)")
 
         guard let locale = await DictationTranscriber.supportedLocale(
             equivalentTo: Locale(identifier: localeIdentifier)
         ) else {
+            StartupLog.mark("driver.locale-unsupported")
             throw AudioEngineError.recognizerUnavailable
         }
+        StartupLog.mark("driver.locale-ok=\(locale.identifier)")
 
         let preset = DictationTranscriber.Preset.progressiveLongDictation
         let transcriber = DictationTranscriber(
@@ -67,16 +70,21 @@ final class AudioEngineDriver: @unchecked Sendable {
             reportingOptions: preset.reportingOptions,
             attributeOptions: preset.attributeOptions
         )
+        StartupLog.mark("driver.transcriber-created")
 
         let assetStatus = await AssetInventory.status(forModules: [transcriber])
+        StartupLog.mark("driver.asset-status=\(String(describing: assetStatus))")
         if assetStatus == .unsupported {
+            StartupLog.mark("driver.asset-unsupported")
             throw AudioEngineError.recognizerUnavailable
         }
         if assetStatus != .installed {
             onModelStatus("Downloading \(locale.identifier) speech model…")
+            StartupLog.mark("driver.asset-download-begin")
             if let request = try? await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                 try await request.downloadAndInstall()
             }
+            StartupLog.mark("driver.asset-download-end")
             let recheck = await AssetInventory.status(forModules: [transcriber])
             if recheck == .unsupported {
                 onModelStatus("")
@@ -86,6 +94,7 @@ final class AudioEngineDriver: @unchecked Sendable {
         } else {
             onModelStatus("")
         }
+        StartupLog.mark("driver.assets-done")
 
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let context = AnalysisContext()
@@ -95,9 +104,11 @@ final class AudioEngineDriver: @unchecked Sendable {
         try await analyzer.setContext(context)
 
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+            StartupLog.mark("driver.format-unavailable")
             throw AudioEngineError.formatUnavailable
         }
         try await analyzer.prepareToAnalyze(in: format)
+        StartupLog.mark("driver.prepared format=\(format.sampleRate)Hz")
 
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
 
@@ -147,7 +158,9 @@ final class AudioEngineDriver: @unchecked Sendable {
                 onInterruption: onInterruption,
                 onAudioLevel: onAudioLevel
             )
+            StartupLog.mark("driver.engine-started")
         } catch {
+            StartupLog.mark("driver.engine-failed: \(error.localizedDescription)")
             await stopAsync()
             throw error
         }
@@ -155,6 +168,7 @@ final class AudioEngineDriver: @unchecked Sendable {
         stateLock.withLock {
             isRunning = true
         }
+        StartupLog.mark("driver.start-done")
     }
 
     /// Hot-update contextual strings so recognition follows recent lecture content.

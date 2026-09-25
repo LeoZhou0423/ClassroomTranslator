@@ -112,8 +112,10 @@ final class SpeechManager {
     }
 
     func requestSpeechPermission() async -> Bool {
-        await withCheckedContinuation { continuation in
+        StartupLog.mark("sm.permission-speech-request")
+        return await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { @Sendable status in
+                StartupLog.mark("sm.permission-speech-result=\(status.rawValue)")
                 continuation.resume(returning: status == .authorized)
             }
         }
@@ -125,12 +127,15 @@ final class SpeechManager {
         case .authorized:
             return true
         case .notDetermined:
+            StartupLog.mark("sm.permission-mic-request")
             return await withCheckedContinuation { continuation in
                 AVCaptureDevice.requestAccess(for: .audio) { @Sendable granted in
+                    StartupLog.mark("sm.permission-mic-result=\(granted)")
                     continuation.resume(returning: granted)
                 }
             }
         default:
+            StartupLog.mark("sm.permission-mic-status=\(status.rawValue)")
             return false
         }
     }
@@ -143,7 +148,9 @@ final class SpeechManager {
         let generation = recordingGeneration
         defer { isStarting = false }
 
+        StartupLog.mark("sm.start-recording locale=\(currentLanguageCode)")
         guard AVCaptureDevice.default(for: .audio) != nil else {
+            StartupLog.mark("sm.no-input-device")
             throw SpeechError.noInputDevice
         }
 
@@ -176,11 +183,13 @@ final class SpeechManager {
                 }
             )
         } catch {
+            StartupLog.mark("sm.driver-start-failed: \(error.localizedDescription)")
             stopRecording()
             throw error
         }
         guard recordingGeneration == generation else { throw CancellationError() }
         isRecording = true
+        StartupLog.mark("sm.recording-started")
     }
 
     private func currentContextPhrases() -> [String] {
@@ -326,6 +335,7 @@ final class SpeechManager {
     // MARK: - Auto language compatibility
 
     func startAutoDetectRecording() async throws {
+        StartupLog.mark("sm.auto-enter")
         UserDefaults.standard.removeObject(forKey: "detectedRecognitionLanguage")
         currentLanguageCode = Self.safeAutomaticEnglishLocale()
         accentDetectionActive = false
@@ -333,6 +343,7 @@ final class SpeechManager {
         try await startRecording()
 
         guard let accentClassifier else {
+            StartupLog.mark("sm.accent-classifier-unavailable")
             driver.setAccentCapture(enabled: false)
             return
         }

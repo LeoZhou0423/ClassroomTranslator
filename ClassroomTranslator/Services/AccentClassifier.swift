@@ -60,7 +60,7 @@ final class AccentClassifier: @unchecked Sendable {
         }
 
         let config = MLModelConfiguration()
-        config.computeUnits = .all
+        config.computeUnits = .cpuOnly
         guard let model = try? MLModel(contentsOf: modelURL, configuration: config) else {
             return nil
         }
