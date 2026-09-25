@@ -56,8 +56,15 @@ final class SubtitleWindowController: NSWindowController {
     }
 
     @objc private func settingsDidChange(_ note: Notification) {
-        applyDisplaySettings()
-        renderLatestCue()
+        if Thread.isMainThread {
+            applyDisplaySettings()
+            renderLatestCue()
+        } else {
+            Task { @MainActor [weak self] in
+                self?.applyDisplaySettings()
+                self?.renderLatestCue()
+            }
+        }
     }
 
     deinit {

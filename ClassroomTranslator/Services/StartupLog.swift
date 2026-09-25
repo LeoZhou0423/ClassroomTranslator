@@ -3,6 +3,12 @@ import Foundation
 /// 启动流程面包屑：崩溃后没有 .ips 报告时，用这个日志定位死在哪一步。
 /// 写入 ~/Library/Logs/LingoClass-startup.log
 enum StartupLog {
+    static func markEnvironment() {
+        let os = ProcessInfo.processInfo.operatingSystemVersionString
+        let path = Bundle.main.bundlePath
+        mark("env os=\(os) path=\(path)")
+    }
+
     static func mark(_ event: String) {
         let stamp = ISO8601DateFormatter().string(from: Date())
         guard let data = "\(stamp) \(event)\n".data(using: .utf8) else { return }

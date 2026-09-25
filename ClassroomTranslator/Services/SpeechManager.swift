@@ -112,7 +112,7 @@ final class SpeechManager {
     }
 
     func requestSpeechPermission() async -> Bool {
-        StartupLog.mark("sm.permission-speech-request")
+        StartupLog.mark("sm.permission-speech-request status=\(SFSpeechRecognizer.authorizationStatus().rawValue)")
         return await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { @Sendable status in
                 StartupLog.mark("sm.permission-speech-result=\(status.rawValue)")
@@ -125,6 +125,7 @@ final class SpeechManager {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         switch status {
         case .authorized:
+            StartupLog.mark("sm.permission-mic-authorized")
             return true
         case .notDetermined:
             StartupLog.mark("sm.permission-mic-request")

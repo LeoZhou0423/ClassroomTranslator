@@ -176,6 +176,7 @@ final class StableRecordingViewController: NSViewController {
         speechManager.configureContext(courseName: course.name)
         statusLabel.stringValue = String(localized: "Requesting speech recognition permission…")
         renderState()
+        StartupLog.markEnvironment()
         StartupLog.mark("ui.begin accent=\(course.accentCode)")
 
         Task { @MainActor [weak self] in
