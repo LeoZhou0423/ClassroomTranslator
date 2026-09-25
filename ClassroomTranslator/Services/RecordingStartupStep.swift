@@ -7,39 +7,67 @@ final class RecordingStartupStep {
     private var continuation: CheckedContinuation<Error?, Never>?
     private var operationTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
+    private var onTimeout: (@MainActor () -> Void)?
+    private let timeoutNanoseconds: UInt64
+
+    init(timeoutNanoseconds: UInt64) {
+        self.timeoutNanoseconds = timeoutNanoseconds
+    }
 
     static func run(
         timeoutNanoseconds: UInt64,
         onTimeout: @escaping @MainActor () -> Void,
         operation: @escaping @MainActor () async throws -> Void
     ) async -> Error? {
-        let step = RecordingStartupStep()
-        return await withCheckedContinuation { continuation in
-            step.continuation = continuation
-            step.operationTask = Task { @MainActor in
+        await RecordingStartupStep(timeoutNanoseconds: timeoutNanoseconds)
+            .run(onTimeout: onTimeout, operation: operation)
+    }
+
+    func run(
+        onTimeout: @escaping @MainActor () -> Void,
+        operation: @escaping @MainActor () async throws -> Void
+    ) async -> Error? {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            self.onTimeout = onTimeout
+            self.operationTask = Task { @MainActor in
                 do {
                     try await operation()
-                    step.finish(nil)
+                    self.finish(nil)
                 } catch {
-                    step.finish(error)
+                    self.finish(error)
                 }
             }
-            step.timeoutTask = Task { @MainActor in
-                do {
-                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                } catch {
-                    return
-                }
-                guard step.continuation != nil else { return }
-                onTimeout()
-                step.finish(StartupError.timedOut)
+            self.scheduleTimeout()
+        }
+    }
+
+    func kick() {
+        guard continuation != nil else { return }
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        scheduleTimeout()
+    }
+
+    private func scheduleTimeout() {
+        guard continuation != nil, let onTimeout else { return }
+        let nanoseconds = timeoutNanoseconds
+        timeoutTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                return
             }
+            guard self.continuation != nil else { return }
+            onTimeout()
+            self.finish(StartupError.timedOut)
         }
     }
 
     private func finish(_ error: Error?) {
         guard let continuation else { return }
         self.continuation = nil
+        self.onTimeout = nil
         timeoutTask?.cancel()
         operationTask?.cancel()
         timeoutTask = nil

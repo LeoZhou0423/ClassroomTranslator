@@ -82,6 +82,13 @@ final class AudioEngineDriver: @unchecked Sendable {
             onModelStatus("Downloading \(locale.identifier) speech model…")
             StartupLog.mark("driver.asset-download-begin")
             if let request = try? await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+                let throttle = AssetProgressThrottle()
+                let observation = request.progress.observe(\.fractionCompleted, options: [.initial, .new]) { progress, _ in
+                    guard let percent = throttle.shouldReport(fraction: progress.fractionCompleted) else { return }
+                    StartupLog.mark("driver.asset-progress \(percent)%")
+                    onModelStatus("Downloading \(locale.identifier) speech model… (\(percent)%)")
+                }
+                defer { observation.invalidate() }
                 try await request.downloadAndInstall()
             }
             StartupLog.mark("driver.asset-download-end")
@@ -382,5 +389,21 @@ enum AudioEngineError: LocalizedError {
         case .noInputDevice:
             return String(localized: "No microphone or audio input device was found.")
         }
+    }
+}
+
+private final class AssetProgressThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastReportedAt: TimeInterval = 0
+
+    func shouldReport(fraction: Double) -> Int? {
+        guard fraction.isFinite else { return nil }
+        let now = Date().timeIntervalSinceReferenceDate
+        lock.lock()
+        defer { lock.unlock() }
+        guard now - lastReportedAt >= 1 else { return nil }
+        lastReportedAt = now
+        let clamped = min(max(fraction, 0), 1)
+        return Int((clamped * 100).rounded(.down))
     }
 }

@@ -27,6 +27,30 @@ final class RecordingStartupStepTests: XCTestCase {
     }
 
     @MainActor
+    func testKickExtendsCountdownForSlowOperation() async {
+        let step = RecordingStartupStep(timeoutNanoseconds: 250_000_000)
+        let error = await step.run(
+            onTimeout: { XCTFail("Progress kicks must keep the countdown alive") },
+            operation: {
+                for _ in 0..<6 {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                    step.kick()
+                }
+            }
+        )
+        XCTAssertNil(error)
+    }
+
+    @MainActor
+    func testKickAfterFinishIsIgnored() async {
+        let step = RecordingStartupStep(timeoutNanoseconds: 1_000_000_000)
+        let error = await step.run(onTimeout: {}, operation: {})
+        XCTAssertNil(error)
+        step.kick()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    @MainActor
     func testTimeoutReturnsBeforeUncooperativeOperationAndIgnoresLateSuccess() async {
         var pending: CheckedContinuation<Void, Never>?
         var timeoutCount = 0

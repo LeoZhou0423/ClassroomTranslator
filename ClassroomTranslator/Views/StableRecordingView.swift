@@ -59,6 +59,7 @@ final class StableRecordingViewController: NSViewController {
     private var translationCoordinator: LiveTranslationCoordinator!
     private var partialRevision = 0
     private var generation = 0
+    private var startupStep: RecordingStartupStep?
     private var timer: Timer?
     private var checkpointTimer: Timer?
     private var overlayVisible = true
@@ -206,9 +207,10 @@ final class StableRecordingViewController: NSViewController {
             }
             statusLabel.stringValue = String(localized: "Connecting microphone…")
             StartupLog.mark("ui.start-operation accent=\(self.course.accentCode)")
+            let startupStep = RecordingStartupStep(timeoutNanoseconds: 20_000_000_000)
+            self.startupStep = startupStep
             do {
-                let startError = await RecordingStartupStep.run(
-                    timeoutNanoseconds: 20_000_000_000,
+                let startError = await startupStep.run(
                     onTimeout: {
                         StartupLog.mark("ui.start-timeout")
                         self.speechManager.stopRecording()
@@ -224,6 +226,9 @@ final class StableRecordingViewController: NSViewController {
                         }
                     }
                 )
+                if self.startupStep === startupStep {
+                    self.startupStep = nil
+                }
                 if let startError { throw startError }
                 guard currentGeneration == generation, sessionState.phase == .starting else {
                     speechManager.stopRecording()
@@ -379,6 +384,7 @@ final class StableRecordingViewController: NSViewController {
         speechManager.onLanguageModelStatusChanged = { [weak self] message in
             guard let self, !message.isEmpty else { return }
             statusLabel.stringValue = message
+            startupStep?.kick()
         }
         speechManager.onSegmentRecognized = { [weak self] text, isFinal in
             guard let self, self.sessionState.phase == .recording else { return }
