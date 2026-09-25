@@ -86,11 +86,13 @@ final class AudioEngineDriver: @unchecked Sendable {
             }
             StartupLog.mark("driver.asset-download-end")
             let recheck = await AssetInventory.status(forModules: [transcriber])
-            if recheck == .unsupported {
+            StartupLog.mark("driver.asset-recheck=\(String(describing: recheck))")
+            guard recheck == .installed else {
+                StartupLog.mark("driver.asset-not-installed")
                 onModelStatus("")
                 throw AudioEngineError.recognizerUnavailable
             }
-            onModelStatus(recheck == .installed ? "\(locale.identifier) model ready." : "")
+            onModelStatus("\(locale.identifier) model ready.")
         } else {
             onModelStatus("")
         }
@@ -243,10 +245,16 @@ final class AudioEngineDriver: @unchecked Sendable {
         try await withCheckedThrowingContinuation { (continuationStart: CheckedContinuation<Void, Error>) in
             queue.async {
                 do {
+                    guard AVCaptureDevice.default(for: .audio) != nil else {
+                        throw AudioEngineError.noInputDevice
+                    }
                     let engine = AVAudioEngine()
                     let input = engine.inputNode
                     let format = input.outputFormat(forBus: 0)
-                    guard format.sampleRate > 0, format.channelCount > 0 else {
+                    guard format.sampleRate > 0,
+                          format.channelCount > 0,
+                          format.bytesPerFrame > 0,
+                          format.isStandard else {
                         throw AudioEngineError.formatUnavailable
                     }
 
@@ -361,6 +369,7 @@ enum AudioEngineError: LocalizedError {
     case formatUnavailable
     case startFailed
     case recognizerUnavailable
+    case noInputDevice
 
     var errorDescription: String? {
         switch self {
@@ -370,6 +379,8 @@ enum AudioEngineError: LocalizedError {
             return String(localized: "Failed to start the audio engine")
         case .recognizerUnavailable:
             return String(localized: "Speech recognition is unavailable on this device.")
+        case .noInputDevice:
+            return String(localized: "No microphone or audio input device was found.")
         }
     }
 }

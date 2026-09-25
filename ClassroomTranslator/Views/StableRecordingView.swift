@@ -178,6 +178,16 @@ final class StableRecordingViewController: NSViewController {
         renderState()
         StartupLog.markEnvironment()
         StartupLog.mark("ui.begin accent=\(course.accentCode)")
+        let speechUsage = Bundle.main.object(forInfoDictionaryKey: "NSSpeechRecognitionUsageDescription") as? String
+        let micUsage = Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") as? String
+        guard let speechUsage, !speechUsage.isEmpty, let micUsage, !micUsage.isEmpty else {
+            StartupLog.mark("ui.usage-missing speech=\(speechUsage != nil) mic=\(micUsage != nil)")
+            failStart(
+                String(localized: "App package is missing speech/microphone usage descriptions. Reinstall the packaged app."),
+                generation: currentGeneration
+            )
+            return
+        }
 
         Task { @MainActor [weak self] in
             guard let self else { return }

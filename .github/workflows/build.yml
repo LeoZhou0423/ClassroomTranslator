@@ -23,6 +23,23 @@ jobs:
     - name: Test
       run: swift test
 
+    - name: Dump startup evidence
+      if: always()
+      run: |
+        echo "=== breadcrumb log ==="
+        cat "$HOME/Library/Logs/LingoClass-startup.log" || true
+        echo "=== crash reports ==="
+        for dir in "$HOME/Library/Logs/DiagnosticReports" "/Library/Logs/DiagnosticReports"; do
+          [ -d "$dir" ] || continue
+          ls -la "$dir" || true
+          for f in "$dir"/*.ips; do
+            [ -f "$f" ] || continue
+            echo "--- $f ---"
+            head -c 8000 "$f"
+            echo
+          done
+        done
+
     - name: Create App Bundle
       run: |
         mkdir -p LingoClass.app/Contents/MacOS

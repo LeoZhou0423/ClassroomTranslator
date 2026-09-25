@@ -112,6 +112,11 @@ final class SpeechManager {
     }
 
     func requestSpeechPermission() async -> Bool {
+        guard let usage = Bundle.main.object(forInfoDictionaryKey: "NSSpeechRecognitionUsageDescription") as? String,
+              !usage.isEmpty else {
+            StartupLog.mark("sm.speech-usage-missing")
+            return false
+        }
         StartupLog.mark("sm.permission-speech-request status=\(SFSpeechRecognizer.authorizationStatus().rawValue)")
         return await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { @Sendable status in
@@ -122,6 +127,11 @@ final class SpeechManager {
     }
 
     func requestMicPermission() async -> Bool {
+        guard let usage = Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") as? String,
+              !usage.isEmpty else {
+            StartupLog.mark("sm.mic-usage-missing")
+            return false
+        }
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         switch status {
         case .authorized:
