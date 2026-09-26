@@ -211,8 +211,26 @@ final class ScreenshotTourTests: XCTestCase {
         snap("05-course-detail.png")
 
         // ---- 06：会话详情（人员区 + 预置昵称王教授 + 可编辑标题/日期）----
+        // 实际断言顺序：人员区/昵称在**浏览态**先断，编辑态标题/日期在后。
+        // 分层诊断（run 36233690741 卡 215 的三层切分）：
+        // 层① sheet 打开铁证 = 会话详情独有的「完成」按钮（背后课程详情页无）。
         recordRowElement("第一讲：光合作用").tap()
-        wait(app.staticTexts["人员"], "人员 Section")
+        wait(app.buttons["完成"], "层① 会话 sheet 未打开（无「完成」）—— 记录行点击未触发 sheet")
+        // 层② segments 落库铁证 = 第 1 段**英文译文**关键词（行预览 fullTranscript
+        // 只含 zh 原文、标题/侧栏皆无 → 背景零泄漏；第 1 段在列表顶部必物化
+        // （LazyVStack 折线以下的第 3 段关键词会假失败，已避开）。
+        let segText = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "photosynthesis")).firstMatch
+        if !segText.waitForExistence(timeout: 10) {
+            XCTFail("层② sheet 已开但段落译文不可见 —— 种子 segments 未落库/未渲染（嫌疑2）")
+        }
+        // 层③ 段落在 →「人员」Section 应在（浏览态渲染、不门控编辑态；无标签才按设计隐藏）。
+        // 判别位：段落昵称「王教授」——可见 = 标签/昵称数据在、Section 该显示（→1/4）；
+        // 不可见 = speaker/昵称数据空 → uniqueSpeakerLabels=[] → 按设计隐藏（→种子嫌疑5）。
+        if !app.staticTexts["人员"].waitForExistence(timeout: 10) {
+            let wangVisible = app.staticTexts["王教授"].exists
+            let editButtonVisible = app.buttons["编辑"].exists
+            XCTFail("层③ 段落在但「人员」查不到（段落昵称「王教授」可见=\(wangVisible)，不可见=标签/昵称数据空、Section 按设计隐藏；编辑按钮可见=\(editButtonVisible)）")
+        }
         wait(app.staticTexts["王教授"], "预置昵称「王教授」（段落显示）")
         wait(app.textFields["昵称"], "昵称输入")
         // 进编辑态：标题 TextField + 日期控件（规格 6 要求的「可编辑标题+日期控件」）。
