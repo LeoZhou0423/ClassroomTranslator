@@ -104,6 +104,8 @@ final class ScreenshotTourTests: XCTestCase {
     /// 点击侧栏固定行：解析后先打**完整 label/type/frame**（一行判位 —— 下轮
     /// 日志直接看清点的是「课程」还是「演示课程」），再 click。
     private func clickSidebarFixed(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
+        // 通用护栏：导航 hop 前先探测/处置系统弹层（一次封装处处复用）。
+        _ = dismissSystemSheet()
         guard let row = sidebarFixedRow(label) else {
             XCTFail("侧栏固定行「\(label)」不存在", file: file, line: line)
             return
@@ -117,10 +119,71 @@ final class ScreenshotTourTests: XCTestCase {
         return sidebarFixedRow("设置")
     }
 
+    /// sheet 身份三打印（lead 第十三轮）：frame + debug 前 160 字 + buttons 全 label。
+    /// frame 盖住侧栏即坐实『系统弹层吃点击』；buttons 名单给处置候选兜底。
+    private func identifySheet(_ tag: String) {
+        let sheet = app.sheets.firstMatch
+        guard sheet.exists else { return }
+        print("TOUR_SHEET_ID[\(tag)]: frame=\(sheet.frame) debug=\(String(sheet.debugDescription.prefix(160)))")
+        let buttons = sheet.descendants(matching: .button)
+        let n = min(buttons.count, 20)
+        var labels: [String] = []
+        for i in 0..<n {
+            labels.append(buttons.element(boundBy: i).label)
+        }
+        print("TOUR_SHEET_BUTTONS[\(tag)]: \(labels.joined(separator: " | "))")
+    }
+
+    /// 等 sheet 消失（轮询计数）。
+    private func waitForSheetGone(_ timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if app.sheets.count == 0 { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        return app.sheets.count == 0
+    }
+
+    /// 系统下载语言弹层处置（run 36241315913：.translationTask 触发的系统 sheet
+    /// 从标题栏垂下盖全窗、侧栏 AX 可见但事件被吃）。Esc → 按 buttons 双字段
+    /// 精确候选**命中即停**；候选顺序把『关闭型』放前、**下载/Download 殿后**
+    /// （先点会真开始拉语言包，CI 白等 —— lead 清单里列了它，我调了序）。
+    /// 恒打 TOUR_SHEET_CLEARED=yes/no；无 sheet 时零副作用直接返回。
+    @discardableResult
+    private func dismissSystemSheet() -> Bool {
+        guard app.sheets.count > 0 else { return true }
+        identifySheet("pre")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        if waitForSheetGone(3) {
+            print("TOUR_SHEET_CLEARED=yes (escape)")
+            return true
+        }
+        let dismissive = ["取消", "Cancel", "以后", "Later", "稍后", "Not Now", "现在不",
+                          "关闭", "Close", "好", "OK", "继续", "Continue", "是", "Yes",
+                          "下载", "Download"]
+        let sheet = app.sheets.firstMatch
+        for name in dismissive {
+            let b = sheet.descendants(matching: .button)
+                .matching(NSPredicate(format: "label == %@ OR value == %@", name, name)).firstMatch
+            if b.exists {
+                print("TOUR_SHEET_TAP: \(name)")
+                b.tap()
+                if waitForSheetGone(3) {
+                    print("TOUR_SHEET_CLEARED=yes (button \(name))")
+                    return true
+                }
+            }
+        }
+        print("TOUR_SHEET_CLEARED=no (sheets=\(app.sheets.count))")
+        return false
+    }
+
     /// 侧栏课程行点击：先 staticText 点击；detail 未切换（无「新建录音」）时
     /// 再试行容器（outlineRow/tableRow，label 含课程名）—— task-7 教训②③口径。
     /// 最终是否切换由外层 wait(新建录音) 给统一失败点。
     private func tapSidebarCourse(_ name: String) {
+        // 通用护栏：导航 hop 前先探测/处置系统弹层。
+        _ = dismissSystemSheet()
         let text = app.staticTexts[name]
         if text.exists {
             print("TOUR_SIDEBAR_COURSE[\(name)]: label=\(text.label) value=\(String(describing: text.value)) frame=\(text.frame)")
@@ -164,6 +227,8 @@ final class ScreenshotTourTests: XCTestCase {
     /// ③ 中心坐标 tap → doubleClick → 文本坐标 tap → Return 键（macOS 列表
     ///    『选中后回车打开』惯例 / Button 焦点态 Enter=click）。
     private func clickRecordRow(_ title: String, file: StaticString = #filePath, line: UInt = #line) {
+        // 通用护栏：系统弹层会吃掉记录行点击（06 语境可能是同款弹层）。
+        _ = dismissSystemSheet()
         let button = app.descendants(matching: .button)
             .matching(NSPredicate(format: "label CONTAINS[c] %@", title)).firstMatch
         let text = app.staticTexts[title]
@@ -308,6 +373,9 @@ final class ScreenshotTourTests: XCTestCase {
         XCTAssertTrue(scrollUntilVisible(app.staticTexts["说话人标签"]), "说话人标签 Section 应可达")
         XCTAssertTrue(scrollUntilVisible(app.staticTexts["关于"]), "关于（About）应可达")
         snap("07-settings.png")
+        // 07 拍完立即处置：run 36241315913 —— 快照干净、随后 10s 锚等待期间
+        // 系统「下载语言」弹层弹出（.translationTask 触发），此后侧栏点击全被吃。
+        _ = dismissSystemSheet()
 
         // 回课程详情（06 前置，run 36238309642 卡点）—— 侧栏 ping-pong 两跳：
         // ① 先点固定顶行「课程」强制 selection 变化（.settings→.courses，铁证 =
