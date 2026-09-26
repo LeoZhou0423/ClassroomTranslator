@@ -91,6 +91,36 @@ final class ScreenshotTourTests: XCTestCase {
         return nil
     }
 
+    /// 侧栏课程行点击：先 staticText 点击；detail 未切换（无「新建录音」）时
+    /// 再试行容器（outlineRow/tableRow，label 含课程名）—— task-7 教训②③口径。
+    /// 最终是否切换由外层 wait(新建录音) 给统一失败点。
+    private func tapSidebarCourse(_ name: String) {
+        let text = app.staticTexts[name]
+        if text.exists {
+            text.tap()
+        }
+        if app.buttons["新建录音"].waitForExistence(timeout: 4) { return }
+        let predicate = NSPredicate(format: "label CONTAINS[c] %@", name)
+        // 行类型枚举只用 task-7 已编译过的两个（.row 在 macOS 26 被改名的教训②③）。
+        let rowCandidates = [
+            app.outlineRows.matching(predicate).firstMatch,
+            app.descendants(matching: .tableRow).matching(predicate).firstMatch
+        ]
+        for row in rowCandidates where row.exists {
+            row.tap()
+            if app.buttons["新建录音"].waitForExistence(timeout: 6) { return }
+        }
+    }
+
+    /// 记录行：staticText 精确 → 按钮 label CONTAINS 兜底
+    ///（macOS Button 的复杂 label 可能不暴露子 staticText）。
+    private func recordRowElement(_ title: String) -> XCUIElement {
+        let text = app.staticTexts[title]
+        if text.exists { return text }
+        return app.descendants(matching: .button)
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", title)).firstMatch
+    }
+
     /// 等待 App 进程真正退出（两段式重启的衔接）。
     private func waitAppExit(timeout: TimeInterval = 15) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
@@ -165,13 +195,23 @@ final class ScreenshotTourTests: XCTestCase {
 
         // ---- 05：课程详情（排课描述「每周一 14:00」）----
         wait(app.staticTexts["演示课程"], "演示课程侧栏行")
-        app.staticTexts["演示课程"].tap()
-        wait(app.staticTexts["第一讲：光合作用"], "课程详情记录行（detail 已切换）")
+        tapSidebarCourse("演示课程")
+        // 诊断细分①：detail 切换铁证 = CourseDetailView 独有「新建录音」按钮
+        //（coursesOverview 只有「请从侧边栏选择课程」—— 点击未选中会停在那里）。
+        wait(app.buttons["新建录音"], "detail 切换（新建录音按钮）—— 缺 = 侧栏行点击未选中")
+        // 诊断细分②：记录行 staticText → 按钮 label CONTAINS 兜底（macOS 按钮行
+        // 可能不暴露子 staticText —— run 36233001709 卡点嫌疑）；仍缺失时用
+        // 空态可见性把「种子/刷新问题」与「行 AX 选择器问题」切开。
+        let recordRow = recordRowElement("第一讲：光合作用")
+        if !recordRow.waitForExistence(timeout: 15) {
+            let emptyVisible = app.staticTexts["暂无录音"].exists
+            XCTFail("detail 已切换但记录行查不到（空态「暂无录音」可见=\(emptyVisible)）—— 可见 = 种子/内存刷新问题；不可见 = 行 AX 选择器问题")
+        }
         wait(app.staticTexts["每周一 14:00"], "排课描述「每周一 14:00」")
         snap("05-course-detail.png")
 
         // ---- 06：会话详情（人员区 + 预置昵称王教授 + 可编辑标题/日期）----
-        app.staticTexts["第一讲：光合作用"].tap()
+        recordRowElement("第一讲：光合作用").tap()
         wait(app.staticTexts["人员"], "人员 Section")
         wait(app.staticTexts["王教授"], "预置昵称「王教授」（段落显示）")
         wait(app.textFields["昵称"], "昵称输入")
