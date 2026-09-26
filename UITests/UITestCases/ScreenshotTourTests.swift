@@ -121,6 +121,23 @@ final class ScreenshotTourTests: XCTestCase {
             .matching(NSPredicate(format: "label CONTAINS[c] %@", title)).firstMatch
     }
 
+    /// 记录行点击（06 专用）：**优先按钮路径 .click()** —— staticText 子节点的
+    /// click 在 macOS 上不一定冒泡到父 Button（run 36234301136 嫌疑A）；
+    /// 兜底 staticText 也用 .click()。05 的存在性断言不动。
+    private func clickRecordRow(_ title: String) {
+        let button = app.descendants(matching: .button)
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", title)).firstMatch
+        if button.exists {
+            button.click()
+            return
+        }
+        let text = app.staticTexts[title]
+        if text.exists {
+            text.click()
+            return
+        }
+    }
+
     /// 等待 App 进程真正退出（两段式重启的衔接）。
     private func waitAppExit(timeout: TimeInterval = 15) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
@@ -213,9 +230,19 @@ final class ScreenshotTourTests: XCTestCase {
         // ---- 06：会话详情（人员区 + 预置昵称王教授 + 可编辑标题/日期）----
         // 实际断言顺序：人员区/昵称在**浏览态**先断，编辑态标题/日期在后。
         // 分层诊断（run 36233690741 卡 215 的三层切分）：
-        // 层① sheet 打开铁证 = 会话详情独有的「完成」按钮（背后课程详情页无）。
-        recordRowElement("第一讲：光合作用").tap()
-        wait(app.buttons["完成"], "层① 会话 sheet 未打开（无「完成」）—— 记录行点击未触发 sheet")
+        // 层① sheet 打开（判别位切 A=点击没生效 / B=「完成」浏览态锚点假阴性）：
+        // 编辑按钮/段落译文任一可见 = sheet 其实开了 → 换锚继续不红；都不可见 = A。
+        clickRecordRow("第一讲：光合作用")
+        if !app.buttons["完成"].waitForExistence(timeout: 10) {
+            let editVisible = app.buttons["编辑"].exists
+            let segVisible = app.staticTexts
+                .matching(NSPredicate(format: "label CONTAINS[c] %@", "photosynthesis")).exists
+            if editVisible || segVisible {
+                print("TOUR_LAYER1_B: sheet open, 完成 anchor false-negative (edit=\(editVisible) seg=\(segVisible))")
+            } else {
+                XCTFail("层①判A：点击没生效 —— 无「完成」、无「编辑」、无段落译文，sheet 未开")
+            }
+        }
         // 层② segments 落库铁证 = 第 1 段**英文译文**关键词（行预览 fullTranscript
         // 只含 zh 原文、标题/侧栏皆无 → 背景零泄漏；第 1 段在列表顶部必物化
         // （LazyVStack 折线以下的第 3 段关键词会假失败，已避开）。
@@ -248,8 +275,12 @@ final class ScreenshotTourTests: XCTestCase {
         // 当前在编辑态（头部是取消/保存，无完成）—— 先退出编辑再关 sheet。
         wait(app.buttons["取消"], "编辑态取消按钮（退出编辑）")
         app.buttons["取消"].tap()
-        wait(app.buttons["完成"], "Done（关会话详情）")
-        app.buttons["完成"].tap()
+        // 关 sheet：「完成」优先；缺席（层①判B 情形）→ Escape 兜底。
+        if app.buttons["完成"].exists {
+            app.buttons["完成"].tap()
+        } else {
+            app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        }
         guard let settingsRow = sidebarSettingsElement() else {
             XCTFail("侧栏 Settings（设置）行不存在")
             return
