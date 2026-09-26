@@ -101,6 +101,50 @@ jobs:
     - name: Create DMG
       run: hdiutil create -volname "LingoClass" -srcfolder LingoClass.app -ov -format UDZO LingoClass.dmg
 
+    # ---- task-7 阶段 1：launch smoke（additive 插入；既有步骤顺序未动）----
+    - name: Launch Smoke (GUI)
+      run: bash UITests/launch_smoke.sh
+
+    - name: Upload GUI Smoke Evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: gui-smoke-evidence
+        path: ui-smoke-artifacts/
+        if-no-files-found: warn
+        retention-days: 14
+
+    # ---- task-7 阶段 2：xcodegen XCUITest（尽力项）----
+    # 失败分类见下一步：TCC/权限类（runner 无法授予辅助功能/录屏）降级放行；
+    # 其余失败（schema、断言、xcodebuild）照常红 —— 本 workflow 改动的自证测试。
+    - name: XCUITest (xcodegen)
+      id: xcuitest
+      continue-on-error: true
+      run: bash UITests/run_xcuitests.sh
+
+    - name: Degrade XCUITest only for TCC/permission failures
+      if: steps.xcuitest.outcome != 'success'
+      run: |
+        if grep -Eiq 'assistive|accessibility|k?TCC|not trusted|screen recording|SCShareableContent|not authorized|authorization required' ui-smoke-artifacts/xcuitests.log; then
+          echo "XCUITest failed due to TCC/permission on this runner — degraded per task-7 spec; phase-1 smoke retained."
+          echo "DEGRADED=xcuitest-tcc" >> "$GITHUB_ENV"
+        else
+          echo "XCUITest failed for a non-TCC reason — failing the run:"
+          tail -n 150 ui-smoke-artifacts/xcuitests.log || true
+          exit 1
+        fi
+
+    - name: Upload XCUITest Evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: xcuitest-evidence
+        path: |
+          ui-smoke-artifacts/xcuitests.log
+          ui-smoke-artifacts/UITests.xcresult
+        if-no-files-found: warn
+        retention-days: 14
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:

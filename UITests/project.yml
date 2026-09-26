@@ -1,0 +1,31 @@
+# task-7 阶段 2：xcodegen 现场生成（仓库 .gitignore 忽略 *.xcodeproj）。
+# 测试用 XCUIApplication(bundleIdentifier:) 启动 /Applications 里的产物，
+# App 不需要出现在本工程内，也不依赖 TEST_TARGET_NAME。
+name: LingoclassUITests
+options:
+  bundleIdPrefix: com.user.lingoclass
+  deploymentTarget:
+    macOS: "26.0"
+targets:
+  LingoclassUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: UITestCases
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.user.lingoclass.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_ALLOWED: "YES"
+schemes:
+  LingoclassUITests:
+    build:
+      targets:
+        LingoclassUITests: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - LingoclassUITests
