@@ -84,18 +84,31 @@ final class ScreenshotTourTests: XCTestCase {
         return element.exists
     }
 
-    /// 侧栏固定行（设置/课程/全部录音 —— 列表顶部固定条目）：List 行 AX 类型
-    /// 随版本漂移，按顺序找（task-7 教训②③口径）。
+    /// 侧栏固定行（设置/课程/全部录音 —— 列表顶部固定条目）：**显式 label == 精确**
+    /// 谓词（下标语义若按 CONTAINS 解释，「课程」会子串命中「演示课程」内容行 ——
+    /// run 36239246999 嫌疑；精确等值天然免疫）。行类型多候选 = task-7 教训②③。
     private func sidebarFixedRow(_ label: String) -> XCUIElement? {
+        let exact = NSPredicate(format: "label == %@", label)
         let candidates: [XCUIElement] = [
-            app.outlineRows[label],
-            app.descendants(matching: .tableRow)[label],
-            app.staticTexts[label]
+            app.outlineRows.matching(exact).firstMatch,
+            app.descendants(matching: .tableRow).matching(exact).firstMatch,
+            app.staticTexts.matching(exact).firstMatch
         ]
         for candidate in candidates where candidate.exists {
             return candidate
         }
         return nil
+    }
+
+    /// 点击侧栏固定行：解析后先打**完整 label/type/frame**（一行判位 —— 下轮
+    /// 日志直接看清点的是「课程」还是「演示课程」），再 click。
+    private func clickSidebarFixed(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
+        guard let row = sidebarFixedRow(label) else {
+            XCTFail("侧栏固定行「\(label)」不存在", file: file, line: line)
+            return
+        }
+        print("TOUR_FIXED_ROW[\(label)]: type=\(row.elementType) frame=\(row.frame) label=\(row.label) debug=\(String(row.debugDescription.prefix(160)))")
+        row.click()
     }
 
     /// 侧栏 Settings 行（zh=设置）。
@@ -109,6 +122,7 @@ final class ScreenshotTourTests: XCTestCase {
     private func tapSidebarCourse(_ name: String) {
         let text = app.staticTexts[name]
         if text.exists {
+            print("TOUR_SIDEBAR_COURSE[\(name)]: label=\(text.label) frame=\(text.frame)")
             text.tap()
         }
         if app.buttons["新建录音"].waitForExistence(timeout: 4) { return }
@@ -299,12 +313,13 @@ final class ScreenshotTourTests: XCTestCase {
         //    「请从侧边栏选择课程」；macOS List 还会把选中行滚入视口 —— 若 07 的
         //    滚动把课程行带出视口，这一步把它带回来）；
         // ② 再点课程行（.courses→.course 再变一次），等待提到 15s。
-        guard let coursesRow = sidebarFixedRow("课程") else {
-            XCTFail("侧栏 Courses（课程）固定行不存在")
-            return
+        clickSidebarFixed("课程")
+        if !app.staticTexts["请从侧边栏选择课程"].waitForExistence(timeout: 10) {
+            // 三态判位：有「新建录音」= 点成了演示课程行（进 detail 而非总览）；
+            // 有「App 语言」= 还在设置页（点击没生效）；都没有 = 别的状态。
+            print("TOUR_HOP1_STATE: 新建录音=\(app.buttons["新建录音"].exists) App语言=\(app.staticTexts["App 语言"].exists) 总览锚=\(app.staticTexts["请从侧边栏选择课程"].exists)")
+            XCTFail("回课程总览失败（selection 未到 .courses）")
         }
-        coursesRow.click()
-        wait(app.staticTexts["请从侧边栏选择课程"], "回课程总览（selection 变化确认）")
         tapSidebarCourse("演示课程")
         wait(app.buttons["新建录音"], "从设置返回课程详情（新建录音按钮）", timeout: 15)
 
