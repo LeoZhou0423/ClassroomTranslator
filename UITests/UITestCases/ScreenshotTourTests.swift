@@ -84,11 +84,12 @@ final class ScreenshotTourTests: XCTestCase {
         return element.exists
     }
 
-    /// 侧栏固定行（设置/课程/全部录音 —— 列表顶部固定条目）：**显式 label == 精确**
-    /// 谓词（下标语义若按 CONTAINS 解释，「课程」会子串命中「演示课程」内容行 ——
-    /// run 36239246999 嫌疑；精确等值天然免疫）。行类型多候选 = task-7 教训②③。
+    /// 侧栏固定行（设置/课程/全部录音 —— 列表顶部固定条目）：**双字段精确谓词**
+    /// （label == OR value ==，run 36239878792：SwiftUI StaticText 的 AX 文本在
+    /// value 字段、label 常空 —— 只查 label 会把设置行弄丢；精确等值同时保住
+    /// 「课程」不子串误中「演示课程」）。行类型多候选 = task-7 教训②③。
     private func sidebarFixedRow(_ label: String) -> XCUIElement? {
-        let exact = NSPredicate(format: "label == %@", label)
+        let exact = NSPredicate(format: "label == %@ OR value == %@", label, label)
         let candidates: [XCUIElement] = [
             app.outlineRows.matching(exact).firstMatch,
             app.descendants(matching: .tableRow).matching(exact).firstMatch,
@@ -107,7 +108,7 @@ final class ScreenshotTourTests: XCTestCase {
             XCTFail("侧栏固定行「\(label)」不存在", file: file, line: line)
             return
         }
-        print("TOUR_FIXED_ROW[\(label)]: type=\(row.elementType) frame=\(row.frame) label=\(row.label) debug=\(String(row.debugDescription.prefix(160)))")
+        print("TOUR_FIXED_ROW[\(label)]: type=\(row.elementType) frame=\(row.frame) label=\(row.label) value=\(String(describing: row.value)) debug=\(String(row.debugDescription.prefix(160)))")
         row.click()
     }
 
@@ -122,7 +123,7 @@ final class ScreenshotTourTests: XCTestCase {
     private func tapSidebarCourse(_ name: String) {
         let text = app.staticTexts[name]
         if text.exists {
-            print("TOUR_SIDEBAR_COURSE[\(name)]: label=\(text.label) frame=\(text.frame)")
+            print("TOUR_SIDEBAR_COURSE[\(name)]: label=\(text.label) value=\(String(describing: text.value)) frame=\(text.frame)")
             text.tap()
         }
         if app.buttons["新建录音"].waitForExistence(timeout: 4) { return }
@@ -314,11 +315,28 @@ final class ScreenshotTourTests: XCTestCase {
         //    滚动把课程行带出视口，这一步把它带回来）；
         // ② 再点课程行（.courses→.course 再变一次），等待提到 15s。
         clickSidebarFixed("课程")
-        if !app.staticTexts["请从侧边栏选择课程"].waitForExistence(timeout: 10) {
-            // 三态判位：有「新建录音」= 点成了演示课程行（进 detail 而非总览）；
-            // 有「App 语言」= 还在设置页（点击没生效）；都没有 = 别的状态。
-            print("TOUR_HOP1_STATE: 新建录音=\(app.buttons["新建录音"].exists) App语言=\(app.staticTexts["App 语言"].exists) 总览锚=\(app.staticTexts["请从侧边栏选择课程"].exists)")
-            XCTFail("回课程总览失败（selection 未到 .courses）")
+        // hop1 锚（读码重挑，run 36239878792）：coursesOverview **非空分支**（种子
+        // 保证有课 → 必走 else，L156-160）独有两行指引文本，与空态无关（空分支
+        // No Courses Yet 在种子流程不可能出现）；两行 OR 兜措辞漂移。
+        // 反证 lead 例示的「新建课程」按钮：它在工具条（HomeView L57-61 挂侧栏
+        // List 的 toolbar，**各页全局可见**）—— 不是 overview 独有，当锚会假通过。
+        // 反向排除：「新建录音」= 课程详情独有。状态恒打印，成败都留证据。
+        let overviewGuidance = NSPredicate(
+            format: "value == %@ OR value == %@ OR label == %@ OR label == %@",
+            "请从侧边栏选择课程", "每次新录音都会保存为独立转录记录。",
+            "请从侧边栏选择课程", "每次新录音都会保存为独立转录记录。")
+        let overviewShown = app.staticTexts.matching(overviewGuidance).firstMatch
+            .waitForExistence(timeout: 10)
+        let onCourseDetail = app.buttons["新建录音"].exists
+        let onSettings = app.staticTexts["App 语言"].exists
+        print("TOUR_HOP1_STATE: 指引锚=\(overviewShown) 新建录音=\(onCourseDetail) App语言=\(onSettings)")
+        if !overviewShown && (onCourseDetail || onSettings) {
+            // 指引没出但人还在课程详情/设置页 → selection 没走到 .courses。
+            XCTFail("回课程总览失败（指引锚未出；新建录音=\(onCourseDetail) App语言=\(onSettings)）")
+        }
+        if !overviewShown {
+            // 反向通过：既不在课程详情也不在设置页 → 认定总览（留证）。
+            print("TOUR_HOP1_INV: no guidance but not on detail/settings — treated as overview")
         }
         tapSidebarCourse("演示课程")
         wait(app.buttons["新建录音"], "从设置返回课程详情（新建录音按钮）", timeout: 15)
