@@ -305,7 +305,9 @@ struct SessionDetailView: View {
         var seen = Set<String>()
         var ordered: [String] = []
         for segment in segments {
-            let label = segment.speaker.trimmingCharacters(in: .whitespacesAndNewlines)
+            // speaker 是 String?（旧数据可为 nil）—— nil 不该出现在人员区，直接排除。
+            guard let raw = segment.speaker else { continue }
+            let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !label.isEmpty, seen.insert(label).inserted else { continue }
             ordered.append(label)
         }
