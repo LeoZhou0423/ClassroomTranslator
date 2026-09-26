@@ -24,6 +24,9 @@ struct SettingsView: View {
     @AppStorage("speakerDetectionEnabled") private var speakerDetectionEnabled: Bool = true
     @AppStorage("speakerMaxSpeakers") private var speakerMaxSpeakers: Int = 4
     @AppStorage("speakerThreshold") private var speakerThreshold: Double = 0.6
+    /// task-6：语音引擎选择。字面量 key 与 SpeechEngineKind.defaultsKey 一致，
+    /// 由单测 testDefaultsKeyIsSpeechEngine 锁定；默认 apple（Step 1 暂只暴露 Apple）。
+    @AppStorage("speechEngine") private var speechEngineChoice: String = "apple"
     
     @State private var isDownloadingAll = false
     @State private var downloadProgress = ""
@@ -111,6 +114,17 @@ struct SettingsView: View {
                     Slider(value: $speakerThreshold, in: 0.45...0.75, step: 0.05)
                         .disabled(!speakerDetectionEnabled)
                     Text("Higher requires voices to be more similar before they are grouped as the same speaker.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                // task-6 Step 1：语音引擎选择。暂只暴露 Apple；Step 2 落地
+                // SherpaSpeechEngine 后在此追加选项。选择在下次进入录音页时生效。
+                Section("Speech Engine") {
+                    Picker("Engine", selection: $speechEngineChoice) {
+                        Text("Apple SpeechAnalyzer").tag(SpeechEngineKind.apple.rawValue)
+                    }
+                    Text("Applies the next time the recording page opens.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

@@ -2,11 +2,13 @@ import Foundation
 import AVFoundation
 import Speech
 
+/// task-6 Step 1：语音引擎协议 SpeechEngine 的 Apple 实现 —— 原
+/// AudioEngineDriver 更名而来，公开方法签名零改动（无需转发层）。
 /// Owns microphone capture and SpeechAnalyzer transcription on macOS 26+.
 /// Replaces the legacy SFSpeechRecognizer pipeline: one long-lived analyzer,
 /// hot-updatable AnalysisContext, and progressive volatile/final results
 /// without tearing down audio on every final.
-final class AudioEngineDriver: @unchecked Sendable {
+final class AppleSpeechEngine: @unchecked Sendable, SpeechEngine {
     typealias RecognitionHandler = @Sendable (_ text: String, _ isFinal: Bool) -> Void
 
     private let queue = DispatchQueue(label: "com.classroomtranslator.audioSpeech")

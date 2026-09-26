@@ -251,3 +251,7 @@
 "Student %lld" = "学生%lld";
 "Speaker %lld" = "说话人%lld";
 
+/* task-6：语音引擎选择（Step 1 暴露 Apple） */
+"Engine" = "引擎";
+"Applies the next time the recording page opens." = "下次进入录音页时生效。";
+

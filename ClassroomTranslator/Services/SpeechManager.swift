@@ -15,7 +15,9 @@ final class SpeechManager {
     var onLanguageModelStatusChanged: ((String) -> Void)?
     var onAudioLevelChanged: ((Float) -> Void)?
 
-    private let driver = AudioEngineDriver()
+    // task-6 Step 1：唯一依赖 SpeechEngine 协议的行（构造经工厂，设置项
+    // speechEngine，默认 apple）。编排逻辑本身零改动。
+    private let driver: any SpeechEngine = SpeechEngineFactory.make()
 
     /// 说话人识别取窗缓冲（task-4）：录音页的 SpeakerEngine 直接读它。
     var speakerRing: SpeakerAudioRing { driver.speakerRing }
