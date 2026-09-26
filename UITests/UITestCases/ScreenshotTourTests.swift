@@ -84,17 +84,23 @@ final class ScreenshotTourTests: XCTestCase {
         return element.exists
     }
 
-    /// 侧栏 Settings 行（zh=设置）：List 行 AX 类型随版本漂移，按顺序找（同既有 helper）。
-    private func sidebarSettingsElement() -> XCUIElement? {
-        let candidates = [
-            app.outlineRows["设置"],
-            app.descendants(matching: .tableRow)["设置"],
-            app.staticTexts["设置"]
+    /// 侧栏固定行（设置/课程/全部录音 —— 列表顶部固定条目）：List 行 AX 类型
+    /// 随版本漂移，按顺序找（task-7 教训②③口径）。
+    private func sidebarFixedRow(_ label: String) -> XCUIElement? {
+        let candidates: [XCUIElement] = [
+            app.outlineRows[label],
+            app.descendants(matching: .tableRow)[label],
+            app.staticTexts[label]
         ]
         for candidate in candidates where candidate.exists {
             return candidate
         }
         return nil
+    }
+
+    /// 侧栏 Settings 行（zh=设置）。
+    private func sidebarSettingsElement() -> XCUIElement? {
+        return sidebarFixedRow("设置")
     }
 
     /// 侧栏课程行点击：先 staticText 点击；detail 未切换（无「新建录音」）时
@@ -288,9 +294,19 @@ final class ScreenshotTourTests: XCTestCase {
         XCTAssertTrue(scrollUntilVisible(app.staticTexts["关于"]), "关于（About）应可达")
         snap("07-settings.png")
 
-        // 回课程详情（06 前置）：侧栏课程行 + detail 切换铁证。
+        // 回课程详情（06 前置，run 36238309642 卡点）—— 侧栏 ping-pong 两跳：
+        // ① 先点固定顶行「课程」强制 selection 变化（.settings→.courses，铁证 =
+        //    「请从侧边栏选择课程」；macOS List 还会把选中行滚入视口 —— 若 07 的
+        //    滚动把课程行带出视口，这一步把它带回来）；
+        // ② 再点课程行（.courses→.course 再变一次），等待提到 15s。
+        guard let coursesRow = sidebarFixedRow("课程") else {
+            XCTFail("侧栏 Courses（课程）固定行不存在")
+            return
+        }
+        coursesRow.click()
+        wait(app.staticTexts["请从侧边栏选择课程"], "回课程总览（selection 变化确认）")
         tapSidebarCourse("演示课程")
-        wait(app.buttons["新建录音"], "从设置返回课程详情（新建录音按钮）")
+        wait(app.buttons["新建录音"], "从设置返回课程详情（新建录音按钮）", timeout: 15)
 
         // ---- 06：会话详情（人员区 + 预置昵称王教授 + 可编辑标题/日期）----
         // 实际断言顺序：人员区/昵称在**浏览态**先断，编辑态标题/日期在后。
