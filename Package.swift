@@ -18,7 +18,8 @@ let package = Package(
                 .copy("Resources/AccentECAPA.mlpackage"),
                 .copy("Resources/labels.json"),
                 .copy("Resources/zh-Hans.lproj"),
-                .copy("Resources/AppIcon.png")
+                .copy("Resources/AppIcon.png"),
+                .copy("Resources/SpeakerCAMWaveZHEng.mlpackage")
             ]
         ),
         .testTarget(

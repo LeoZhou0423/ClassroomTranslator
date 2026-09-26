@@ -51,7 +51,7 @@ struct NewCourseView: View {
                 Section("Translation") {
                     Picker("Target Language", selection: $targetLanguageCode) {
                         ForEach(LanguageOptions.targets) { language in
-                            Text(language.name).tag(language.code)
+                            Text(LocalizedStringKey(language.name)).tag(language.code)
                         }
                     }
                 }

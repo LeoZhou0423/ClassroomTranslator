@@ -23,7 +23,12 @@ final class AudioEngineDriver: @unchecked Sendable {
     private var legacyConverter: AVAudioConverter?
     private var analyzerFormat: AVAudioFormat?
     private var isRunning = false
+    /// 每次 stopAsync 自增；start 用它判断“我这次启动是否已被更晚的 stop 作废”，
+    /// 避免 stop 的快照早于 start 写入状态时，引擎被重新拉起后无人关闭。
+    private var stopEpoch = 0
     private let accentTee = AccentAudioTee(targetSeconds: 2.5)
+    /// 说话人识别取窗环形缓冲（task-4）。tap 里与 accentTee 并联 append。
+    let speakerRing = SpeakerAudioRing(capacitySeconds: 30)
 
     var running: Bool {
         stateLock.withLock { isRunning }
@@ -43,6 +48,16 @@ final class AudioEngineDriver: @unchecked Sendable {
         }
     }
 
+    /// 说话人取窗开关：开启时清零绝对采样基准（每次 startRecording 走这里），
+    /// 关闭后 append 直接丢弃。功能开关在 SpeechManager 里读设置。
+    func setSpeakerCapture(enabled: Bool) {
+        if enabled {
+            speakerRing.reset()
+        } else {
+            speakerRing.disable()
+        }
+    }
+
     func start(
         localeIdentifier: String,
         contextPhrases: [String],
@@ -52,6 +67,7 @@ final class AudioEngineDriver: @unchecked Sendable {
         onRecognition: @escaping RecognitionHandler
     ) async throws {
         await stopAsync()
+        let epoch = stateLock.withLock { stopEpoch }
         StartupLog.mark("driver.enter locale=\(localeIdentifier)")
 
         guard let locale = await DictationTranscriber.supportedLocale(
@@ -79,14 +95,20 @@ final class AudioEngineDriver: @unchecked Sendable {
             throw AudioEngineError.recognizerUnavailable
         }
         if assetStatus != .installed {
-            onModelStatus("Downloading \(locale.identifier) speech model…")
+            // LOC 4.2：模型状态同样由 NSTextField 承载，必须显式本地化。
+            onModelStatus(String(format: String(localized: "Downloading %@ speech model…"), locale.identifier))
             StartupLog.mark("driver.asset-download-begin")
             if let request = try? await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                 let throttle = AssetProgressThrottle()
                 let observation = request.progress.observe(\.fractionCompleted, options: [.initial, .new]) { progress, _ in
                     guard let percent = throttle.shouldReport(fraction: progress.fractionCompleted) else { return }
                     StartupLog.mark("driver.asset-progress \(percent)%")
-                    onModelStatus("Downloading \(locale.identifier) speech model… (\(percent)%)")
+                    // %% 才会输出一个字面量 %，否则 String(format:) 会把它当转换说明符。
+                    onModelStatus(String(
+                        format: String(localized: "Downloading %@ speech model… (%lld%%)"),
+                        locale.identifier,
+                        percent
+                    ))
                 }
                 defer { observation.invalidate() }
                 try await request.downloadAndInstall()
@@ -99,7 +121,7 @@ final class AudioEngineDriver: @unchecked Sendable {
                 onModelStatus("")
                 throw AudioEngineError.recognizerUnavailable
             }
-            onModelStatus("\(locale.identifier) model ready.")
+            onModelStatus(String(format: String(localized: "%@ model ready."), locale.identifier))
         } else {
             onModelStatus("")
         }
@@ -174,8 +196,19 @@ final class AudioEngineDriver: @unchecked Sendable {
             throw error
         }
 
-        stateLock.withLock {
+        // stop 可能发生在 start 的异步准备阶段（其快照为空、什么也没停）；
+        // 只有在写入 isRunning 的同一把锁里比对 epoch，才能保证“晚到的 stop 一定赢”。
+        var latestEpoch = epoch
+        let superseded = stateLock.withLock { () -> Bool in
+            latestEpoch = stopEpoch
+            if stopEpoch != epoch { return true }
             isRunning = true
+            return false
+        }
+        if superseded {
+            StartupLog.mark("driver.start-superseded epoch=\(epoch) now=\(latestEpoch)")
+            await stopAsync()
+            throw CancellationError()
         }
         StartupLog.mark("driver.start-done")
     }
@@ -197,7 +230,9 @@ final class AudioEngineDriver: @unchecked Sendable {
 
     func stopAsync() async {
         accentTee.disable()
+        speakerRing.disable()
         let (engine, hadTap, observer, continuation, analysisTask, resultsTask, analyzer) = stateLock.withLock {
+            stopEpoch += 1
             isRunning = false
             let engine = self.engine
             let hadTap = tapInstalled
@@ -276,6 +311,7 @@ final class AudioEngineDriver: @unchecked Sendable {
                         guard let self else { return }
                         self.yield(buffer: buffer, analyzerFormat: analyzerFormat, continuation: continuation)
                         self.accentTee.append(buffer)
+                        self.speakerRing.append(buffer)
                         guard let channel = buffer.floatChannelData?.pointee else { return }
                         let count = Int(buffer.frameLength)
                         guard count > 0 else { return }

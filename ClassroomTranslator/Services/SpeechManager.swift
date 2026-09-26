@@ -16,6 +16,9 @@ final class SpeechManager {
     var onAudioLevelChanged: ((Float) -> Void)?
 
     private let driver = AudioEngineDriver()
+
+    /// 说话人识别取窗缓冲（task-4）：录音页的 SpeakerEngine 直接读它。
+    var speakerRing: SpeakerAudioRing { driver.speakerRing }
     private var isStarting = false
     private var recordingGeneration = 0
 
@@ -32,7 +35,8 @@ final class SpeechManager {
 
     init() {
         var savedLanguage = UserDefaults.standard.string(forKey: "recognitionLanguage") ?? "auto"
-        if savedLanguage == "auto" || savedLanguage == "auto-detect" {
+        // 收口：老配置可能残留已移除的非英语口音码（auto/auto-detect/未知码都归入 Auto）
+        if LanguageOptions.supportedSource(savedLanguage) == "auto" {
             savedLanguage = Self.safeAutomaticEnglishLocale()
         }
         currentLanguageCode = savedLanguage
@@ -90,7 +94,13 @@ final class SpeechManager {
                 locale: locale,
                 preset: .progressiveLongDictation
             )
-            onLanguageModelStatusChanged?("Downloading \(code)… (\(index + 1)/\(total))")
+            // LOC 4.2：状态行是 NSTextField.stringValue，不会查表，必须显式本地化。
+            onLanguageModelStatusChanged?(String(
+                format: String(localized: "Downloading %@… (%lld/%lld)"),
+                code,
+                index + 1,
+                total
+            ))
             let status = await AssetInventory.status(forModules: [transcriber])
             if status == .installed {
                 ready += 1
@@ -105,7 +115,11 @@ final class SpeechManager {
             }
         }
 
-        onLanguageModelStatusChanged?("\(ready)/\(total) English models ready.")
+        onLanguageModelStatusChanged?(String(
+            format: String(localized: "%lld/%lld English models ready."),
+            ready,
+            total
+        ))
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         onLanguageModelStatusChanged?("")
         return (ready, total)
@@ -196,9 +210,21 @@ final class SpeechManager {
         } catch {
             StartupLog.mark("sm.driver-start-failed: \(error.localizedDescription)")
             stopRecording()
+            // stopRecording() 会作废本次启动，别把 CancellationError 的原始
+            // localizedDescription 直接抛给界面（会显示成 "Swift.CancellationError error 1"）。
+            if error is CancellationError { throw SpeechError.startSuperseded }
             throw error
         }
-        guard recordingGeneration == generation else { throw CancellationError() }
+        guard recordingGeneration == generation else {
+            // 启动期间已被 stopRecording()（20s 超时 / 设备变化 / 用户结束）作废，
+            // 但底层 driver.start 刚把引擎和麦克风拉起来，必须再停一次，
+            // 否则界面显示"启动失败"后麦克风仍持续占用。
+            StartupLog.mark("sm.start-superseded generation=\(generation)")
+            driver.stop()
+            throw SpeechError.startSuperseded
+        }
+        // 说话人取窗只受设置开关控制（模型缺失时引擎自然惰性，数据白读成本为零）。
+        driver.setSpeakerCapture(enabled: SpeakerDetectionConfiguration().isEnabled)
         isRecording = true
         StartupLog.mark("sm.recording-started")
     }
@@ -331,6 +357,7 @@ final class SpeechManager {
         accentDetectionTask = nil
         driver.onAccentSamples = nil
         driver.setAccentCapture(enabled: false)
+        driver.setSpeakerCapture(enabled: false)
         debounceWorkItem?.cancel()
         debounceWorkItem = nil
         resetPauseModel(clearRecognitionContext: true)
@@ -402,7 +429,11 @@ final class SpeechManager {
             return
         }
 
-        onLanguageModelStatusChanged?("Detected \(locale) (\(result.accent))…")
+        onLanguageModelStatusChanged?(String(
+            format: String(localized: "Detected %@ (%@)…"),
+            locale,
+            result.accent
+        ))
         UserDefaults.standard.set(locale, forKey: "detectedRecognitionLanguage")
         currentLanguageCode = locale
         driver.onAccentSamples = nil
@@ -414,7 +445,7 @@ final class SpeechManager {
         isRecording = false
         do {
             try await startRecording()
-            onLanguageModelStatusChanged?("Detected \(locale).")
+            onLanguageModelStatusChanged?(String(format: String(localized: "Detected %@."), locale))
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             onLanguageModelStatusChanged?("")
         } catch {
@@ -438,6 +469,7 @@ enum SpeechError: LocalizedError {
     case permissionDeniedMic
     case noInputDevice
     case recognizerUnavailable
+    case startSuperseded
 
     var errorDescription: String? {
         switch self {
@@ -457,6 +489,8 @@ enum SpeechError: LocalizedError {
             return String(localized: "No microphone or audio input device was found.")
         case .recognizerUnavailable:
             return String(localized: "Speech recognition is unavailable on this device.")
+        case .startSuperseded:
+            return String(localized: "The recording was stopped before it finished starting.")
         }
     }
 }

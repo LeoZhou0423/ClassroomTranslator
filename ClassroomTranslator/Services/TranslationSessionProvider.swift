@@ -20,6 +20,9 @@ struct TranslationSessionHost<Content: View>: View {
         source: Locale.Language(identifier: "en"),
         target: Locale.Language(identifier: "zh-Hans")
     )
+    /// 实际下发给系统的语言对（用于判断是否真的需要重建 Configuration）。
+    @State private var appliedSource = ""
+    @State private var appliedTarget = ""
 
     init(manager: TranslationManager, sourceLanguage: String?, targetLanguage: String?, content: Content) {
         self.manager = manager
@@ -35,6 +38,8 @@ struct TranslationSessionHost<Content: View>: View {
             source: Locale.Language(identifier: source),
             target: Locale.Language(identifier: sessionTarget)
         ))
+        _appliedSource = State(initialValue: source)
+        _appliedTarget = State(initialValue: sessionTarget)
     }
 
     var body: some View {
@@ -46,13 +51,18 @@ struct TranslationSessionHost<Content: View>: View {
                     syncConfig()
                 }
             }
+            // 视图消失后系统会作废本次会话，先丢弃缓存，别让收尾的翻译再用它。
+            .onDisappear { manager.detachSession() }
             .onChange(of: language) { _, _ in Task { @MainActor in syncConfig() } }
             .onChange(of: detectedLanguage) { _, _ in Task { @MainActor in syncConfig() } }
             .onChange(of: target) { _, _ in Task { @MainActor in syncConfig() } }
             .onChange(of: sourceLanguage) { _, _ in Task { @MainActor in syncConfig() } }
             .onChange(of: targetLanguage) { _, _ in Task { @MainActor in syncConfig() } }
             .onChange(of: manager.sessionRefreshToken) { _, _ in
-                Task { @MainActor in config.invalidate() }
+                Task { @MainActor in
+                    manager.detachSession()
+                    config.invalidate()
+                }
             }
             .translationTask(config) { session in
                 let source = TranslationManager.resolveAutoSource(sourceLanguage ?? language)
@@ -67,15 +77,23 @@ struct TranslationSessionHost<Content: View>: View {
         let tgt = targetLanguage ?? target
         manager.configureLanguagePair(source: src, target: tgt)
         let sessionTarget = Self.sessionTarget(source: src, desiredTarget: tgt)
-        let newSource = Locale.Language(identifier: src)
-        let newTarget = Locale.Language(identifier: sessionTarget)
-        // 只在真正变化时才更新，避免频繁 invalidate 触发系统断言
-        if config.source != newSource || config.target != newTarget {
-            config = TranslationSession.Configuration(
-                source: newSource,
-                target: newTarget
-            )
-        }
+        // 只有"跨语言"的变化才重建 Configuration。Auto English 在录音中把 en-GB 换成
+        // en-US 属于同一语言内的方言切换：系统会因 source 变化作废旧会话并重新下发，
+        // 录音期间这会让进行中的 translate 撞上已失效的会话（Apple 文档写明会 fatalError）。
+        let sourceChanged = Self.baseLanguage(appliedSource) != Self.baseLanguage(src)
+        let targetChanged = appliedTarget != sessionTarget
+        guard sourceChanged || targetChanged else { return }
+        manager.detachSession()
+        appliedSource = src
+        appliedTarget = sessionTarget
+        config = TranslationSession.Configuration(
+            source: Locale.Language(identifier: src),
+            target: Locale.Language(identifier: sessionTarget)
+        )
+    }
+
+    private static func baseLanguage(_ identifier: String) -> String {
+        identifier.split(separator: "-").first.map(String.init) ?? identifier
     }
 
     private static func sessionTarget(source: String, desiredTarget: String) -> String {

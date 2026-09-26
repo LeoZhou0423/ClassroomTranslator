@@ -16,7 +16,14 @@ struct SettingsView: View {
     @AppStorage("autoScroll") private var autoScroll: Bool = true
     @AppStorage("subtitleMaxWords") private var subtitleMaxWords: Int = 12
     @AppStorage("showSubtitleOriginal") private var showSubtitleOriginal: Bool = true
+    /// VIS-05：悬浮窗点击穿透，默认关闭（关 = 不穿透 = 仍可拖动）。
+    @AppStorage("overlayClickThrough") private var overlayClickThrough: Bool = false
     @AppStorage("appLanguage") private var appLanguage: String = "zh-Hans"
+    /// task-4：说话人识别设置。开关默认开启（Lead 约定）；
+    /// 模型缺失时即使开着也整体降级为手动标注。
+    @AppStorage("speakerDetectionEnabled") private var speakerDetectionEnabled: Bool = true
+    @AppStorage("speakerMaxSpeakers") private var speakerMaxSpeakers: Int = 4
+    @AppStorage("speakerThreshold") private var speakerThreshold: Double = 0.6
     
     @State private var isDownloadingAll = false
     @State private var downloadProgress = ""
@@ -77,8 +84,37 @@ struct SettingsView: View {
                     Toggle("Show original text", isOn: $showSubtitleOriginal)
                     
                     Toggle("Auto Scroll", isOn: $autoScroll)
+
+                    Toggle("Click Through Overlay", isOn: $overlayClickThrough)
+                    Text("When on, clicks pass through the overlay and dragging is disabled.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                
+
+                // task-4：说话人识别（老师/学生自动标注）。默认开启；
+                // 模型缺失时整体降级为手动标注，录音与翻译不受影响。
+                Section("Speaker Labels") {
+                    Toggle("Automatically tag speakers", isOn: $speakerDetectionEnabled)
+                    Text("Teacher and student labels are assigned on-device. When the model is unavailable, tagging falls back to manual editing in the session detail.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Stepper("Maximum speakers: \(speakerMaxSpeakers)", value: $speakerMaxSpeakers, in: 2...4)
+                        .disabled(!speakerDetectionEnabled)
+
+                    HStack {
+                        Text("Sensitivity")
+                        Spacer()
+                        Text(String(format: "%.2f", speakerThreshold))
+                            .foregroundColor(.secondary)
+                    }
+                    Slider(value: $speakerThreshold, in: 0.45...0.75, step: 0.05)
+                        .disabled(!speakerDetectionEnabled)
+                    Text("Higher requires voices to be more similar before they are grouped as the same speaker.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 Section("Teacher Language / Model") {
                     Text("Auto English starts with UK English, then detects the teacher’s accent and switches if needed")
                         .font(.caption)
@@ -86,15 +122,18 @@ struct SettingsView: View {
                     
                     Picker("Language", selection: $recognitionLanguage) {
                         ForEach(LanguageOptions.sources) { language in
-                            Text(language.name).tag(language.code)
+                            Text(LocalizedStringKey(language.name)).tag(language.code)
                         }
                     }
                     
-                    if recognitionLanguage == "auto" {
+                    // UX-05：原来只有 auto 才给预下载入口，选了固定口音（en-US 等）的用户
+                    // 第一次点 Start 只能干等下载。这里放开到所有英语口音；
+                    // 该入口只下载英语模型，所以纯非英语选择下不出现在这里（由自动检测兜底）。
+                    if recognitionLanguage == "auto" || recognitionLanguage.hasPrefix("en") {
                         Button(action: downloadAllSpeechModels) {
                             HStack {
                                 if isDownloadingAll { ProgressView().controlSize(.small) }
-                                Text(isDownloadingAll ? downloadProgress : "Download All English Models")
+                                Text(isDownloadingAll ? downloadProgress : String(localized: "Download All English Models"))
                             }
                         }
                         .buttonStyle(.bordered)
@@ -105,7 +144,7 @@ struct SettingsView: View {
                 Section("Translation") {
                     Picker("Target Language", selection: $translationTarget) {
                         ForEach(LanguageOptions.targets) { language in
-                            Text(language.name).tag(language.code)
+                            Text(LocalizedStringKey(language.name)).tag(language.code)
                         }
                     }
                     
@@ -190,16 +229,21 @@ struct SettingsView: View {
     
     private func downloadAllSpeechModels() {
         isDownloadingAll = true
-        downloadProgress = "Preparing…"
+        // 赋给 String 状态再喂给 Text() 会绕过 LocalizedStringKey 查表，必须显式本地化。
+        downloadProgress = String(localized: "Preparing…")
         Task {
             // 先请求权限
             let sm = SpeechManager()
             _ = await sm.requestSpeechPermission()
             _ = await sm.requestMicPermission()
             
-            downloadProgress = "Downloading models…"
+            downloadProgress = String(localized: "Downloading models…")
             let result = await sm.downloadAllEnglishModels()
-            downloadProgress = "\(result.ready)/\(result.total) models ready."
+            downloadProgress = String(
+                format: String(localized: "%lld/%lld models ready."),
+                result.ready,
+                result.total
+            )
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             isDownloadingAll = false
             downloadProgress = ""

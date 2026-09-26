@@ -41,7 +41,8 @@
 "Show Overlay" = "显示悬浮窗";
 "Hide Overlay" = "隐藏悬浮窗";
 "Recording paused" = "录音已暂停";
-"Recording interrupted. Tap Start to resume." = "录音被系统打断，点\"开始\"可继续。";
+/* PSY-07：桌面端不用"Tap"这类触屏词 */
+"Recording interrupted. Tap Start to resume." = "录音被系统打断，点击\"开始\"可继续。";
 "Recording · speak now" = "录音中 · 请开始讲话";
 "Recording · live translation" = "录音中 · 实时翻译";
 "Sound detected · recognizing…" = "检测到声音 · 正在识别…";
@@ -110,7 +111,8 @@
 "Microphone permission was denied. Please allow access in System Settings → Privacy & Security → Microphone, then try again." = "麦克风权限被拒绝，请在系统设置→隐私与安全性→麦克风中允许后重试。";
 "Failed to start recording. Please check the microphone and try again." = "录音启动失败，请检查麦克风后重试。";
 "Recording took too long to start. Another app may be using the microphone. Stop it and try again." = "录音启动超时，可能有其他应用正占用麦克风，请关闭后重试。";
-"Recording was interrupted. Tap Start to resume." = "录音被系统打断，点\"开始\"可继续。";
+/* PSY-07：桌面端不用"Tap"这类触屏词 */
+"Recording was interrupted. Tap Start to resume." = "录音被系统打断，点击\"开始\"可继续。";
 
 /* 设置 */
 "Subtitle Display" = "字幕显示";
@@ -186,3 +188,66 @@
 "Failed to start recording." = "录音启动失败。";
 
 "The previous recording is still starting. Please wait." = "上一次录音启动尚未结束，请稍候。";
+
+/* 崩溃审计补充：代码中已使用但原表缺失的 key（中文界面下会露英文） */
+"The recording was stopped before it finished starting." = "录音尚未完成启动就已被停止。";
+"Storage Error" = "存储错误";
+"OK" = "确定";
+"Save" = "保存";
+"Edit" = "编辑";
+"Course Name" = "课程名称";
+"Recording title" = "录音标题";
+"Original" = "原文";
+"Transcript" = "转录内容";
+"No Transcript" = "暂无转录";
+"No transcript content." = "暂无转录内容。";
+"Changes saved" = "修改已保存";
+"Translate Missing" = "翻译缺失内容";
+"Translating…" = "翻译中…";
+"Translating missing text…" = "正在翻译缺失内容…";
+"Translations updated" = "译文已更新";
+"Translation service is not ready. Try again." = "翻译服务尚未就绪，请重试。";
+"Export as Word" = "导出为 Word";
+"Downloading models…" = "正在下载模型…";
+"%lld/%lld models ready." = "%lld/%lld 个模型已就绪。";
+"%lld recordings" = "%lld 条录音";
+"%lld segments" = "%lld 条记录";
+"%lld languages/models" = "%lld 种语言/模型";
+"Auto English starts with UK English, then detects the teacher’s accent and switches if needed" = "自动英语先使用英式英语，随后检测老师口音并在需要时切换";
+"App package is missing speech/microphone usage descriptions. Reinstall the packaged app." = "安装包缺少语音识别 / 麦克风用途说明，请重新安装 App。";
+
+/* AuditReport 修复：UX/VIS/PSY 体验与视觉问题（task-3） */
+"Recording in progress. End the recording first." = "录音进行中，请先结束录音。";
+"Open System Settings" = "打开系统设置";
+"Microphone / speech access is denied" = "麦克风 / 语音识别权限被拒绝";
+"Auto-saves every 30 seconds" = "每 30 秒自动保存";
+"Saving…" = "正在保存…";
+"Saved · %lld segments" = "已保存 · %lld 段";
+"Finishing translation (%lld remaining)…" = "正在完成翻译（还剩 %lld 段）…";
+"Translating %lld/%lld…" = "正在翻译 %lld/%lld…";
+"Translated" = "译文";
+"Click Through Overlay" = "悬浮窗点击穿透";
+"When on, clicks pass through the overlay and dragging is disabled." = "开启后点击会穿过悬浮窗，同时无法再拖动它。";
+
+/* LOC 4.2：模型/识别状态由 NSTextField 承载，必须显式本地化 */
+"Downloading %@… (%lld/%lld)" = "正在下载 %@…（%lld/%lld）";
+"%lld/%lld English models ready." = "%lld/%lld 个英语模型已就绪。";
+"Detected %@ (%@)…" = "已识别为 %@（%@）…";
+"Detected %@." = "已识别为 %@。";
+"Downloading %@ speech model…" = "正在下载 %@ 语音模型…";
+"Downloading %@ speech model… (%lld%%)" = "正在下载 %@ 语音模型…（%lld%%）";
+"%@ model ready." = "%@ 模型已就绪。";
+
+/* task-4：说话人识别（老师/学生自动标注） */
+"Speaker Labels" = "说话人标签";
+"Automatically tag speakers" = "自动标记说话人";
+"Teacher and student labels are assigned on-device. When the model is unavailable, tagging falls back to manual editing in the session detail." = "老师 / 学生标签在本机自动判定；模型不可用时可在会话详情里手动标注。";
+"Maximum speakers: %lld" = "最多说话人数：%lld";
+"Sensitivity" = "灵敏度";
+"Higher requires voices to be more similar before they are grouped as the same speaker." = "数值越高，声音要越相似才会判为同一说话人。";
+"Speaker: %@" = "说话人：%@";
+"Teacher" = "老师";
+"Speaker" = "说话人";
+"Student %lld" = "学生%lld";
+"Speaker %lld" = "说话人%lld";
+

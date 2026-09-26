@@ -47,6 +47,10 @@ final class LiveTranslationCoordinator {
     private var worker: Task<Void, Never>?
     private var lastPartialStartedAt: ContinuousClock.Instant?
     private var activeGeneration = 0
+    /// worker 任务的身份令牌：cancelAll() 会把 worker 置空，旧任务收尾时
+    /// 不能把新任务的引用也清掉，否则 waitUntilIdle() 会提前返回（译文没落库）
+    /// 并且可能同时跑两个 worker。
+    private var workerToken = 0
     private let clock = ContinuousClock()
 
     init(partialInterval: Duration = .milliseconds(700), translator: @escaping Translator) {
@@ -70,6 +74,7 @@ final class LiveTranslationCoordinator {
     func cancelAll() {
         pendingPartial = nil
         pendingFinals.removeAll()
+        workerToken += 1
         worker?.cancel()
         worker = nil
     }
@@ -86,8 +91,15 @@ final class LiveTranslationCoordinator {
         await worker?.value
     }
 
+    /// UX-04：收尾阶段给状态行用的"还剩几段"。
+    var pendingCount: Int {
+        pendingFinals.count + (pendingPartial == nil ? 0 : 1)
+    }
+
     private func startWorkerIfNeeded() {
         guard worker == nil else { return }
+        workerToken += 1
+        let token = workerToken
         worker = Task { @MainActor [weak self] in
             guard let self else { return }
             while !Task.isCancelled, let request = self.takeNextRequest() {
@@ -104,6 +116,8 @@ final class LiveTranslationCoordinator {
                 guard request.generation >= self.activeGeneration else { continue }
                 request.completion(Response(request: request, translatedText: translated))
             }
+            // 只有自己仍然是"当前那个 worker"时才收尾，避免清掉后继者的引用。
+            guard self.workerToken == token else { return }
             self.worker = nil
             if !self.pendingFinals.isEmpty || self.pendingPartial != nil {
                 self.startWorkerIfNeeded()

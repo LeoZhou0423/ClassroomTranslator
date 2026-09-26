@@ -31,3 +31,5 @@ xcuserdata/
 Tools/accent/models/
 __pycache__/
 *.pyc
+# Speaker model conversion downloads (regenerable; see SPEAKER-RESEARCH.md)
+Tools/speaker/models/

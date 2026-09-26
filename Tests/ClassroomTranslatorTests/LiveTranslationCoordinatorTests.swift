@@ -55,4 +55,37 @@ final class LiveTranslationCoordinatorTests: XCTestCase {
         await coordinator.waitUntilIdle()
         XCTAssertTrue(outputs.isEmpty)
     }
+
+    /// cancelAll() 会把 worker 引用置空；旧任务收尾时若不校验身份，
+    /// 会把新 worker 的引用也清掉，waitUntilIdle() 就会提前返回（译文没落库）。
+    @MainActor
+    func testCancelledWorkerCannotClearItsSuccessor() async {
+        var firstContinuation: CheckedContinuation<String, Never>?
+        var outputs: [String] = []
+        let coordinator = LiveTranslationCoordinator(partialInterval: .zero) { text in
+            if text == "first" {
+                return await withCheckedContinuation { firstContinuation = $0 }
+            }
+            return "T:\(text)"
+        }
+
+        coordinator.submit(.init(kind: .final, text: "first", cue: "first", revision: 1, generation: 1) {
+            outputs.append($0.translatedText)
+        })
+        for _ in 0..<200 where firstContinuation == nil { await Task.yield() }
+        guard let firstContinuation else {
+            XCTFail("Translator never started")
+            coordinator.cancelAll()
+            return
+        }
+
+        coordinator.cancelAll()
+        coordinator.submit(.init(kind: .final, text: "second", cue: "second", revision: 2, generation: 1) {
+            outputs.append($0.translatedText)
+        })
+        firstContinuation.resume(returning: "stale")
+
+        await coordinator.waitUntilIdle()
+        XCTAssertEqual(outputs, ["T:second"])
+    }
 }

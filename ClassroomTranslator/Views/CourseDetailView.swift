@@ -109,6 +109,8 @@ struct CourseDetailView: View {
         .toolbar {
             ToolbarItem(placement: .secondaryAction) {
                 Button(role: .destructive) { showDeleteConfirm = true } label: { Image(systemName: "trash") }
+                    // VIS-10：图标按钮没有文字，VoiceOver 读不出用途。
+                    .accessibilityLabel(Text("Delete Course"))
             }
         }
     }
@@ -116,10 +118,14 @@ struct CourseDetailView: View {
     private var filteredRecords: [TranscriptRecord] {
         let records = historyStore.recordsForCourse(course).sorted { $0.date > $1.date }
         guard !searchText.isEmpty else { return records }
-        return records.filter {
-            $0.title.localizedCaseInsensitiveContains(searchText)
-                || $0.fullTranscript.localizedCaseInsensitiveContains(searchText)
-                || $0.fullTranslation.localizedCaseInsensitiveContains(searchText)
+        // 同 HistoryView：一次过滤只解一次 JSON。
+        return records.filter { record in
+            if record.title.localizedCaseInsensitiveContains(searchText) { return true }
+            let segments = record.segments
+            let transcript = segments.map { $0.original }.joined(separator: " ")
+            let translation = segments.map { $0.translated }.joined(separator: " ")
+            return transcript.localizedCaseInsensitiveContains(searchText)
+                || translation.localizedCaseInsensitiveContains(searchText)
         }
     }
 
@@ -134,7 +140,9 @@ struct CourseDetailView: View {
     private func exportMessage(for result: Result<URL, Error>) -> String {
         switch result {
         case .success(let url): return String(localized: "Exported successfully: \(url.lastPathComponent)")
-        case .failure(let error): return error.localizedDescription
+        case .failure(let error):
+            // UX-07：取消返回空串，alert 绑定非空才触发，因此完全静默。
+            return ExportManager.isCancellation(error) ? "" : error.localizedDescription
         }
     }
 }
@@ -168,10 +176,10 @@ private struct CourseSettingsEditor: View {
             Form {
                 TextField("Course Name", text: $name)
                 Picker("Teacher Language / Model", selection: $source) {
-                    ForEach(LanguageOptions.sources) { Text($0.name).tag($0.code) }
+                    ForEach(LanguageOptions.sources) { Text(LocalizedStringKey($0.name)).tag($0.code) }
                 }
                 Picker("Target Language", selection: $target) {
-                    ForEach(LanguageOptions.targets) { Text($0.name).tag($0.code) }
+                    ForEach(LanguageOptions.targets) { Text(LocalizedStringKey($0.name)).tag($0.code) }
                 }
             }.formStyle(.grouped)
         }.frame(width: 480, height: 360)

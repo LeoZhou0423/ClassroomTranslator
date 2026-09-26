@@ -16,30 +16,41 @@ struct ExportManager {
         }
     }
 
+    /// UX-07 / PSY-04：用户主动取消永远不算错误。
+    /// 调用方用它把"取消"从 alert / footer 错误态里摘出去。
+    static func isCancellation(_ error: Error) -> Bool {
+        guard let exportError = error as? ExportError else { return false }
+        if case .cancelled = exportError { return true }
+        return false
+    }
+
     static func exportSingle(record: TranscriptRecord, completion: ((Result<URL, Error>) -> Void)? = nil) {
+        // NSSavePanel.begin 是非模态的：面板开着的时候用户可以删掉这条记录，
+        // 回调里再访问 record 会命中"backing data could no longer be found"的
+        // SwiftData fatal error。所以在打开面板前把内容一次性取出来。
+        let dateLabel = String(localized: "Date:")
+        let titleLabel = String(localized: "Title:")
+        let durationLabel = String(localized: "Duration:")
+        let content = """
+        \(dateLabel) \(record.date.formatted(date: .long, time: .shortened))
+        \(titleLabel) \(record.title)
+        \(durationLabel) \(formatDuration(record.duration))
+        
+        ═══════════════════════════════════════
+        
+        \(record.bilingualTranscript)
+        """
+
         let panel = NSSavePanel()
         panel.title = String(localized: "Export Transcript")
         panel.nameFieldStringValue = "\(record.title).txt"
         panel.allowedContentTypes = [.plainText]
-        
+
         panel.begin { result in
             guard result == .OK, let url = panel.url else {
                 completion?(.failure(ExportError.cancelled))
                 return
             }
-            
-            let dateLabel = String(localized: "Date:")
-            let titleLabel = String(localized: "Title:")
-            let durationLabel = String(localized: "Duration:")
-            let content = """
-            \(dateLabel) \(record.date.formatted(date: .long, time: .shortened))
-            \(titleLabel) \(record.title)
-            \(durationLabel) \(formatDuration(record.duration))
-            
-            ═══════════════════════════════════════
-            
-            \(record.bilingualTranscript)
-            """
             
             do {
                 try content.write(to: url, atomically: true, encoding: .utf8)
@@ -51,38 +62,39 @@ struct ExportManager {
     }
     
     static func exportBatch(records: [TranscriptRecord], completion: ((Result<URL, Error>) -> Void)? = nil) {
+        // 同 exportSingle：面板非模态，先取快照避免回调里访问已被删除的 SwiftData 对象。
+        let headerTitle = String(localized: "Classroom Transcripts Export")
+        let exportedLabel = String(localized: "Exported:")
+        let dateLabel = String(localized: "Date:")
+        let titleLabel = String(localized: "Title:")
+        let durationLabel = String(localized: "Duration:")
+
+        var content = "\(headerTitle)\n"
+        content += "\(exportedLabel) \(Date().formatted(date: .long, time: .shortened))\n"
+        content += String(repeating: "═", count: 50) + "\n\n"
+
+        for record in records.sorted(by: { $0.date > $1.date }) {
+            content += """
+            \(dateLabel) \(record.date.formatted(date: .long, time: .shortened))
+            \(titleLabel) \(record.title)
+            \(durationLabel) \(formatDuration(record.duration))
+            
+            \(record.bilingualTranscript)
+            
+            \(String(repeating: "─", count: 50))
+            
+            """
+        }
+
         let panel = NSSavePanel()
         panel.title = String(localized: "Export Transcripts")
         panel.nameFieldStringValue = "Transcripts_\(DateFormatter.exportFormatter.string(from: Date())).txt"
         panel.allowedContentTypes = [.plainText]
-        
+
         panel.begin { result in
             guard result == .OK, let url = panel.url else {
                 completion?(.failure(ExportError.cancelled))
                 return
-            }
-            
-            let headerTitle = String(localized: "Classroom Transcripts Export")
-            let exportedLabel = String(localized: "Exported:")
-            let dateLabel = String(localized: "Date:")
-            let titleLabel = String(localized: "Title:")
-            let durationLabel = String(localized: "Duration:")
-            
-            var content = "\(headerTitle)\n"
-            content += "\(exportedLabel) \(Date().formatted(date: .long, time: .shortened))\n"
-            content += String(repeating: "═", count: 50) + "\n\n"
-            
-            for record in records.sorted(by: { $0.date > $1.date }) {
-                content += """
-                \(dateLabel) \(record.date.formatted(date: .long, time: .shortened))
-                \(titleLabel) \(record.title)
-                \(durationLabel) \(formatDuration(record.duration))
-                
-                \(record.bilingualTranscript)
-                
-                \(String(repeating: "─", count: 50))
-                
-                """
             }
             
             do {
@@ -95,6 +107,15 @@ struct ExportManager {
     }
 
     static func exportWord(record: TranscriptRecord, completion: ((Result<URL, Error>) -> Void)? = nil) {
+        // 快照必须在打开面板之前取：见 exportSingle 的说明。
+        let snapshot = WordSnapshot(
+            title: record.title,
+            courseName: record.course?.name ?? "",
+            date: record.date,
+            duration: record.duration,
+            segments: record.segments
+        )
+
         let panel = NSSavePanel()
         panel.title = String(localized: "Export as Word")
         panel.nameFieldStringValue = "\(safeFilename(record.title)).docx"
@@ -106,13 +127,6 @@ struct ExportManager {
                 completion?(.failure(ExportError.cancelled))
                 return
             }
-            let snapshot = WordSnapshot(
-                title: record.title,
-                courseName: record.course?.name ?? "",
-                date: record.date,
-                duration: record.duration,
-                segments: record.segments
-            )
             Task.detached {
                 do {
                     try createWordDocument(snapshot: snapshot, at: url)
@@ -170,7 +184,8 @@ struct ExportManager {
         body += paragraph("\(String(localized: "Duration:")) \(formatDuration(snapshot.duration))", style: "Metadata")
         body += paragraph(String(localized: "Transcript"), style: "Heading1")
         for segment in snapshot.segments {
-            body += paragraph(segment.original, style: "Original")
+            // task-4：Word 导出同样走 SpeakerLabels 统一前缀（与 TXT/转写一致）。
+            body += paragraph(segment.speakerLinePrefix + segment.original, style: "Original")
             if !segment.translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 body += paragraph(segment.translated, style: "Translation")
             }
@@ -242,16 +257,11 @@ struct ExportManager {
     </w:styles>
     """
     
-    private static func formatDuration(_ duration: TimeInterval) -> String {
-        let hours = Int(duration) / 3600
-        let minutes = (Int(duration) % 3600) / 60
-        let seconds = Int(duration) % 60
-        
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            return String(format: "%d:%02d", minutes, seconds)
-        }
+    // 不标 private：VIS-09 的格式统一属纯逻辑，ExportFormatTests 直接回归它。
+    static func formatDuration(_ duration: TimeInterval) -> String {
+        // VIS-09：统一 h:mm:ss，与录音页计时器、历史列表一致。
+        let total = max(0, Int(duration))
+        return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
     }
 }
 

@@ -17,13 +17,6 @@ enum LanguageOptions {
         Option(name: "English (South Africa)", code: "en-ZA"),
         Option(name: "English (Canada)", code: "en-CA"),
         Option(name: "English (India)", code: "en-IN"),
-        Option(name: "中文", code: "zh-Hans"),
-        Option(name: "日本語", code: "ja-JP"),
-        Option(name: "한국어", code: "ko-KR"),
-        Option(name: "हिन्दी", code: "hi-IN"),
-        Option(name: "العربية", code: "ar-SA"),
-        Option(name: "Türkçe", code: "tr-TR"),
-        Option(name: "Bahasa Indonesia", code: "id-ID"),
     ]
 
     static let targets: [Option] = [

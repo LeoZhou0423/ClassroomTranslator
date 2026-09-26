@@ -51,6 +51,16 @@ final class TranslationManager {
         sessionRefreshToken += 1
     }
 
+    /// 丢弃当前缓存的会话。
+    /// Apple 文档明确说明：attached view 消失、或 source/target 变化之后再使用旧的
+    /// TranslationSession 实例，系统会直接 fatalError。
+    /// 所以在任何会作废旧会话的动作（config.invalidate / 换语言 / 视图消失）之前先清空，
+    /// 让后续 translate 走“无会话”分支返回空串，而不是踩到已失效的会话。
+    /// （只影响新发起的调用，进行中的 await 无法被此方法保护。）
+    func detachSession() {
+        sessionStorage = nil
+    }
+
     nonisolated static func resolveAutoSource(_ source: String) -> String {
         guard source == "auto" || source == "auto-detect" else { return source }
         if let detected = UserDefaults.standard.string(forKey: "detectedRecognitionLanguage"),

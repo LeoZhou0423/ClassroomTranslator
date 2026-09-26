@@ -64,11 +64,16 @@ struct HistoryView: View {
 
     private var filteredRecords: [TranscriptRecord] {
         guard !searchText.isEmpty else { return historyStore.records }
-        return historyStore.records.filter {
-            $0.title.localizedCaseInsensitiveContains(searchText)
-                || $0.course?.name.localizedCaseInsensitiveContains(searchText) == true
-                || $0.fullTranscript.localizedCaseInsensitiveContains(searchText)
-                || $0.fullTranslation.localizedCaseInsensitiveContains(searchText)
+        // segments 每次访问都要全量解一次 JSON；原来 fullTranscript + fullTranslation
+        // 会各解一遍，搜索时主线程开销直接翻倍，这里合并成一次解码。
+        return historyStore.records.filter { record in
+            if record.title.localizedCaseInsensitiveContains(searchText) { return true }
+            if record.course?.name.localizedCaseInsensitiveContains(searchText) == true { return true }
+            let segments = record.segments
+            let transcript = segments.map { $0.original }.joined(separator: " ")
+            let translation = segments.map { $0.translated }.joined(separator: " ")
+            return transcript.localizedCaseInsensitiveContains(searchText)
+                || translation.localizedCaseInsensitiveContains(searchText)
         }
     }
 }
@@ -110,8 +115,9 @@ struct RecordRow: View {
     }
     
     private func formatDuration(_ duration: TimeInterval) -> String {
-        let hours = Int(duration) / 3600; let minutes = (Int(duration) % 3600) / 60; let seconds = Int(duration) % 60
-        return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, seconds) : String(format: "%d:%02d", minutes, seconds)
+        // VIS-09：统一 h:mm:ss，与录音页、导出文本完全一致。
+        let total = max(0, Int(duration))
+        return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
     }
 
     private func exportWord() {
@@ -125,7 +131,9 @@ struct RecordRow: View {
     private func exportMessage(for result: Result<URL, Error>) -> String {
         switch result {
         case .success(let url): return String(localized: "Exported successfully: \(url.lastPathComponent)")
-        case .failure(let error): return error.localizedDescription
+        case .failure(let error):
+            // UX-07：取消返回空串 —— alert 的 isPresented 绑定非空才触发，因此完全静默。
+            return ExportManager.isCancellation(error) ? "" : error.localizedDescription
         }
     }
 }
