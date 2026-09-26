@@ -178,6 +178,70 @@ final class ScreenshotTourTests: XCTestCase {
         return false
     }
 
+    /// 详情区双探针（lead 第十五轮二分实验）：
+    /// A「课程设置」= detail 点击 → state → **sheet 呈现**轴（3s 轮询 0→1）；
+    /// B「新建录音」= detail 点击 → state → **分支切换**轴。
+    /// 读码否决 lead 原设计（B 后轮询 sheets）：新建录音走 if showRecording
+    /// 分支切换（CourseDetailView L81 按钮 + body L19-30 if/else），**不产生
+    /// 任何 sheet** —— sheets 恒 0 是设计内正常值；正确观测 = 分支翻没翻
+    /// （overview 头按钮「新建录音」消失即翻），退出 = 录音视图「返回」。
+    /// 判读：A开+B翻 = detail 整体活 → H2 行专属；A不开+B翻 = 点击/state 活、
+    /// sheet 呈现全局坏；A开+B不翻 = 分支切换死；A不开+B不翻 = H1 遮挡。
+    private func detailBisectProbes() {
+        _ = dismissSystemSheet()
+        // ---- A：课程设置 → sheet 轴 ----
+        let settingsBtn = app.buttons
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", "课程设置")).firstMatch
+        let aBefore = app.sheets.count
+        print("TOUR_DETAIL_A[before]: 课程设置=\(settingsBtn.exists) sheets=\(aBefore)")
+        if settingsBtn.exists {
+            settingsBtn.tap()
+            var aOpened = false
+            let aDeadline = Date().addingTimeInterval(3)
+            while Date() < aDeadline {
+                if app.sheets.count > aBefore { aOpened = true; break }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            print("TOUR_DETAIL_A[result]: opened=\(aOpened) sheets \(aBefore)->\(app.sheets.count)")
+            if aOpened {
+                print("TOUR_DETAIL_A[restore]: cleared=\(dismissSystemSheet())")
+            }
+        }
+        // ---- B：新建录音 → 分支切换轴 ----
+        let newRec = app.buttons["新建录音"]
+        let bBefore = newRec.exists
+        print("TOUR_DETAIL_B[before]: 新建录音=\(bBefore)")
+        guard bBefore else {
+            print("TOUR_DETAIL_B[result]: 不在 overview（跳过）")
+            return
+        }
+        newRec.tap()
+        var flipped = false
+        let bDeadline = Date().addingTimeInterval(4)
+        while Date() < bDeadline {
+            if !app.buttons["新建录音"].exists { flipped = true; break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        let recView = app.buttons["返回"].exists || app.buttons["Back"].exists
+            || app.buttons["开始"].exists || app.buttons["Start"].exists
+        print("TOUR_DETAIL_B[result]: flipped=\(flipped) recView=\(recView)")
+        if flipped {
+            let back: XCUIElement = app.buttons["返回"].exists ? app.buttons["返回"] : app.buttons["Back"]
+            if back.exists {
+                back.tap()
+                var restored = false
+                let rDeadline = Date().addingTimeInterval(5)
+                while Date() < rDeadline {
+                    if app.buttons["新建录音"].exists { restored = true; break }
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+                }
+                print("TOUR_DETAIL_B[restore]: restored=\(restored)")
+            } else {
+                print("TOUR_DETAIL_B[restore]: 返回按钮不存在 — 无法退出录音视图")
+            }
+        }
+    }
+
     /// 侧栏课程行点击：先 staticText 点击；detail 未切换（无「新建录音」）时
     /// 再试行容器（outlineRow/tableRow，label 含课程名）—— task-7 教训②③口径。
     /// 最终是否切换由外层 wait(新建录音) 给统一失败点。
@@ -447,6 +511,8 @@ final class ScreenshotTourTests: XCTestCase {
         }
         tapSidebarCourse("演示课程")
         wait(app.buttons["新建录音"], "从设置返回课程详情（新建录音按钮）", timeout: 15)
+        // 二分探针（06 前必打，成败都留轴向数据 —— lead 第十五轮）。
+        detailBisectProbes()
 
         // ---- 06：会话详情（人员区 + 预置昵称王教授 + 可编辑标题/日期）----
         // 实际断言顺序：人员区/昵称在**浏览态**先断，编辑态标题/日期在后。
