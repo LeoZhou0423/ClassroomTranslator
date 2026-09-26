@@ -63,6 +63,9 @@ struct CourseDetailView: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(course.name).font(.title2).bold()
+                    // task-8：排课描述（课程列表与详情都显示）。
+                    Text(course.scheduleDescription)
+                        .font(.caption).foregroundColor(.secondary)
                     HStack {
                         Label(course.accentName, systemImage: "waveform")
                         Label(course.targetLanguageName, systemImage: "character.bubble")

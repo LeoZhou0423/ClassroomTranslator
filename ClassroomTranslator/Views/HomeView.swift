@@ -35,6 +35,9 @@ struct HomeView: View {
                             Image(systemName: "book.fill").foregroundColor(.accentColor)
                             VStack(alignment: .leading) {
                                 Text(course.name)
+                                // task-8：排课描述（每周/每月/单次；老数据回退 createdAt）。
+                                Text(course.scheduleDescription)
+                                    .font(.caption).foregroundColor(.secondary)
                                 Text("\(historyStore.recordsForCourse(course).count) recordings")
                                     .font(.caption).foregroundColor(.secondary)
                             }

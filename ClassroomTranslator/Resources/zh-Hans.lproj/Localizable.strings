@@ -61,6 +61,17 @@
 "Course Name (e.g. MIT 6.034)" = "课程名称（如 MIT 6.034）";
 "Course Info" = "课程信息";
 "Date & Time" = "日期和时间";
+
+/* 课程排课（task-8） */
+"Schedule Type" = "排课方式";
+"Weekly" = "每周";
+"Monthly" = "每月";
+"Single" = "单次";
+"Weekday" = "星期几";
+"Day of Month" = "每月几号";
+"Time" = "时间";
+"Every %1$@ at %2$@" = "每周%@ %@";
+"Monthly on day %1$@ at %2$@" = "每月%@日 %@";
 "Professor's Accent" = "教授口音";
 "Accent" = "口音";
 "Select the accent that best matches your professor" = "选择与教授最接近的口音";
