@@ -33,3 +33,5 @@ __pycache__/
 *.pyc
 # Speaker model conversion downloads (regenerable; see SPEAKER-RESEARCH.md)
 Tools/speaker/models/
+# sherpa-onnx demo model downloads (regenerable; see SHERPA-DEMO.md)
+Tools/sherpa/models/
