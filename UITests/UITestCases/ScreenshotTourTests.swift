@@ -11,7 +11,7 @@ import AppKit
 /// - **单方法两段式**：Phase A 无种数据截 Home 空态，terminate 后 Phase B 带参
 ///   走 02…07 —— 顺序确定，不依赖 XCTest 方法排序。
 /// - **失败口径**：任何断言/截图失败 → xcodebuild ** TEST FAILED ** →
-///   分类器规则 a（硬失败优先）必红，不静默；截图 pngRepresentation nil 同样 XCTFail。
+///   分类器规则 a（硬失败优先）必红，不静默；采集为空或写盘失败同样 XCTFail。
 /// - 导航断言沿用既有 5 条的健壮等待（waitForExistence + 多类型候选点击，
 ///   task-7 教训②③：AX 类型随 macOS/Xcode 版本漂移，不赌单一类型）。
 final class ScreenshotTourTests: XCTestCase {
@@ -106,8 +106,10 @@ final class ScreenshotTourTests: XCTestCase {
     /// 采一张命名截图并写盘；采集或写入失败 = 断言失败（截图失败=红，不静默）。
     private func snap(_ name: String, file: StaticString = #filePath, line: UInt = #line) {
         let shot = XCUIScreen.main.screenshot()
-        guard let data = shot.pngRepresentation, !data.isEmpty else {
-            XCTFail("截图 \(name) 采集失败（pngRepresentation nil/empty，疑 TCC）", file: file, line: line)
+        // 此 SDK 的 pngRepresentation 返回**非可选** Data（run 36232599445 编译错教训）。
+        let data = shot.pngRepresentation
+        guard !data.isEmpty else {
+            XCTFail("截图 \(name) 采集为空（pngRepresentation empty，疑 TCC）", file: file, line: line)
             return
         }
         let path = (tourDir as NSString).appendingPathComponent(name)
