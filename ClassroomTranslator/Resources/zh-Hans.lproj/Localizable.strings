@@ -70,7 +70,7 @@
 "Weekday" = "星期几";
 "Day of Month" = "每月几号";
 "Time" = "时间";
-"Every %1$@ at %2$@" = "每周%@ %@";
+"Every %1$@ at %2$@" = "每%@ %@";
 "Monthly on day %1$@ at %2$@" = "每月%@日 %@";
 "Professor's Accent" = "教授口音";
 "Accent" = "口音";
