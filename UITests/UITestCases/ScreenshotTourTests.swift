@@ -22,18 +22,14 @@ final class ScreenshotTourTests: XCTestCase {
         super.setUp()
         continueAfterFailure = false
         let env = ProcessInfo.processInfo.environment
-        // run 36235771099：shell export 不进 xctrunner 进程 env（截图落到容器
-        // Data 目录、没进 artifact）—— 用编译期源码路径 `#filePath` 上推三级 = repo
-        // 根，不依赖任何环境变量；env 只作额外机会，不作唯一通路。
-        let sourcePath = "\(#filePath)" // <repo>/UITests/UITestCases/ScreenshotTourTests.swift
-        let derivedRoot = URL(fileURLWithPath: sourcePath)
-            .deletingLastPathComponent() // UITestCases
-            .deletingLastPathComponent() // UITests
-            .deletingLastPathComponent() // repo 根
-            .path
-        let root = env["GITHUB_WORKSPACE"] ?? derivedRoot
-        tourDir = env["LINGOCLASS_TOUR_DIR"]
-            ?? (root as NSString).appendingPathComponent("ui-smoke-artifacts/gui-tour")
+        // run 36236618462：沙箱 runner 写工作区 = NSCocoaErrorDomain 513 —— 写盘
+        // 目标显式 = xctrunner 容器（实证可写；id 源头 UITests/project.yml:17 +
+        // .xctrunner 后缀，与 run_xcuitests.sh 的 TOUR_CONTAINER_DIR 同值）。
+        // shell 层 cp 搬运到 $OUT（三层闭环第 1 层）。env 优先、容器兜底。
+        // NSUserName() 走 passwd（避开沙箱下 HOME/container 语义歧义，教训②）。
+        let containerDir = "/Users/\(NSUserName())/Library/Containers/"
+            + "com.user.lingoclass.uitests.xctrunner/Data/ui-smoke-artifacts/gui-tour"
+        tourDir = env["LINGOCLASS_TOUR_DIR"] ?? containerDir
         print("TOUR_DIR: \(tourDir)")
         do {
             try FileManager.default.createDirectory(atPath: tourDir, withIntermediateDirectories: true)
