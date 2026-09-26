@@ -235,8 +235,9 @@ final class ScreenshotTourTests: XCTestCase {
         clickRecordRow("第一讲：光合作用")
         if !app.buttons["完成"].waitForExistence(timeout: 10) {
             let editVisible = app.buttons["编辑"].exists
+            // Query 没有 exists（只有 element 有 —— 教训②变体），firstMatch 上取。
             let segVisible = app.staticTexts
-                .matching(NSPredicate(format: "label CONTAINS[c] %@", "photosynthesis")).exists
+                .matching(NSPredicate(format: "label CONTAINS[c] %@", "photosynthesis")).firstMatch.exists
             if editVisible || segVisible {
                 print("TOUR_LAYER1_B: sheet open, 完成 anchor false-negative (edit=\(editVisible) seg=\(segVisible))")
             } else {
