@@ -252,21 +252,41 @@ final class ScreenshotTourTests: XCTestCase {
             text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
             if probeRowClick(step: "text-coordinate-tap", sheetsBefore: sheetsBefore, windowsBefore: windowsBefore) { return }
         }
+        // 单次轻点建焦点 → 500ms → Space（lead 第十四轮步骤4b）。
+        print("TOUR_ROW_RETRY: light tap + space")
+        target.tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        app.typeKey(XCUIKeyboardKey.space, modifierFlags: [])
+        if probeRowClick(step: "light-tap-space", sheetsBefore: sheetsBefore, windowsBefore: windowsBefore) { return }
         print("TOUR_ROW_RETRY: press return")
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
         if probeRowClick(step: "press-return", sheetsBefore: sheetsBefore, windowsBefore: windowsBefore) { return }
         print("TOUR_ROW_CLICK_FAILED: \(lastRowTargetInfo)")
     }
 
-    /// 每步点击后的探针：打印 sheets/windows 计数变化；内容三合一开（真开）或
-    /// 计数增长（开但内容空 → 层①/② 接手判定）都算『已打开』停止重试。
+    /// 每步点击后的探针（run 36241937270 升级：sheet 呈现有动画 —— 改 100ms×3s
+    /// 轮询；顺带捕捉『呈现即闪关』（flash），与『从未呈现』从此可分 ——
+    /// lead 第十四轮步骤4a）。内容三合一出现 = 真开；曾见 sheet 计数增长也算
+    /// 『打开过』（闪现证据，交层①/② 判定）。
     private func probeRowClick(step: String, sheetsBefore: Int, windowsBefore: Int) -> Bool {
+        var sawSheet = false
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if sheetSessionOpen() {
+                print("TOUR_ROW_PROBE[\(step)]: content opened (3s poll)")
+                return true
+            }
+            if app.sheets.count > sheetsBefore { sawSheet = true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
         let sheetsNow = app.sheets.count
-        let windowsNow = app.windows.count
-        let contentOpen = sheetSessionOpen()
-        print("TOUR_ROW_PROBE[\(step)]: sheets \(sheetsBefore)->\(sheetsNow) windows \(windowsBefore)->\(windowsNow) contentOpen=\(contentOpen)")
-        return contentOpen || sheetsNow > sheetsBefore
+        lastRowFlash = sawSheet && sheetsNow <= sheetsBefore
+        print("TOUR_ROW_PROBE[\(step)]: no content in 3s — sheets \(sheetsBefore)->\(sheetsNow) flash=\(lastRowFlash)")
+        return sawSheet
     }
+
+    /// 是否发生『呈现即闪关』（层①判A 文案用）。
+    private var lastRowFlash = false
 
     /// 上一次记录行命中的 element 描述（层①判A 文案用）。
     private var lastRowTargetInfo = "(unresolved)"
@@ -446,7 +466,7 @@ final class ScreenshotTourTests: XCTestCase {
                 // 计数变了但内容三合一不在 = sheet 开了但内容空 —— 转层②判定，不红这里。
                 print("TOUR_LAYER1_EMPTY: sheets=\(sheetsNow) but no content — 转层②")
             } else {
-                XCTFail("层①判A：点击没生效 —— 无「完成」、无「编辑」、无段落译文、sheets=0，sheet 未开（target: \(lastRowTargetInfo)）")
+                XCTFail("层①判A：点击没生效 —— 无「完成」、无「编辑」、无段落译文、sheets=0，sheet 未开（target: \(lastRowTargetInfo) 曾闪现=\(lastRowFlash)）")
             }
         }
         // 层② segments 落库铁证 = 第 1 段**英文译文**关键词（行预览 fullTranscript
