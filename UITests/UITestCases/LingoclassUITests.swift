@@ -22,11 +22,12 @@ final class LingoclassUITests: XCTestCase {
     /// 侧栏 Settings 入口：List 行在 AX 树里的类型因 macOS/Xcode 版本可能是
     /// outlineRow / row / staticText，按顺序找第一个存在的。
     private func sidebarSettingsElement() -> XCUIElement? {
-        // XCUIApplication 无 rows 成员（run 36221214297 编译错的缺陷 1）：
-        // 行类型查询只有 outlineRows，普通 row 用 descendants(matching: .row)。
+        // XCUIApplication 无 rows 成员（编译错 #1）：行类型查询只有 outlineRows，
+        // 其余行用 descendants(matching:)。枚举 case 用 .tableRow —— macOS 26 里
+        // XCUIElement.ElementType.row 已按前缀规则改名（编译错 #2，教训②③）。
         let candidates = [
             app.outlineRows["Settings"],
-            app.descendants(matching: .row)["Settings"],
+            app.descendants(matching: .tableRow)["Settings"],
             app.staticTexts["Settings"]
         ]
         for candidate in candidates where candidate.exists {
