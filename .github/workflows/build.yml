@@ -144,6 +144,19 @@ jobs:
           exit 1
         fi
 
+    # task-12：gui-tour 空 artifact 防线 —— 绿了但截图不足 7 张同样红
+    #（run 36235771099 实测：截图曾落在 xctrunner 容器而非 workspace）。
+    - name: Verify GUI Tour screenshots
+      if: always()
+      run: |
+        ls -la ui-smoke-artifacts/gui-tour/ || true
+        COUNT=$(find ui-smoke-artifacts/gui-tour -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+        echo "gui-tour PNG count: $COUNT"
+        if [ "$COUNT" -lt 7 ]; then
+          echo "gui-tour screenshots < 7 — artifact would be incomplete for the user"
+          exit 1
+        fi
+
     - name: Upload XCUITest Evidence
       if: always()
       uses: actions/upload-artifact@v4

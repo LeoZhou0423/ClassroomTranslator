@@ -22,9 +22,19 @@ final class ScreenshotTourTests: XCTestCase {
         super.setUp()
         continueAfterFailure = false
         let env = ProcessInfo.processInfo.environment
-        let root = env["GITHUB_WORKSPACE"] ?? FileManager.default.currentDirectoryPath
+        // run 36235771099：shell export 不进 xctrunner 进程 env（截图落到容器
+        // Data 目录、没进 artifact）—— 用编译期源码路径 `#filePath` 上推三级 = repo
+        // 根，不依赖任何环境变量；env 只作额外机会，不作唯一通路。
+        let sourcePath = "\(#filePath)" // <repo>/UITests/UITestCases/ScreenshotTourTests.swift
+        let derivedRoot = URL(fileURLWithPath: sourcePath)
+            .deletingLastPathComponent() // UITestCases
+            .deletingLastPathComponent() // UITests
+            .deletingLastPathComponent() // repo 根
+            .path
+        let root = env["GITHUB_WORKSPACE"] ?? derivedRoot
         tourDir = env["LINGOCLASS_TOUR_DIR"]
             ?? (root as NSString).appendingPathComponent("ui-smoke-artifacts/gui-tour")
+        print("TOUR_DIR: \(tourDir)")
         do {
             try FileManager.default.createDirectory(atPath: tourDir, withIntermediateDirectories: true)
         } catch {
@@ -121,22 +131,47 @@ final class ScreenshotTourTests: XCTestCase {
             .matching(NSPredicate(format: "label CONTAINS[c] %@", title)).firstMatch
     }
 
-    /// 记录行点击（06 专用）：**优先按钮路径 .click()** —— staticText 子节点的
-    /// click 在 macOS 上不一定冒泡到父 Button（run 36234301136 嫌疑A）；
-    /// 兜底 staticText 也用 .click()。05 的存在性断言不动。
-    private func clickRecordRow(_ title: String) {
+    /// 会话 sheet 是否已打开（完成/编辑/段落译文任一 —— 浏览态铁证组合）。
+    private func sheetSessionOpen() -> Bool {
+        return app.buttons["完成"].exists
+            || app.buttons["编辑"].exists
+            || app.staticTexts
+                .matching(NSPredicate(format: "label CONTAINS[c] %@", "photosynthesis"))
+                .firstMatch.exists
+    }
+
+    /// 记录行点击（06 专用，run 36235771099 判A 后升级）：
+    /// ① 打印命中的 element（type/label/id 进日志做判位）；
+    /// ② 中心坐标 tap（绕开复合按钮 hit-test）；
+    /// ③ doubleClick 兜底（UI 代码是 Button 单击语义 —— CourseDetailView
+    ///    L90 `Button { selectedRecord = record }`，故单击为正路，双击仅重试）；
+    /// ④ 文本坐标 tap 兜底。任一步 sheet 开即返回。
+    private func clickRecordRow(_ title: String, file: StaticString = #filePath, line: UInt = #line) {
         let button = app.descendants(matching: .button)
             .matching(NSPredicate(format: "label CONTAINS[c] %@", title)).firstMatch
-        if button.exists {
-            button.click()
-            return
-        }
         let text = app.staticTexts[title]
-        if text.exists {
-            text.click()
+        let target: XCUIElement = button.exists ? button : text
+        lastRowTargetInfo = "type=\(target.elementType) label=\(target.label) id=\(target.identifier)"
+        print("TOUR_ROW_TARGET: \(lastRowTargetInfo)")
+        guard target.exists else {
+            XCTFail("记录行候选不存在（button/text 皆无）", file: file, line: line)
             return
         }
+        target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        if sheetSessionOpen() { return }
+        print("TOUR_ROW_RETRY: doubleClick")
+        target.doubleClick()
+        if sheetSessionOpen() { return }
+        if text.exists {
+            print("TOUR_ROW_RETRY: text coordinate tap")
+            text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            if sheetSessionOpen() { return }
+        }
+        print("TOUR_ROW_CLICK_FAILED: \(lastRowTargetInfo)")
     }
+
+    /// 上一次记录行命中的 element 描述（层①判A 文案用）。
+    private var lastRowTargetInfo = "(unresolved)"
 
     /// 等待 App 进程真正退出（两段式重启的衔接）。
     private func waitAppExit(timeout: TimeInterval = 15) -> Bool {
@@ -241,7 +276,7 @@ final class ScreenshotTourTests: XCTestCase {
             if editVisible || segVisible {
                 print("TOUR_LAYER1_B: sheet open, 完成 anchor false-negative (edit=\(editVisible) seg=\(segVisible))")
             } else {
-                XCTFail("层①判A：点击没生效 —— 无「完成」、无「编辑」、无段落译文，sheet 未开")
+                XCTFail("层①判A：点击没生效 —— 无「完成」、无「编辑」、无段落译文，sheet 未开（target: \(lastRowTargetInfo)）")
             }
         }
         // 层② segments 落库铁证 = 第 1 段**英文译文**关键词（行预览 fullTranscript
