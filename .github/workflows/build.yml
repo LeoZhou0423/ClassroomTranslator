@@ -103,6 +103,14 @@ jobs:
     - name: Create DMG
       run: hdiutil create -volname "LingoClass" -srcfolder LingoClass.app -ov -format UDZO LingoClass.dmg
 
+    # 用户指令（2026-09-26）：打包完立刻上传，后面的测试红绿都拦不住安装包。
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: LingoClass-macOS
+        path: LingoClass.dmg
+        retention-days: 30
+
     # ---- task-7 阶段 1：launch smoke（additive 插入；既有步骤顺序未动）----
     - name: Launch Smoke (GUI)
       run: bash UITests/launch_smoke.sh
@@ -170,10 +178,3 @@ jobs:
           ui-smoke-artifacts/gui-tour/
         if-no-files-found: warn
         retention-days: 14
-
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: LingoClass-macOS
-        path: LingoClass.dmg
-        retention-days: 30
