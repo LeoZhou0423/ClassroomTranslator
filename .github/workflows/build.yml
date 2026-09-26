@@ -52,8 +52,8 @@ jobs:
 
     - name: Create Info.plist
       run: |
-        python3 -c "
-        plist = '''<?xml version="1.0" encoding="UTF-8"?>
+        cat > LingoClass.app/Contents/Info.plist <<'PLIST_EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
         <dict>
@@ -71,10 +71,8 @@ jobs:
             <key>NSMicrophoneUsageDescription</key><string>This app needs microphone access to recognize speech.</string>
             <key>NSSpeechRecognitionUsageDescription</key><string>This app uses speech recognition to transcribe lectures.</string>
         </dict>
-        </plist>'''
-        with open('LingoClass.app/Contents/Info.plist','w') as f:
-            f.write(plist.strip())
-        "
+        </plist>
+        PLIST_EOF
 
     - name: Ad-hoc Sign App Bundle
       run: |
