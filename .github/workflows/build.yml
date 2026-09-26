@@ -5,11 +5,11 @@ on:
     branches: [ main, master, codex/fix-recording-start ]
   workflow_dispatch:
 
+# 用户指令（2026-09-26）：只保留 Build、Test、打包三节，
+# GUI smoke / XCUITest / 失败分类器 / 截图巡览 / 证据上传等测试步骤全部删除。
 jobs:
   build:
-    name: Build and test on macOS 26
-    # The local Docker/KVM VM is Intel. The unsuffixed macos-26 label now
-    # resolves to an Apple Silicon runner and produces an arm64-only app.
+    name: Build and test on macOS 26 (Intel)
     runs-on: macos-26-intel
     steps:
     - uses: actions/checkout@v4
@@ -24,23 +24,6 @@ jobs:
 
     - name: Test
       run: swift test
-
-    - name: Dump startup evidence
-      if: always()
-      run: |
-        echo "=== breadcrumb log ==="
-        cat "$HOME/Library/Logs/LingoClass-startup.log" || true
-        echo "=== crash reports ==="
-        for dir in "$HOME/Library/Logs/DiagnosticReports" "/Library/Logs/DiagnosticReports"; do
-          [ -d "$dir" ] || continue
-          ls -la "$dir" || true
-          for f in "$dir"/*.ips; do
-            [ -f "$f" ] || continue
-            echo "--- $f ---"
-            head -c 8000 "$f"
-            echo
-          done
-        done
 
     - name: Create App Bundle
       run: |
@@ -70,9 +53,9 @@ jobs:
     - name: Create Info.plist
       run: |
         python3 -c "
-        plist = '''<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-        <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
-        <plist version=\"1.0\">
+        plist = '''<?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
         <dict>
             <key>CFBundleName</key><string>LingoClass</string>
             <key>CFBundleDisplayName</key><string>LingoClass</string>
@@ -103,78 +86,9 @@ jobs:
     - name: Create DMG
       run: hdiutil create -volname "LingoClass" -srcfolder LingoClass.app -ov -format UDZO LingoClass.dmg
 
-    # 用户指令（2026-09-26）：打包完立刻上传，后面的测试红绿都拦不住安装包。
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: LingoClass-macOS
         path: LingoClass.dmg
         retention-days: 30
-
-    # ---- task-7 阶段 1：launch smoke（additive 插入；既有步骤顺序未动）----
-    - name: Launch Smoke (GUI)
-      run: bash UITests/launch_smoke.sh
-
-    - name: Upload GUI Smoke Evidence
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: gui-smoke-evidence
-        path: ui-smoke-artifacts/
-        if-no-files-found: warn
-        retention-days: 14
-
-    # ---- task-7 阶段 2：xcodegen XCUITest（尽力项）----
-    # 失败分类见下一步：TCC/权限类（runner 无法授予辅助功能/录屏）降级放行；
-    # 其余失败（schema、断言、xcodebuild）照常红 —— 本 workflow 改动的自证测试。
-    - name: XCUITest (xcodegen)
-      id: xcuitest
-      continue-on-error: true
-      run: bash UITests/run_xcuitests.sh
-
-    # 缺陷 2 修复（run 36221214297 假绿复盘）：分类逻辑独立到
-    # UITests/classify_xcuitest_failure.sh —— 规则 a-d（硬失败优先 / 收紧
-    # TCC 标记 / 无标记 fail-closed / 内置自测）见该脚本头注释。
-    - name: Degrade XCUITest only for TCC/permission failures
-      if: steps.xcuitest.outcome != 'success'
-      run: |
-        # d. 分类器自测先行：自测挂了（分类器自身坏）直接红。
-        bash UITests/classify_xcuitest_failure.sh --self-test || exit 1
-        LOG=ui-smoke-artifacts/xcuitests.log
-        if [ ! -f "$LOG" ]; then
-          echo "missing $LOG — fail closed"
-          exit 1
-        fi
-        if bash UITests/classify_xcuitest_failure.sh "$LOG"; then
-          echo "TCC/permission at run time — degraded per task-7 spec; phase-1 smoke retained."
-          echo "DEGRADED=xcuitest-tcc" >> "$GITHUB_ENV"
-        else
-          echo "Classifier verdict RED — failing the run. Tail:"
-          tail -n 150 "$LOG" || true
-          exit 1
-        fi
-
-    # task-12：gui-tour 空 artifact 防线 —— 绿了但截图不足 7 张同样红
-    #（run 36235771099 实测：截图曾落在 xctrunner 容器而非 workspace）。
-    - name: Verify GUI Tour screenshots
-      if: always()
-      run: |
-        ls -la ui-smoke-artifacts/gui-tour/ || true
-        COUNT=$(find ui-smoke-artifacts/gui-tour -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
-        echo "gui-tour PNG count: $COUNT"
-        if [ "$COUNT" -lt 7 ]; then
-          echo "gui-tour screenshots < 7 — artifact would be incomplete for the user"
-          exit 1
-        fi
-
-    - name: Upload XCUITest Evidence
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: xcuitest-evidence
-        path: |
-          ui-smoke-artifacts/xcuitests.log
-          ui-smoke-artifacts/UITests.xcresult
-          ui-smoke-artifacts/gui-tour/
-        if-no-files-found: warn
-        retention-days: 14
