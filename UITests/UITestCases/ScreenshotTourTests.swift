@@ -330,6 +330,25 @@ final class ScreenshotTourTests: XCTestCase {
         let onCourseDetail = app.buttons["新建录音"].exists
         let onSettings = app.staticTexts["App 语言"].exists
         print("TOUR_HOP1_STATE: 指引锚=\(overviewShown) 新建录音=\(onCourseDetail) App语言=\(onSettings)")
+        // 页面倾倒（lead 第十二轮定性指令）：模态三计数 + 前 40 条文本 value +
+        // 锁提示/存储错误关键字 —— 一眼定：真在设置页？sheet/alert 挡着？
+        // 还是已到总览但指引措辞与锚对不上（两行合成 value 会让 exact 锚 miss）？
+        print("TOUR_PAGE_DUMP: sheets=\(app.sheets.count) alerts=\(app.alerts.count) windows=\(app.windows.count)")
+        let sampleQuery = app.staticTexts
+        let sampleCount = min(sampleQuery.count, 40)
+        var sampleValues: [String] = []
+        for i in 0..<sampleCount {
+            let el = sampleQuery.element(boundBy: i)
+            if let v = el.value {
+                sampleValues.append("\(v)")
+            } else {
+                sampleValues.append(el.label)
+            }
+        }
+        print("TOUR_PAGE_TEXTS: \(sampleValues.joined(separator: " | "))")
+        let lockHintShown = app.staticTexts
+            .matching(NSPredicate(format: "value CONTAINS[c] %@", "录音进行中")).firstMatch.exists
+        print("TOUR_PAGE_MODAL: 录音锁提示=\(lockHintShown)")
         if !overviewShown && (onCourseDetail || onSettings) {
             // 指引没出但人还在课程详情/设置页 → selection 没走到 .courses。
             XCTFail("回课程总览失败（指引锚未出；新建录音=\(onCourseDetail) App语言=\(onSettings)）")
