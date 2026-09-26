@@ -9,6 +9,10 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/ui-smoke-artifacts"
 mkdir -p "$OUT"
+# task-12：截图导览输出目录（ScreenshotTourTests 读同名环境变量；
+# App 侧经 launchEnvironment 透传同一约定）。
+export LINGOCLASS_TOUR_DIR="$OUT/gui-tour"
+mkdir -p "$LINGOCLASS_TOUR_DIR"
 exec > >(tee "$OUT/xcuitests.log") 2>&1
 
 echo "=== phase2: xcodegen XCUITest ==="
@@ -34,7 +38,8 @@ xcodebuild test \
   -scheme LingoclassUITests \
   -destination 'platform=macOS' \
   -resultBundlePath "$OUT/UITests.xcresult" \
-  -only-testing:LingoclassUITests/LingoclassUITests
+  -only-testing:LingoclassUITests/LingoclassUITests \
+  -only-testing:LingoclassUITests/ScreenshotTourTests
 RC=$?
 echo "XCODEBUILD_EXIT=$RC"
 exit $RC

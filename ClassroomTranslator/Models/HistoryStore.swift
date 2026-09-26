@@ -25,6 +25,9 @@ final class HistoryStore {
 
     init(isStoredInMemoryOnly: Bool = false) {
         setupContainer(isStoredInMemoryOnly: isStoredInMemoryOnly)
+        // task-12：CI 截图导览演示数据 —— 门控在 UITourDemoData 内
+        //（-uiTestDemoData 进程参数）；生产进程仅一次数组扫描即返回，零执行。
+        UITourDemoData.seedIfNeeded(in: self)
     }
 
     private func setupContainer(isStoredInMemoryOnly: Bool) {

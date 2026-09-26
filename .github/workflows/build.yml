@@ -152,6 +152,7 @@ jobs:
         path: |
           ui-smoke-artifacts/xcuitests.log
           ui-smoke-artifacts/UITests.xcresult
+          ui-smoke-artifacts/gui-tour/
         if-no-files-found: warn
         retention-days: 14
 
