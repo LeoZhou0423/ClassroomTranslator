@@ -137,4 +137,33 @@ final class CourseScheduleTests: XCTestCase {
         // 时间部分格式化与 locale 无关（24h 零填充），只断言它。
         XCTAssertTrue(text.contains("10:15"), "got \(text)")
     }
+
+    // MARK: - 查表机制（run 36229026246 修复回归）
+
+    /// 诊断（Lead 方向 #2）：注入 bundle 里到底有没有 zh-Hans 表 —— 一锤定音。
+    func testZhTablePresentInStringsBundle() {
+        let path = CourseSchedule.stringsBundle.path(forResource: "zh-Hans", ofType: "lproj")
+            ?? CourseSchedule.stringsBundle.path(
+                forResource: "zh-Hans", ofType: "lproj", inDirectory: "Resources"
+            )
+        XCTAssertNotNil(path, "zh-Hans.lproj 不在注入 bundle（.copy 布局假设需核）")
+        if let path {
+            let table = Bundle(path: path)?.path(forResource: "Localizable", ofType: "strings")
+            XCTAssertNotNil(table, "zh-Hans.lproj/Localizable.strings 缺失")
+        }
+    }
+
+    /// 显式查表器（BundleText）：zh 按注入 locale 拿中文值、en 无表回 key。
+    /// 回归背景：String(localized:) 的 locale 不驱动表选择，测试进程 en 导致
+    /// zh 表存在也回英文 key（run 36229026246 九连败根因之一）。
+    func testBundleTextResolvesByInjectedLocale() {
+        XCTAssertEqual(
+            BundleText.string("Monthly on day %1$@ at %2$@", bundle: CourseSchedule.stringsBundle, locale: zh),
+            "每月%@日 %@"
+        )
+        XCTAssertEqual(
+            BundleText.string("Monthly on day %1$@ at %2$@", bundle: CourseSchedule.stringsBundle, locale: en),
+            "Monthly on day %1$@ at %2$@"
+        )
+    }
 }

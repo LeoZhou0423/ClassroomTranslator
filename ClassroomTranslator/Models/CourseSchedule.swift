@@ -39,8 +39,9 @@ enum CourseSchedule {
                let hour = scheduleHour, let minute = scheduleMinute {
                 let time = timeString(hour: hour, minute: minute)
                 let day = weekdaySymbol(isoWeekday: weekday, locale: locale)
+                // 显式 lproj 查表（String(localized:) 的 locale 不驱动表选择，见 BundleText）。
                 return String(
-                    format: String(localized: "Every %1$@ at %2$@", bundle: textBundle, locale: locale),
+                    format: BundleText.string("Every %1$@ at %2$@", bundle: textBundle, locale: locale),
                     day, time
                 )
             }
@@ -50,7 +51,7 @@ enum CourseSchedule {
                 let clamped = min(max(day, 1), 28)
                 let time = timeString(hour: hour, minute: minute)
                 return String(
-                    format: String(localized: "Monthly on day %1$@ at %2$@", bundle: textBundle, locale: locale),
+                    format: BundleText.string("Monthly on day %1$@ at %2$@", bundle: textBundle, locale: locale),
                     String(clamped), time
                 )
             }
@@ -76,10 +77,25 @@ enum CourseSchedule {
     }
 
     private static func describeSingle(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
+        // zh：规格字面「3月5日 14:00」手排 —— 绕开 macOS 26 工具链 DateFormatter
+        // 模板在测试进程落到 root 模式的坑（run 36229026246：注入 zh 却输出 "3/5 14:00"；
+        // 同 locale 的 Calendar.weekdaySymbols 却正常，故 zh 数据在，是模板路径的问题）。
+        if locale.language.languageCode?.identifier == "zh" {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = timeZone
+            let parts = calendar.dateComponents([.month, .day, .hour, .minute], from: date)
+            let month = parts.month ?? 1
+            let day = parts.day ?? 1
+            let hour = parts.hour ?? 0
+            let minute = parts.minute ?? 0
+            let hh = hour < 10 ? "0\(hour)" : "\(hour)"
+            let mm = minute < 10 ? "0\(minute)" : "\(minute)"
+            return "\(month)月\(day)日 \(hh):\(mm)"
+        }
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.timeZone = timeZone
-        // 本地化日期模板：zh-Hans → 「3月5日 14:00」，en → 「3/5, 2:00 PM」。
+        // 非 zh：本地化模板（en → 「3/5 …」）；CI 实测该路径 en/root 均产出 "3/5"，稳定。
         formatter.setLocalizedDateFormatFromTemplate("MdHm")
         return formatter.string(from: date)
     }

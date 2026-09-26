@@ -20,8 +20,16 @@ enum SessionDisplay {
         return trimmed
     }
 
-    /// 占位日期：模板 "Md"（无年）→ zh「3月5日」、en「3/5」。
+    /// 占位日期：zh 手排「3月5日」（无年）—— 与 CourseSchedule.describeSingle 同因：
+    /// macOS 26 工具链的 DateFormatter 模板在测试进程落 root 模式（run 36229026246：
+    /// 注入 zh 输出 "3/5 14:00"），绕开它；非 zh 走模板（en → 「3/5」，CI 实测稳定）。
     private static func fallbackDate(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
+        if locale.language.languageCode?.identifier == "zh" {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = timeZone
+            let parts = calendar.dateComponents([.month, .day], from: date)
+            return "\(parts.month ?? 1)月\(parts.day ?? 1)日"
+        }
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.timeZone = timeZone
