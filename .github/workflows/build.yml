@@ -8,7 +8,9 @@ on:
 jobs:
   build:
     name: Build and test on macOS 26
-    runs-on: macos-26
+    # The local Docker/KVM VM is Intel. The unsuffixed macos-26 label now
+    # resolves to an Apple Silicon runner and produces an arm64-only app.
+    runs-on: macos-26-intel
     steps:
     - uses: actions/checkout@v4
 
