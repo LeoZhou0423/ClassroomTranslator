@@ -113,7 +113,8 @@ struct ExportManager {
             courseName: record.course?.name ?? "",
             date: record.date,
             duration: record.duration,
-            segments: record.segments
+            segments: record.segments,
+            speakerAliases: record.aliasMap
         )
 
         let panel = NSSavePanel()
@@ -144,6 +145,8 @@ struct ExportManager {
         let date: Date
         let duration: TimeInterval
         let segments: [TranscriptSegment]
+        /// task-10：本记录人员映射快照（面板打开前取出，回调不再碰 SwiftData 对象）。
+        let speakerAliases: [String: SpeakerAlias]
     }
 
     private static func createWordDocument(snapshot: WordSnapshot, at destination: URL) throws {
@@ -185,7 +188,11 @@ struct ExportManager {
         body += paragraph(String(localized: "Transcript"), style: "Heading1")
         for segment in snapshot.segments {
             // task-4：Word 导出同样走 SpeakerLabels 统一前缀（与 TXT/转写一致）。
-            body += paragraph(segment.speakerLinePrefix + segment.original, style: "Original")
+            // task-10：带本记录人员映射（昵称如「王教授: 」），快照里取出。
+            body += paragraph(
+                SpeakerLabels.prefix(segment.speaker, aliases: snapshot.speakerAliases) + segment.original,
+                style: "Original"
+            )
             if !segment.translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 body += paragraph(segment.translated, style: "Translation")
             }

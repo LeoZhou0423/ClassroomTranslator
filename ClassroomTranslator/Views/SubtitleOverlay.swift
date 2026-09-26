@@ -9,6 +9,9 @@ final class SubtitleWindowController: NSWindowController {
     private var latestTranslation = ""
     /// task-4：当前字幕的说话人（nil = 无标签）。
     private var latestSpeaker: String?
+    /// task-10：当前会话的人员映射（会话上下文经 showStableCue 传入；
+    /// 昵称命中时前缀显示「王教授: 」，默认空 = 原 label）。
+    private var latestAliases: [String: SpeakerAlias] = [:]
 
     convenience init() {
         let window = NSPanel(
@@ -113,11 +116,17 @@ final class SubtitleWindowController: NSWindowController {
 
     /// Replaces the entire overlay in one text-storage operation so source and
     /// translation can never briefly belong to different recognition revisions.
-    func showStableCue(original: String, translated: String, speaker: String? = nil) {
+    func showStableCue(
+        original: String,
+        translated: String,
+        speaker: String? = nil,
+        aliases: [String: SpeakerAlias] = [:]
+    ) {
         guard !original.isEmpty || !translated.isEmpty else { return }
         latestOriginal = original
         latestTranslation = translated
         latestSpeaker = speaker
+        latestAliases = aliases
         renderLatestCue()
     }
 
@@ -141,8 +150,9 @@ final class SubtitleWindowController: NSWindowController {
             // 同时把纯 #FFCC00 换成柔和的 #FFD866。
             // task-4：前缀在截断**之后**拼接，保证「老师: 」永远完整、
             // 且不吃掉句子的 52 字符阅读预算（共用 SpeakerLabels helper）。
+            // task-10：带会话人员映射（昵称如「王教授: 」）。
             value.append(NSAttributedString(
-                string: SpeakerLabels.prefix(latestSpeaker) + originalCue,
+                string: SpeakerLabels.prefix(latestSpeaker, aliases: latestAliases) + originalCue,
                 attributes: subtitleAttrs(
                     fontSize: max(fontSize - 4, 12),
                     color: Self.softOriginalYellow
@@ -162,6 +172,7 @@ final class SubtitleWindowController: NSWindowController {
         latestOriginal = ""
         latestTranslation = ""
         latestSpeaker = nil
+        latestAliases = [:]
     }
 
     func showWindow() {

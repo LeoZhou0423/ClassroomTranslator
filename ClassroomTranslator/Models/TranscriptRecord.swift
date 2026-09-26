@@ -8,6 +8,10 @@ final class TranscriptRecord {
     var title: String
     var segmentsData: Data
     var duration: TimeInterval
+    /// task-10：本记录内人员映射 JSON（[label → {nickname, role}]，见 SpeakerAliases）。
+    /// 可选字段 —— 老数据 nil = 空映射，SwiftData 轻量迁移零丢失。
+    /// 隔离铁律（用户硬约束）：只属于本记录，绝不跨记录/跨课程共享。
+    var speakerNames: Data?
     var course: Course?
 
     var segments: [TranscriptSegment] {
@@ -41,9 +45,15 @@ final class TranscriptRecord {
         segments.map { $0.translated }.joined(separator: " ")
     }
 
+    /// 本记录的人员映射（每次访问解一次 JSON —— 渲染循环里应先取一次再复用）。
+    var aliasMap: [String: SpeakerAlias] {
+        SpeakerAliases.decode(speakerNames)
+    }
+
     var bilingualTranscript: String {
-        segments.map { segment in
-            "\(segment.speakerLinePrefix)\(segment.original)\n\(segment.translated)"
+        let aliases = aliasMap
+        return segments.map { segment in
+            "\(SpeakerLabels.prefix(segment.speaker, aliases: aliases))\(segment.original)\n\(segment.translated)"
         }.joined(separator: "\n\n")
     }
 }
@@ -53,9 +63,12 @@ final class TranscriptRecord {
 /// 禁止在各渲染点手写字符串拼接。
 enum SpeakerLabels {
     /// name 为 nil 或空 → 空前缀（老数据 / 手动模式不显示前缀）。
-    static func prefix(_ name: String?) -> String {
+    /// task-10：aliases（本记录 speakerNames 解出的映射）里该 label 有昵称时
+    /// 输出 "王教授: 正文" 替代 "老师: 正文"；默认 [:] 保持原 label 行为
+    /// （老调用点与兼容测试零变化）。
+    static func prefix(_ name: String?, aliases: [String: SpeakerAlias] = [:]) -> String {
         guard let name, !name.isEmpty else { return "" }
-        return "\(name): "
+        return "\(SpeakerAliases.resolve(name, in: aliases)): "
     }
 }
 
@@ -85,6 +98,8 @@ struct TranscriptSegment: Codable, Identifiable, Sendable {
         self.speaker = speaker
     }
 
-    /// 统一前缀（SpeakerLabels），渲染/导出/字幕/详情页共用。
+    /// 统一前缀（SpeakerLabels）——**原始 label**（无映射上下文的兜底路径）。
+    /// 带人员映射的渲染点（TXT/Word/字幕/主转写/详情页）一律走
+    /// SpeakerLabels.prefix(_:aliases:) 并传入所属记录的 aliasMap。
     var speakerLinePrefix: String { SpeakerLabels.prefix(speaker) }
 }

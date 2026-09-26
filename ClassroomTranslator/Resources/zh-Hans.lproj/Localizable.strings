@@ -72,6 +72,14 @@
 "Time" = "时间";
 "Every %1$@ at %2$@" = "每%@ %@";
 "Monthly on day %1$@ at %2$@" = "每月%@日 %@";
+
+/* 会话人员（task-10） */
+"People" = "人员";
+"Nickname" = "昵称";
+"Professor" = "教授";
+"Student" = "学生";
+"Teaching Assistant" = "助教";
+"Other" = "其他";
 "Professor's Accent" = "教授口音";
 "Accent" = "口音";
 "Select the accent that best matches your professor" = "选择与教授最接近的口音";

@@ -26,6 +26,10 @@ struct SessionDetailView: View {
     @State private var isFillingTranslations = false
     /// task-9：编辑态 DatePicker 的日期草稿（init 从 record.date 装载）。
     @State private var sessionDate: Date
+    /// task-10：本记录人员映射（昵称/角色）—— 隔离铁律：只落本记录，改动即时存。
+    @State private var peopleAliases: [String: SpeakerAlias]
+    /// task-10：本记录 segments 出现过的 speaker 标签（首次出现序，init 快照）。
+    @State private var peopleLabels: [String]
 
     private enum FeedbackSeverity {
         case info, success, error
@@ -68,6 +72,8 @@ struct SessionDetailView: View {
         self.record = record
         _title = State(initialValue: record.title)
         _sessionDate = State(initialValue: record.date)
+        _peopleAliases = State(initialValue: record.aliasMap)
+        _peopleLabels = State(initialValue: SessionDetailView.uniqueSpeakerLabels(record.segments))
         _drafts = State(initialValue: record.segments.map {
             DraftSegment(id: $0.id, original: $0.original, translated: $0.translated, speaker: $0.speaker ?? "", originalAtLoad: $0.original, timestamp: $0.timestamp, isFinal: $0.isFinal)
         })
@@ -105,6 +111,11 @@ struct SessionDetailView: View {
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    // task-10：人员区（本记录内昵称/角色，改动即时存；无标签时隐藏）。
+                    if !peopleLabels.isEmpty {
+                        peopleSection
+                        Divider()
+                    }
                     ForEach($drafts) { $segment in
                         VStack(alignment: .leading, spacing: 7) {
                             if isEditing {
@@ -129,7 +140,8 @@ struct SessionDetailView: View {
                                 if !segment.speaker.isEmpty {
                                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                                         roleTag("Speaker")
-                                        Text(segment.speaker)
+                                        // task-10：昵称命中显示「王教授」，与人员区编辑即时联动。
+                                        Text(SpeakerAliases.resolve(segment.speaker, in: peopleAliases))
                                             .font(.system(size: 13, weight: .semibold))
                                             .foregroundColor(.secondary)
                                     }
@@ -227,6 +239,77 @@ struct SessionDetailView: View {
         sessionDate = record.date
         drafts = record.segments.map { DraftSegment(id: $0.id, original: $0.original, translated: $0.translated, speaker: $0.speaker ?? "", originalAtLoad: $0.original, timestamp: $0.timestamp, isFinal: $0.isFinal) }
         isEditing = false
+    }
+
+    // MARK: - task-10：人员（本记录昵称/角色；隔离铁律：只落本 TranscriptRecord）
+
+    private var peopleSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("People").font(.headline)
+            ForEach(peopleLabels, id: \.self) { label in
+                HStack(spacing: 10) {
+                    Text(label)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 76, alignment: .leading)
+                    TextField("Nickname", text: nicknameBinding(for: label))
+                        .textFieldStyle(.roundedBorder)
+                    Picker("", selection: roleBinding(for: label)) {
+                        ForEach(SpeakerRole.allCases) { role in
+                            Text(LocalizedStringKey(role.title)).tag(role)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 130)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func nicknameBinding(for label: String) -> Binding<String> {
+        Binding(
+            get: { peopleAliases[label]?.nickname ?? "" },
+            set: { newValue in
+                var alias = peopleAliases[label] ?? .empty
+                alias.nickname = newValue
+                peopleAliases[label] = alias
+                persistPeople()
+            }
+        )
+    }
+
+    private func roleBinding(for label: String) -> Binding<SpeakerRole> {
+        Binding(
+            get: { peopleAliases[label]?.role ?? .other },
+            set: { newValue in
+                var alias = peopleAliases[label] ?? .empty
+                alias.role = newValue
+                peopleAliases[label] = alias
+                persistPeople()
+            }
+        )
+    }
+
+    /// 改动即时存：写回 record.speakerNames（encode 修剪空条目，全空 → nil 清除）。
+    private func persistPeople() {
+        record.speakerNames = SpeakerAliases.encode(peopleAliases)
+        historyStore.save()
+    }
+
+    /// 本记录 segments 里出现过的 speaker 标签（首次出现序、trim、去重）。
+    private static func uniqueSpeakerLabels(_ segments: [TranscriptSegment]) -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for segment in segments {
+            let label = segment.speaker.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !label.isEmpty, seen.insert(label).inserted else { continue }
+            ordered.append(label)
+        }
+        return ordered
     }
 
     private func exportWord() {

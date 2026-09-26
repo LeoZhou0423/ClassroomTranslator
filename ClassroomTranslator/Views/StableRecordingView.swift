@@ -673,7 +673,10 @@ final class StableRecordingViewController: NSViewController {
             subtitleWindow.showStableCue(
                 original: response.request.text,
                 translated: response.translatedText,
-                speaker: speaker
+                speaker: speaker,
+                // task-10：会话上下文（本记录人员映射）传入字幕悬浮窗；
+                // 新录记录 speakerNames=nil → [:] 零解析开销。
+                aliases: activeRecord?.aliasMap ?? [:]
             )
         }
 
@@ -784,7 +787,11 @@ final class StableRecordingViewController: NSViewController {
             let start = storage.length
             let live = NSMutableAttributedString(string: prefix)
             // task-4：实时 partial 同样带当前说话人前缀（共用 SpeakerLabels helper）。
-            let liveOriginal = SpeakerLabels.prefix(speakerEngine?.currentLabel) + partialText
+            // task-10：带本记录人员映射（nickname 命中时显示「王教授: 」）。
+            let liveOriginal = SpeakerLabels.prefix(
+                speakerEngine?.currentLabel,
+                aliases: activeRecord?.aliasMap ?? [:]
+            ) + partialText
             live.append(NSAttributedString(string: liveOriginal, attributes: Self.originalTextAttributes))
             if !partialTranslation.isEmpty {
                 live.append(NSAttributedString(
@@ -801,10 +808,12 @@ final class StableRecordingViewController: NSViewController {
 
     private func rebuildFinalizedText(from record: TranscriptRecord) {
         let result = NSMutableAttributedString()
+        // task-10：人员映射取一次复用（解析 JSON 每段一次太浪费）。
+        let aliases = record.aliasMap
         for (index, segment) in record.segments.enumerated() {
             if index > 0 { result.append(NSAttributedString(string: "\n\n")) }
             result.append(NSAttributedString(
-                string: segment.speakerLinePrefix + segment.original,
+                string: SpeakerLabels.prefix(segment.speaker, aliases: aliases) + segment.original,
                 attributes: Self.originalTextAttributes
             ))
             let translation = segment.translated.trimmingCharacters(in: .whitespacesAndNewlines)
