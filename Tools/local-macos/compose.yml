@@ -2,6 +2,9 @@ services:
   macos:
     image: dockurr/macos:latest
     container_name: classroomtranslator-macos
+    entrypoint:
+      - /bin/sh
+      - /shared/ClassroomTranslator/Tools/local-macos/entrypoint-audio.sh
     environment:
       VERSION: "26"
       CONNECTIONS: "4"
@@ -13,6 +16,10 @@ services:
       HEIGHT: "720"
       # Reduce bandwidth and browser decoding work for the noVNC session.
       LOSSY: "Y"
+      # QEMU 音频：Intel HDA 双工声卡（macOS 侧由 VoodooHDA-Tahoe 驱动）。
+      # ALSA 后端采集走 /etc/asound.conf 的 file 插件 → /run/mic.fifo 麦克风桥
+      # （audio-setup.sh 配置）；放音丢到 null 不出声。
+      ARGUMENTS: "-device intel-hda -device hda-duplex,audiodev=audio0 -audiodev alsa,id=audio0,in.dev=default,in.fixed-settings=on,in.frequency=48000,in.channels=1,in.format=s16,out.dev=null"
     devices:
       - /dev/kvm
       - /dev/net/tun
@@ -26,6 +33,8 @@ services:
       - "127.0.0.1:8006:8006"
       - "127.0.0.1:5900:5900/tcp"
       - "127.0.0.1:5900:5900/udp"
+      # Windows 麦克风桥（mic-bridge.ps1）推流入口
+      - "127.0.0.1:19999:19999"
     volumes:
       - classroomtranslator_macos_disk:/storage
       - ../..:/shared/ClassroomTranslator

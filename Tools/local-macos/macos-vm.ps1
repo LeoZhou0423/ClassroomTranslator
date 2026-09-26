@@ -19,6 +19,7 @@ function Invoke-Compose {
 switch ($Action) {
     'start' {
         Invoke-Compose up --detach
+        # The Compose entrypoint arms the microphone bridge before QEMU starts.
         Write-Host "macOS VM is starting. Open $ViewerUrl to install or use it."
         Start-Process $ViewerUrl
     }

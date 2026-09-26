@@ -1,0 +1,15 @@
+所在位置 D:\Project\ClassroomTranslator\Tools\local-macos\mic-bridge.ps1:14 字符: 22
++ function Find-Ffmpeg {
++                      ~
+语句块或类型定义中缺少右“}”。
+所在位置 D:\Project\ClassroomTranslator\Tools\local-macos\mic-bridge.ps1:38 字符: 46
++     $found = [regex]::Matches($list, '"([^"]+)"\s+\(audio\)')
++                                              ~
+表达式或语句中包含意外的标记“)”。
+所在位置 D:\Project\ClassroomTranslator\Tools\local-macos\mic-bridge.ps1:38 字符: 47
++     $found = [regex]::Matches($list, '"([^"]+)"\s+\(audio\)')
++                                               ~~~~~~~~~~~~~~~
+字符串缺少终止符: "。
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : MissingEndCurlyBrace
+ 

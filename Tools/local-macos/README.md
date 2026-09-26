@@ -50,12 +50,41 @@ The container pins `oscdn.apple.com` to an Akamai edge because this machine's
 split-DNS route selects a domestic CDN node that closes range downloads early.
 This override affects only the macOS container.
 
+## Microphone (speech recognition)
+
+The VM has an emulated Intel HDA sound card. The guest driver
+(VoodooHDA.kext) is injected into OpenCore, and microphone samples are
+bridged from Windows:
+
+1. Start the VM normally (`macos-vm.ps1 start` also arms the in-container
+   audio bridge automatically).
+2. In a second PowerShell window, start the Windows microphone bridge:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File Tools/local-macos/mic-bridge.ps1
+   ```
+
+   First run downloads ffmpeg once (~80 MB) into `tools/` (gitignored).
+   It auto-picks the first DirectShow audio input; override with
+   `-Device "exact name"` if you have several microphones.
+3. In macOS, accept the microphone/speech permission prompts, then use the
+   app. Keep the bridge running while recording; when it is not running the
+   guest microphone delivers silence (the app shows a zero input level).
+
+If the container is restarted outside `macos-vm.ps1 start`, re-arm the
+bridge with:
+
+```powershell
+docker exec classroomtranslator-macos sh -c 'sh /shared/ClassroomTranslator/Tools/local-macos/audio-setup.sh'
+```
+
 ## Limitations
 
 - macOS 26 is currently much slower in this QEMU setup than macOS 15.
 - There is no accelerated Apple-compatible GPU. SwiftUI works, but animations
   and Xcode can be sluggish.
-- Microphone, speech recognition, signing, and Apple Account services may need
-  extra configuration or may not work reliably in the VM.
+- The VM plays no sound (audio output is discarded); the microphone path
+  above works for speech recognition.
+- Apple Account services may not work reliably in the VM.
 - Apple's macOS license generally permits virtualization only on Apple-branded
   hardware. This configuration is for local technical evaluation.
