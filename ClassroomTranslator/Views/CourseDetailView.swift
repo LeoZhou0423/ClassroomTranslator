@@ -27,9 +27,13 @@ struct CourseDetailView: View {
                 ))
             } else {
                 courseOverview
+                    // task-12 排查产出（run 36241937270）：同一视图叠两个 .sheet 只有
+                    // 后声明的生效（macOS 经典坑）—— 外层课程设置 sheet 把会话 sheet
+                    // 盖死：行点击写入 selectedRecord 也从不呈现（CI 四连点击、sheets
+                    // 恒 0 实证）。会话 sheet 挪进内层视图分层，两个 sheet 各占一层。
+                    .sheet(item: $selectedRecord) { SessionDetailView(record: $0) }
             }
         }
-        .sheet(item: $selectedRecord) { SessionDetailView(record: $0) }
         .sheet(isPresented: $showCourseSettings) {
             CourseSettingsEditor(course: course).environment(historyStore)
         }
