@@ -31,11 +31,10 @@ jobs:
         mkdir -p LingoClass.app/Contents/Resources
         cp .build/release/ClassroomTranslator LingoClass.app/Contents/MacOS/LingoClass
         if [ -d .build/release/ClassroomTranslator_ClassroomTranslator.bundle ]; then
-          # SwiftPM 生成的 Bundle.module 只查两处：Bundle.main.bundleURL（= app 根目录）
-          # 和硬编码的 CI 构建路径。资源包必须放在 app 根，放 Contents/Resources 用户机上
-          # 永远查不到（虚拟机崩溃日志实证：点「新建录音」首次 Bundle.module 访问即
-          # Fatal error: could not load resource bundle → SIGILL）。
-          cp -R .build/release/ClassroomTranslator_ClassroomTranslator.bundle LingoClass.app/
+          # 资源包放 Contents/Resources（签名合规）。应用侧用 AppResourceBundle.swift 的
+          # Bundle.lingoResources 解析此位置。不能用 SwiftPM 生成的 Bundle.module（只查
+          # app 根 + 构建机硬编码路径；放 app 根 codesign 报 unsealed contents 无法签名）。
+          cp -R .build/release/ClassroomTranslator_ClassroomTranslator.bundle LingoClass.app/Contents/Resources/
         fi
         if [ -d ClassroomTranslator/Resources ]; then
           cp -R ClassroomTranslator/Resources/*.lproj LingoClass.app/Contents/Resources/

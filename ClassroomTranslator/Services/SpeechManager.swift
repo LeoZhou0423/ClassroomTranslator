@@ -42,7 +42,7 @@ final class SpeechManager {
             savedLanguage = Self.safeAutomaticEnglishLocale()
         }
         currentLanguageCode = savedLanguage
-        accentClassifier = AccentClassifier(bundle: .module)
+        accentClassifier = AccentClassifier(bundle: .lingoResources)
     }
 
     /// Course title feeds AnalysisContext so domain words bias recognition.

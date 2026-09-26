@@ -40,11 +40,11 @@ final class SherpaSpeechEngine: @unchecked Sendable, SpeechEngine {
     /// 模型缺失降级是同一纪律，不触碰 SpeechManager 编排。
     private static var creationDisabled = false
 
-    static func modelDirectoryURL(bundle: Bundle = .module) -> URL? {
+    static func modelDirectoryURL(bundle: Bundle = .lingoResources) -> URL? {
         bundle.url(forResource: modelDirectory, withExtension: nil)
     }
 
-    static func modelsPresent(bundle: Bundle = .module) -> Bool {
+    static func modelsPresent(bundle: Bundle = .lingoResources) -> Bool {
         guard let dir = modelDirectoryURL(bundle: bundle) else { return false }
         let fm = FileManager.default
         return requiredModelFiles.allSatisfy { file in
@@ -56,7 +56,7 @@ final class SherpaSpeechEngine: @unchecked Sendable, SpeechEngine {
     }
 
     /// 工厂/设置页/单测共用的可用性判断：未熔断 且 模型文件齐全。
-    static func isUsable(bundle: Bundle = .module) -> Bool {
+    static func isUsable(bundle: Bundle = .lingoResources) -> Bool {
         let disabled = availabilityLock.withLock { creationDisabled }
         return !disabled && modelsPresent(bundle: bundle)
     }

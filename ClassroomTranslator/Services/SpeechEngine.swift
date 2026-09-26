@@ -53,7 +53,7 @@ enum SpeechEngineKind: String, CaseIterable {
         self = SpeechEngineKind(rawValue: stored) ?? Self.fallback
     }
 
-    /// 是否已有可用实现。sherpa 见模型资源 + 熔断状态（Bundle.module 即
+    /// 是否已有可用实现。sherpa 见模型资源 + 熔断状态（Bundle.lingoResources 即
     /// 应用资源包；单测经 temp bundle 注入覆盖缺失路径）。
     var isAvailable: Bool {
         switch self {
@@ -74,7 +74,7 @@ enum SpeechEngineKind: String, CaseIterable {
 /// 创建失败熔断）→ 记日志回退 apple；init 均为轻量（sherpa 模型创建在
 /// start() 后台线程，见 SherpaSpeechEngine）。
 enum SpeechEngineFactory {
-    static func make(userDefaults: UserDefaults = .standard, bundle: Bundle = .module) -> any SpeechEngine {
+    static func make(userDefaults: UserDefaults = .standard, bundle: Bundle = .lingoResources) -> any SpeechEngine {
         let kind = SpeechEngineKind(userDefaults: userDefaults)
         switch kind {
         case .apple:

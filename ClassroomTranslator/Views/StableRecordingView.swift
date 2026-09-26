@@ -537,7 +537,7 @@ final class StableRecordingViewController: NSViewController {
     private func configureSpeakerEngine() {
         let engine = SpeakerEngine(
             ring: speechManager.speakerRing,
-            model: SpeakerEmbeddingModel(bundle: .module)
+            model: SpeakerEmbeddingModel(bundle: .lingoResources)
         )
         engine.onLabelsResolved = { [weak self] updates, currentLabel in
             guard let self else { return }

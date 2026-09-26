@@ -1,0 +1,37 @@
+services:
+  macos:
+    image: dockurr/macos:latest
+    container_name: classroomtranslator-macos
+    environment:
+      VERSION: "26"
+      CONNECTIONS: "4"
+      RAM_SIZE: "12G"
+      CPU_CORES: "8"
+      DISK_SIZE: "160G"
+      # Software-rendered macOS is much more responsive at a smaller desktop.
+      WIDTH: "1280"
+      HEIGHT: "720"
+      # Reduce bandwidth and browser decoding work for the noVNC session.
+      LOSSY: "Y"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    extra_hosts:
+      # The local split-DNS route resolves Apple CDN to a domestic node that
+      # closes range downloads early. Pin this container to an Akamai edge.
+      - "oscdn.apple.com:23.211.177.104"
+    ports:
+      - "127.0.0.1:8006:8006"
+      - "127.0.0.1:5900:5900/tcp"
+      - "127.0.0.1:5900:5900/udp"
+    volumes:
+      - classroomtranslator_macos_disk:/storage
+      - ../..:/shared/ClassroomTranslator
+    restart: unless-stopped
+    stop_grace_period: 2m
+
+volumes:
+  classroomtranslator_macos_disk:
+    name: classroomtranslator_macos_disk

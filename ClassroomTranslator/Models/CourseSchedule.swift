@@ -14,7 +14,7 @@ enum CourseSchedule {
 
     /// 生产走 Bundle.main（与 SwiftUI Text 默认一致，zh 已实测可用）；
     /// 单测注入 .module（Package.swift .copy("Resources/zh-Hans.lproj")）。
-    static let stringsBundle: Bundle = .module
+    static let stringsBundle: Bundle = .lingoResources
 
     /// 课程排课描述：「每周一 14:00」「每月5日 09:30」「3月5日 14:00」（zh-Hans）。
     /// - Parameters:

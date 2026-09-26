@@ -15,7 +15,7 @@ final class SpeakerEmbeddingModel: @unchecked Sendable {
     private let lock = NSLock()
     private let capacity = SpeakerWindowPolicy.maximumWindowSamples
 
-    init?(bundle: Bundle = .module) {
+    init?(bundle: Bundle = .lingoResources) {
         let modelURL = bundle.url(
             forResource: Self.resourceName,
             withExtension: "mlpackage"
