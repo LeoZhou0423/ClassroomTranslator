@@ -1,0 +1,104 @@
+name: Build Intel DMG
+
+# 用户直接指令（2026-09-26）：停止测试循环，直接产出 Intel (x86_64) 芯片安装包。
+# 纯打包流水线 —— 无 swift test、无 GUI smoke、无 XCUITest、无 tour 截图防线，
+# 打包步骤逐字复用 build.yml 中已被 run 36231450293 全绿验证过的逻辑。
+# runner: macos-26-intel（041a0e4 引入的 Intel/KVM runner 标签）。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build x86_64 app and DMG (no tests)
+    runs-on: macos-26-intel
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Show toolchain
+      run: |
+        sw_vers
+        swift --version
+        uname -m
+
+    - name: Build Release
+      run: swift build -c release
+
+    - name: Verify binary architecture
+      run: |
+        file .build/release/ClassroomTranslator
+        file .build/release/ClassroomTranslator | grep -q "x86_64" || {
+          echo "binary is not x86_64 — refusing to package the wrong architecture"
+          exit 1
+        }
+
+    - name: Create App Bundle
+      run: |
+        mkdir -p LingoClass.app/Contents/MacOS
+        mkdir -p LingoClass.app/Contents/Resources
+        cp .build/release/ClassroomTranslator LingoClass.app/Contents/MacOS/LingoClass
+        if [ -d .build/release/ClassroomTranslator_ClassroomTranslator.bundle ]; then
+          cp -R .build/release/ClassroomTranslator_ClassroomTranslator.bundle LingoClass.app/Contents/Resources/
+        fi
+        if [ -d ClassroomTranslator/Resources ]; then
+          cp -R ClassroomTranslator/Resources/*.lproj LingoClass.app/Contents/Resources/
+        fi
+        if [ -f ClassroomTranslator/Resources/AppIcon.png ]; then
+          mkdir -p LingoClass.iconset
+          sips -z 16 16 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_16x16.png > /dev/null
+          sips -z 32 32 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_16x16@2x.png > /dev/null
+          sips -z 32 32 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_32x32.png > /dev/null
+          sips -z 64 64 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_32x32@2x.png > /dev/null
+          sips -z 128 128 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_128x128.png > /dev/null
+          sips -z 256 256 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_128x128@2x.png > /dev/null
+          sips -z 512 512 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_256x256.png > /dev/null
+          sips -z 1024 1024 ClassroomTranslator/Resources/AppIcon.png --out LingoClass.iconset/icon_256x256@2x.png > /dev/null
+          iconutil -c icns LingoClass.iconset -o LingoClass.app/Contents/Resources/LingoClass.icns
+          rm -rf LingoClass.iconset
+        fi
+
+    - name: Create Info.plist
+      run: |
+        python3 -c "
+        plist = '''<?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>CFBundleName</key><string>LingoClass</string>
+            <key>CFBundleDisplayName</key><string>LingoClass</string>
+            <key>CFBundleIdentifier</key><string>com.user.lingoclass</string>
+            <key>CFBundleVersion</key><string>1.0.0</string>
+            <key>CFBundleShortVersionString</key><string>1.0.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleExecutable</key><string>LingoClass</string>
+            <key>CFBundleIconFile</key><string>LingoClass</string>
+            <key>LSMinimumSystemVersion</key><string>26.0</string>
+            <key>CFBundleDevelopmentRegion</key><string>en</string>
+            <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string></array>
+            <key>NSMicrophoneUsageDescription</key><string>This app needs microphone access to recognize speech.</string>
+            <key>NSSpeechRecognitionUsageDescription</key><string>This app uses speech recognition to transcribe lectures.</string>
+        </dict>
+        </plist>'''
+        with open('LingoClass.app/Contents/Info.plist','w') as f:
+            f.write(plist.strip())
+        "
+
+    - name: Ad-hoc Sign App Bundle
+      run: |
+        chmod +x LingoClass.app/Contents/MacOS/LingoClass
+        codesign --force --deep --sign - LingoClass.app
+        codesign --verify --deep --strict LingoClass.app
+        codesign -dv LingoClass.app
+
+    - name: Create DMG
+      run: |
+        hdiutil create -volname "LingoClass" -srcfolder LingoClass.app -ov -format UDZO LingoClass-Intel.dmg
+        ls -la LingoClass-Intel.dmg
+
+    - name: Upload Intel DMG
+      uses: actions/upload-artifact@v4
+      with:
+        name: LingoClass-Intel
+        path: LingoClass-Intel.dmg
+        retention-days: 30
+        if-no-files-found: error
