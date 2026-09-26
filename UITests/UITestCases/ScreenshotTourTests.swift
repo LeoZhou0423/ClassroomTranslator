@@ -136,34 +136,50 @@ final class ScreenshotTourTests: XCTestCase {
                 .firstMatch.exists
     }
 
-    /// 记录行点击（06 专用，run 36235771099 判A 后升级）：
-    /// ① 打印命中的 element（type/label/id 进日志做判位）；
-    /// ② 中心坐标 tap（绕开复合按钮 hit-test）；
-    /// ③ doubleClick 兜底（UI 代码是 Button 单击语义 —— CourseDetailView
-    ///    L90 `Button { selectedRecord = record }`，故单击为正路，双击仅重试）；
-    /// ④ 文本坐标 tap 兜底。任一步 sheet 开即返回。
+    /// 记录行点击（06 专用，run 36237124773 第八轮升级）：
+    /// ① 判位打印：debugDescription 前 200 字（可读类型名）+ frame + isEnabled；
+    /// ② 每步后查 sheets.count / windows.count —— 计数变了但内容三合一不在 =
+    ///    sheet 开了但内容空（转层②），计数不变 = 真没开；
+    /// ③ 中心坐标 tap → doubleClick → 文本坐标 tap → Return 键（macOS 列表
+    ///    『选中后回车打开』惯例 / Button 焦点态 Enter=click）。
     private func clickRecordRow(_ title: String, file: StaticString = #filePath, line: UInt = #line) {
         let button = app.descendants(matching: .button)
             .matching(NSPredicate(format: "label CONTAINS[c] %@", title)).firstMatch
         let text = app.staticTexts[title]
         let target: XCUIElement = button.exists ? button : text
-        lastRowTargetInfo = "type=\(target.elementType) label=\(target.label) id=\(target.identifier)"
-        print("TOUR_ROW_TARGET: \(lastRowTargetInfo)")
         guard target.exists else {
-            XCTFail("记录行候选不存在（button/text 皆无）", file: file, line: line)
+            lastRowTargetInfo = "(button/text 皆无)"
+            XCTFail("记录行候选不存在", file: file, line: line)
             return
         }
+        lastRowTargetInfo = "type=\(target.elementType) frame=\(target.frame) enabled=\(target.isEnabled) debug=\(String(target.debugDescription.prefix(200)))"
+        print("TOUR_ROW_TARGET: \(lastRowTargetInfo)")
+        let sheetsBefore = app.sheets.count
+        let windowsBefore = app.windows.count
+        print("TOUR_ROW_SHEETS: before sheets=\(sheetsBefore) windows=\(windowsBefore)")
+
         target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        if sheetSessionOpen() { return }
-        print("TOUR_ROW_RETRY: doubleClick")
+        if probeRowClick(step: "coordinate-tap", sheetsBefore: sheetsBefore, windowsBefore: windowsBefore) { return }
         target.doubleClick()
-        if sheetSessionOpen() { return }
-        if text.exists {
-            print("TOUR_ROW_RETRY: text coordinate tap")
+        if probeRowClick(step: "doubleClick", sheetsBefore: sheetsBefore, windowsBefore: windowsBefore) { return }
+        if text.exists, target !== text {
             text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-            if sheetSessionOpen() { return }
+            if probeRowClick(step: "text-coordinate-tap", sheetsBefore: sheetsBefore, windowsBefore: windowsBefore) { return }
         }
+        print("TOUR_ROW_RETRY: press return")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        if probeRowClick(step: "press-return", sheetsBefore: sheetsBefore, windowsBefore: windowsBefore) { return }
         print("TOUR_ROW_CLICK_FAILED: \(lastRowTargetInfo)")
+    }
+
+    /// 每步点击后的探针：打印 sheets/windows 计数变化；内容三合一开（真开）或
+    /// 计数增长（开但内容空 → 层①/② 接手判定）都算『已打开』停止重试。
+    private func probeRowClick(step: String, sheetsBefore: Int, windowsBefore: Int) -> Bool {
+        let sheetsNow = app.sheets.count
+        let windowsNow = app.windows.count
+        let contentOpen = sheetSessionOpen()
+        print("TOUR_ROW_PROBE[\(step)]: sheets \(sheetsBefore)->\(sheetsNow) windows \(windowsBefore)->\(windowsNow) contentOpen=\(contentOpen)")
+        return contentOpen || sheetsNow > sheetsBefore
     }
 
     /// 上一次记录行命中的 element 描述（层①判A 文案用）。
@@ -258,6 +274,24 @@ final class ScreenshotTourTests: XCTestCase {
         wait(app.staticTexts["每周一 14:00"], "排课描述「每周一 14:00」")
         snap("05-course-detail.png")
 
+        // ---- 07：设置页（引擎选择器 / 说话人标签 / 关于）----
+        // 第八轮重排（lead）：设置无 sheet 依赖 —— 挪到 06 之前，06 迭代期间
+        // 先攒 6/7 张（Verify ≥7 阈值不动，06 卡则仍红）。
+        guard let settingsRow = sidebarSettingsElement() else {
+            XCTFail("侧栏 Settings（设置）行不存在")
+            return
+        }
+        settingsRow.click()
+        wait(app.staticTexts["App 语言"], "Settings 页锚点（App Language）")
+        XCTAssertTrue(scrollUntilVisible(app.staticTexts["语音引擎"]), "语音引擎 Section 应可达")
+        XCTAssertTrue(scrollUntilVisible(app.staticTexts["说话人标签"]), "说话人标签 Section 应可达")
+        XCTAssertTrue(scrollUntilVisible(app.staticTexts["关于"]), "关于（About）应可达")
+        snap("07-settings.png")
+
+        // 回课程详情（06 前置）：侧栏课程行 + detail 切换铁证。
+        tapSidebarCourse("演示课程")
+        wait(app.buttons["新建录音"], "从设置返回课程详情（新建录音按钮）")
+
         // ---- 06：会话详情（人员区 + 预置昵称王教授 + 可编辑标题/日期）----
         // 实际断言顺序：人员区/昵称在**浏览态**先断，编辑态标题/日期在后。
         // 分层诊断（run 36233690741 卡 215 的三层切分）：
@@ -269,10 +303,14 @@ final class ScreenshotTourTests: XCTestCase {
             // Query 没有 exists（只有 element 有 —— 教训②变体），firstMatch 上取。
             let segVisible = app.staticTexts
                 .matching(NSPredicate(format: "label CONTAINS[c] %@", "photosynthesis")).firstMatch.exists
+            let sheetsNow = app.sheets.count
             if editVisible || segVisible {
                 print("TOUR_LAYER1_B: sheet open, 完成 anchor false-negative (edit=\(editVisible) seg=\(segVisible))")
+            } else if sheetsNow > 0 {
+                // 计数变了但内容三合一不在 = sheet 开了但内容空 —— 转层②判定，不红这里。
+                print("TOUR_LAYER1_EMPTY: sheets=\(sheetsNow) but no content — 转层②")
             } else {
-                XCTFail("层①判A：点击没生效 —— 无「完成」、无「编辑」、无段落译文，sheet 未开（target: \(lastRowTargetInfo)）")
+                XCTFail("层①判A：点击没生效 —— 无「完成」、无「编辑」、无段落译文、sheets=0，sheet 未开（target: \(lastRowTargetInfo)）")
             }
         }
         // 层② segments 落库铁证 = 第 1 段**英文译文**关键词（行预览 fullTranscript
@@ -303,8 +341,7 @@ final class ScreenshotTourTests: XCTestCase {
         XCTAssertTrue(wangValue.waitForExistence(timeout: 5), "昵称字段应显示「王教授」")
         snap("06-session-detail.png")
 
-        // ---- 07：设置页（引擎选择器 / 说话人标签 / 关于）----
-        // 当前在编辑态（头部是取消/保存，无完成）—— 先退出编辑再关 sheet。
+        // ---- 收尾：退出编辑态 → 关 sheet（07 设置已在前执行）----
         wait(app.buttons["取消"], "编辑态取消按钮（退出编辑）")
         app.buttons["取消"].tap()
         // 关 sheet：「完成」优先；缺席（层①判B 情形）→ Escape 兜底。
@@ -313,16 +350,6 @@ final class ScreenshotTourTests: XCTestCase {
         } else {
             app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         }
-        guard let settingsRow = sidebarSettingsElement() else {
-            XCTFail("侧栏 Settings（设置）行不存在")
-            return
-        }
-        settingsRow.click()
-        wait(app.staticTexts["App 语言"], "Settings 页锚点（App Language）")
-        XCTAssertTrue(scrollUntilVisible(app.staticTexts["语音引擎"]), "语音引擎 Section 应可达")
-        XCTAssertTrue(scrollUntilVisible(app.staticTexts["说话人标签"]), "说话人标签 Section 应可达")
-        XCTAssertTrue(scrollUntilVisible(app.staticTexts["关于"]), "关于（About）应可达")
-        snap("07-settings.png")
 
         print("TOUR_DONE dir=\(tourDir)")
     }
