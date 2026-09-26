@@ -251,7 +251,10 @@
 "Student %lld" = "学生%lld";
 "Speaker %lld" = "说话人%lld";
 
-/* task-6：语音引擎选择（Step 1 暴露 Apple） */
+/* task-6：语音引擎选择（Step 1 暴露 Apple；Step 2 增加 sherpa 选项） */
 "Engine" = "引擎";
 "Applies the next time the recording page opens." = "下次进入录音页时生效。";
+"Sherpa-onnx · English streaming" = "Sherpa-onnx · 英语流式";
+"Sherpa-onnx: first text appears after about 1–1.3 seconds of speech; this is model context, not a fault." = "Sherpa-onnx：出字需约 1–1.3 秒语音积累（模型上下文所需，非故障）。";
+"Loading %@ speech model…" = "正在加载 %@ 语音模型…";
 

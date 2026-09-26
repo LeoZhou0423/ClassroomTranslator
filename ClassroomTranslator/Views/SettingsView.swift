@@ -118,15 +118,24 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
 
-                // task-6 Step 1：语音引擎选择。暂只暴露 Apple；Step 2 落地
-                // SherpaSpeechEngine 后在此追加选项。选择在下次进入录音页时生效。
+                // task-6 Step 2：语音引擎选择（默认 apple）。sherpa 仅在模型
+                // 资源齐全时列出；选择在下次进入录音页时生效。
                 Section("Speech Engine") {
                     Picker("Engine", selection: $speechEngineChoice) {
                         Text("Apple SpeechAnalyzer").tag(SpeechEngineKind.apple.rawValue)
+                        if SherpaSpeechEngine.modelsPresent() {
+                            Text("Sherpa-onnx · English streaming").tag(SpeechEngineKind.sherpa.rawValue)
+                        }
                     }
                     Text("Applies the next time the recording page opens.")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    // Lead Step 2 令第 5 条：首字延迟如实标注，避免被当成 bug。
+                    if speechEngineChoice == SpeechEngineKind.sherpa.rawValue {
+                        Text("Sherpa-onnx: first text appears after about 1–1.3 seconds of speech; this is model context, not a fault.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 Section("Teacher Language / Model") {
@@ -214,7 +223,10 @@ struct SettingsView: View {
                     HStack {
                         Text("Speech Engine")
                         Spacer()
-                        Text("Apple SpeechAnalyzer")
+                        // task-6 Step 2：动态显示实际会启用的引擎（模型缺失或
+                        // 创建失败熔断时如实回落为 Apple）。verbatim：专有名词
+                        // 不走本地化查找。
+                        Text(verbatim: resolvedEngineDisplayName)
                             .foregroundColor(.secondary)
                     }
                     
@@ -235,6 +247,17 @@ struct SettingsView: View {
         }
     }
     
+    /// About 区动态引擎行。刻意用 isAvailable + fallback 而非 resolved：
+    /// 渲染路径不应反复触发 StartupLog 记日志。
+    private var resolvedEngineDisplayName: String {
+        let kind = SpeechEngineKind()
+        let effective = kind.isAvailable ? kind : SpeechEngineKind.fallback
+        switch effective {
+        case .apple: return "Apple SpeechAnalyzer"
+        case .sherpa: return "Sherpa-onnx · English streaming"
+        }
+    }
+
     private func modelStatusText(_ ready: Bool?) -> String {
         if ready == true { return String(localized: "Ready") }
         if ready == false { return String(localized: "Not downloaded") }

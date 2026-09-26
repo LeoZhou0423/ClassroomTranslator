@@ -35,8 +35,8 @@ protocol SpeechEngine: AnyObject {
 }
 
 /// 引擎选择（设置 key `speechEngine`，默认 apple）。
-/// sherpa 是 Step 2 的备选引擎：SherpaSpeechEngine 落地前 isAvailable 恒 false，
-/// resolved 保证任何已存值都回退到 apple —— 默认行为零变化。
+/// Step 2：sherpa 可用性 = 模型资源齐全且未被创建失败熔断
+/// （SherpaSpeechEngine.isUsable，降级纪律同 task-4 模型缺失回退）。
 enum SpeechEngineKind: String, CaseIterable {
     case apple
     case sherpa
@@ -53,11 +53,12 @@ enum SpeechEngineKind: String, CaseIterable {
         self = SpeechEngineKind(rawValue: stored) ?? Self.fallback
     }
 
-    /// 是否已有可用实现（Step 1：仅 apple；Step 2 落地后 sherpa 为 true）。
+    /// 是否已有可用实现。sherpa 见模型资源 + 熔断状态（Bundle.module 即
+    /// 应用资源包；单测经 temp bundle 注入覆盖缺失路径）。
     var isAvailable: Bool {
         switch self {
         case .apple: return true
-        case .sherpa: return false
+        case .sherpa: return SherpaSpeechEngine.isUsable()
         }
     }
 
@@ -69,15 +70,22 @@ enum SpeechEngineKind: String, CaseIterable {
     }
 }
 
-/// 按用户选择实例化引擎。Step 1 只有 AppleSpeechEngine；Step 2 在此分叉。
+/// 按用户选择实例化引擎。Step 2 在此分叉：sherpa 不可用（模型缺失或
+/// 创建失败熔断）→ 记日志回退 apple；init 均为轻量（sherpa 模型创建在
+/// start() 后台线程，见 SherpaSpeechEngine）。
 enum SpeechEngineFactory {
-    static func make(userDefaults: UserDefaults = .standard) -> any SpeechEngine {
-        let kind = SpeechEngineKind(userDefaults: userDefaults).resolved
+    static func make(userDefaults: UserDefaults = .standard, bundle: Bundle = .module) -> any SpeechEngine {
+        let kind = SpeechEngineKind(userDefaults: userDefaults)
         switch kind {
-        case .apple, .sherpa:
-            // Step 1：resolved 恒为 .apple。sherpa 实现落地后此处改为
-            // case .sherpa: return SherpaSpeechEngine(...)。
+        case .apple:
             return AppleSpeechEngine()
+        case .sherpa:
+            guard SherpaSpeechEngine.isUsable(bundle: bundle) else {
+                StartupLog.mark("engine.sherpa-unavailable fallback=apple")
+                return AppleSpeechEngine()
+            }
+            StartupLog.mark("engine.selected=sherpa")
+            return SherpaSpeechEngine()
         }
     }
 }
