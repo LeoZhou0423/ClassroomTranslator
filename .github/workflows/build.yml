@@ -122,15 +122,25 @@ jobs:
       continue-on-error: true
       run: bash UITests/run_xcuitests.sh
 
+    # 缺陷 2 修复（run 36221214297 假绿复盘）：分类逻辑独立到
+    # UITests/classify_xcuitest_failure.sh —— 规则 a-d（硬失败优先 / 收紧
+    # TCC 标记 / 无标记 fail-closed / 内置自测）见该脚本头注释。
     - name: Degrade XCUITest only for TCC/permission failures
       if: steps.xcuitest.outcome != 'success'
       run: |
-        if grep -Eiq 'assistive|accessibility|k?TCC|not trusted|screen recording|SCShareableContent|not authorized|authorization required' ui-smoke-artifacts/xcuitests.log; then
-          echo "XCUITest failed due to TCC/permission on this runner — degraded per task-7 spec; phase-1 smoke retained."
+        # d. 分类器自测先行：自测挂了（分类器自身坏）直接红。
+        bash UITests/classify_xcuitest_failure.sh --self-test || exit 1
+        LOG=ui-smoke-artifacts/xcuitests.log
+        if [ ! -f "$LOG" ]; then
+          echo "missing $LOG — fail closed"
+          exit 1
+        fi
+        if bash UITests/classify_xcuitest_failure.sh "$LOG"; then
+          echo "TCC/permission at run time — degraded per task-7 spec; phase-1 smoke retained."
           echo "DEGRADED=xcuitest-tcc" >> "$GITHUB_ENV"
         else
-          echo "XCUITest failed for a non-TCC reason — failing the run:"
-          tail -n 150 ui-smoke-artifacts/xcuitests.log || true
+          echo "Classifier verdict RED — failing the run. Tail:"
+          tail -n 150 "$LOG" || true
           exit 1
         fi
 

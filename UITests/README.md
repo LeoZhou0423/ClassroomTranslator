@@ -24,13 +24,24 @@ workflow 在 **Create DMG 之后、Upload Artifact 之前** 运行：
 - App 默认 UI 是 zh-Hans，脚本先 `defaults write com.user.lingoclass appLanguage en`
   再生成测试（选择器依赖英文文本）。
 
-### 降级规则（任务规格）
+### 降级规则（任务规格；缺陷 2 返工后由分类器脚本执行）
 
-`xcodebuild test` 失败原因匹配 **TCC/权限标记**（assistive / accessibility / TCC /
-not trusted / screen recording …）→ workflow 放行，保留阶段 1，**不算任务失败**；
-其余失败（project.yml schema、断言红、xcodebuild 本体）照常让 run 变红 —— 这是
-workflow 改动的自证测试，绿了才算交付。原因与降级记录：本 README + workflow 内注释 +
-任务 task-7 描述（收尾时补记）。
+分类逻辑集中在 **`classify_xcuitest_failure.sh`**（workflow 的 “Degrade XCUITest
+only for TCC/permission failures” 步每次先跑它的 `--self-test`，自测挂了直接红）：
+
+- **a. 硬失败优先**：日志含 `error:` / `TEST FAILED` / `XCODEBUILD_EXIT=[1-9]`
+  → 永不可降级（编译/断言失败必须红）；
+- **b. TCC 标记收紧**（逐词复核不会出现在 xcodebuild 构建日志）：
+  `assistive access` / `not authorized` / `screen.?recording.*(permission|denied)` /
+  `TCC.*(deny|denied)` / `not trusted` —— **裸 `accessibility` 已删除**（run
+  36221214297 假绿根因：命中 Xcode 模块缓存文件名 `Accessibility-7ZLS….pcm`）；
+- **c.** 只有（无硬失败）且（有收紧 TCC 标记）才 `DEGRADED=xcuitest-tcc`；
+  无标记未知失败 **fail-closed 判红**；
+- **d. 自测样例**内置在脚本 `--self-test`：假阳性日志（`error:` + 模块缓存路径 +
+  `XCODEBUILD_EXIT=65`）与裸 pcm 路径必须判红、纯 TCC 必须判可降级。
+
+其余失败（project.yml schema、断言红、工具链）照常让 run 变红 —— workflow 改动的
+自证测试，真绿才算交付。记录位置：本 README + workflow 注释 + 任务 task-7 描述。
 
 ## 本地运行（有 Mac 时）
 
