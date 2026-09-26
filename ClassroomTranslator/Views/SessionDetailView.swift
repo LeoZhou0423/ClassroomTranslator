@@ -24,6 +24,8 @@ struct SessionDetailView: View {
     @State private var feedbackSeverity: FeedbackSeverity = .info
     @State private var translationManager = TranslationManager()
     @State private var isFillingTranslations = false
+    /// task-9：编辑态 DatePicker 的日期草稿（init 从 record.date 装载）。
+    @State private var sessionDate: Date
 
     private enum FeedbackSeverity {
         case info, success, error
@@ -65,6 +67,7 @@ struct SessionDetailView: View {
     init(record: TranscriptRecord) {
         self.record = record
         _title = State(initialValue: record.title)
+        _sessionDate = State(initialValue: record.date)
         _drafts = State(initialValue: record.segments.map {
             DraftSegment(id: $0.id, original: $0.original, translated: $0.translated, speaker: $0.speaker ?? "", originalAtLoad: $0.original, timestamp: $0.timestamp, isFinal: $0.isFinal)
         })
@@ -76,11 +79,20 @@ struct SessionDetailView: View {
                 if isEditing {
                     TextField("Recording title", text: $title).font(.headline)
                 } else {
-                    Text(record.title).font(.headline)
+                    // task-9：标题空/仅空白 → 日期占位回退（SessionDisplay 纯函数）。
+                    Text(SessionDisplay.titleText(title: record.title, date: record.date))
+                        .font(.headline)
                 }
                 Spacer()
-                Text(record.date.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption).foregroundColor(.secondary)
+                if isEditing {
+                    // task-9：编辑态 DatePicker 直接改 record.date（save 时落库）。
+                    DatePicker("", selection: $sessionDate,
+                               displayedComponents: [.date, .hourAndMinute])
+                        .labelsHidden()
+                } else {
+                    Text(record.date.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption).foregroundColor(.secondary)
+                }
                 if isEditing {
                     Button("Cancel", action: cancelEditing)
                     Button("Save", action: saveChanges).buttonStyle(.borderedProminent)
@@ -191,7 +203,10 @@ struct SessionDetailView: View {
 
     private func saveChanges() {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        record.title = cleanTitle.isEmpty ? record.title : cleanTitle
+        // task-9：trim 后原样保存（允许清空 —— 空标题在显示层回退日期占位）。
+        record.title = cleanTitle
+        // task-9：编辑态 DatePicker 的日期落库。
+        record.date = sessionDate
         record.segments = drafts.map {
             TranscriptSegment(
                 id: $0.id,
@@ -209,6 +224,7 @@ struct SessionDetailView: View {
 
     private func cancelEditing() {
         title = record.title
+        sessionDate = record.date
         drafts = record.segments.map { DraftSegment(id: $0.id, original: $0.original, translated: $0.translated, speaker: $0.speaker ?? "", originalAtLoad: $0.original, timestamp: $0.timestamp, isFinal: $0.isFinal) }
         isEditing = false
     }

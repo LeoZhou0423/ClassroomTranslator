@@ -91,9 +91,15 @@ struct CourseDetailView: View {
                     HStack(spacing: 12) {
                         Button { selectedRecord = record } label: {
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(record.title).font(.headline)
-                                Text(record.date.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.caption).foregroundColor(.secondary)
+                                // task-9：标题空/仅空白 → 「M月d日」占位（SessionDisplay 纯函数）。
+                                Text(SessionDisplay.titleText(title: record.title, date: record.date))
+                                    .font(.headline)
+                                // 日期 + 时长（复用 ExportManager.formatDuration，已有单测覆盖）。
+                                HStack(spacing: 8) {
+                                    Text(record.date.formatted(date: .abbreviated, time: .shortened))
+                                    Text(ExportManager.formatDuration(record.duration))
+                                }
+                                .font(.caption).foregroundColor(.secondary)
                                 Text(record.fullTranscript).font(.caption).foregroundColor(.secondary).lineLimit(2)
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }.buttonStyle(.plain)
