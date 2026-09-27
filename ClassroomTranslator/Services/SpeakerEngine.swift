@@ -72,7 +72,9 @@ final class SpeakerEngine {
             batches = []
             pumping = false
             clusterer = SpeakerClusterer(config: config.clusterConfig)
-            currentLabel = SpeakerLabeler.genericSpeakerName
+            // 有模型时新段落先挂"说话人"占位（开头几句不再无前缀），
+            // 解析/回填后被精确标签覆盖；无模型保持 nil（纯手动标注）。
+            currentLabel = model == nil ? nil : SpeakerLabeler.genericSpeakerName
             generation += 1
         }
         // 每次开始录音 ring 都会被 setSpeakerCapture(true) 清零，
