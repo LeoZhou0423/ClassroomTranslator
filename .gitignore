@@ -35,3 +35,18 @@ __pycache__/
 Tools/speaker/models/
 # sherpa-onnx demo model downloads (regenerable; see SHERPA-DEMO.md)
 Tools/sherpa/models/
+
+# Training artifacts / large weights (GitHub 100MB limit; regenerate locally)
+Tools/train/role-cls-final/model.safetensors
+Tools/train/role-cls-onnx/model.onnx
+Tools/train/role-cls-final/pytorch_model.bin
+Tools/speaker/courses/
+$tmp/
+Build/
+*.s16le
+*.raw
+
+# Local secrets
+.env
+*.pem
+*credentials*

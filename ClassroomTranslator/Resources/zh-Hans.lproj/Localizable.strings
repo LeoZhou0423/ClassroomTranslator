@@ -269,6 +269,8 @@
 "Speaker" = "说话人";
 "Student %lld" = "学生%lld";
 "Speaker %lld" = "说话人%lld";
+"Teacher %lld" = "老师%lld";
+"Low confidence" = "低置信";
 
 /* task-6：语音引擎选择（Step 1 暴露 Apple；Step 2 增加 sherpa 选项） */
 "Engine" = "引擎";

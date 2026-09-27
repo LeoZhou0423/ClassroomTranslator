@@ -33,12 +33,15 @@ enum SpeakerRole: String, Codable, CaseIterable, Identifiable, Sendable {
 struct SpeakerAlias: Codable, Equatable, Sendable {
     var nickname: String
     var role: SpeakerRole
+    /// 自动身份判定的置信标记：nil=未自动判 / "high" / "low"。
+    var roleConfidence: String?
 
     static let empty = SpeakerAlias()
 
-    init(nickname: String = "", role: SpeakerRole = .other) {
+    init(nickname: String = "", role: SpeakerRole = .other, roleConfidence: String? = nil) {
         self.nickname = nickname
         self.role = role
+        self.roleConfidence = roleConfidence
     }
 
     init(from decoder: any Decoder) throws {
@@ -47,6 +50,7 @@ struct SpeakerAlias: Codable, Equatable, Sendable {
         role = (try? container.decodeIfPresent(String.self, forKey: .role))
             .flatMap { $0 }
             .flatMap(SpeakerRole.init(rawValue:)) ?? .other
+        roleConfidence = try container.decodeIfPresent(String.self, forKey: .roleConfidence)
     }
 
     /// 昵称 trim 后非空才算有昵称（显示层回退判断用）。

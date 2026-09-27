@@ -57,6 +57,14 @@ struct SessionDetailView: View {
     }
 
     /// VIS-03：用小标签替代纯颜色编码（WCAG 1.4.1）。
+    private func roleBadgeColor(_ role: SpeakerRole) -> Color {
+        switch role {
+        case .professor, .teacher, .ta: return .blue
+        case .student: return .green
+        case .other: return .secondary
+        }
+    }
+
     private func roleTag(_ title: LocalizedStringKey) -> some View {
         Text(title)
             .font(.caption2)
@@ -140,10 +148,24 @@ struct SessionDetailView: View {
                                 if !segment.speaker.isEmpty {
                                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                                         roleTag("Speaker")
-                                        // task-10：昵称命中显示「王教授」，与人员区编辑即时联动。
+                                        // 昵称/自动名（老师1、学生1）与人员区即时联动
                                         Text(SpeakerAliases.resolve(segment.speaker, in: peopleAliases))
                                             .font(.system(size: 13, weight: .semibold))
                                             .foregroundColor(.secondary)
+                                        if let alias = peopleAliases[segment.speaker], alias.role != .other {
+                                            Text(LocalizedStringKey(alias.role.title))
+                                                .font(.system(size: 11, weight: .medium))
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(roleBadgeColor(alias.role).opacity(0.18))
+                                                .foregroundColor(roleBadgeColor(alias.role))
+                                                .clipShape(Capsule())
+                                            if alias.roleConfidence == RoleConfidence.low.rawValue {
+                                                Text(String(localized: "Low confidence"))
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(.orange)
+                                            }
+                                        }
                                     }
                                 }
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {

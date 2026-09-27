@@ -1,0 +1,8 @@
+              precision    recall  f1-score   support
+
+     student     0.6470    0.5767    0.6098      6972
+     teacher     0.8768    0.9054    0.8909     23203
+
+    accuracy                         0.8295     30175
+   macro avg     0.7619    0.7411    0.7504     30175
+weighted avg     0.8237    0.8295    0.8260     30175

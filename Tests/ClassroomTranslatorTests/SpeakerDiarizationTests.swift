@@ -72,7 +72,8 @@ final class SpeakerDiarizationTests: XCTestCase {
     func testClustererStartsNewGroupBelowThreshold() {
         var clusterer = SpeakerClusterer(config: .init(threshold: 0.6, maximumSpeakers: 4))
         XCTAssertEqual(clusterer.assign([1, 0, 0]), 0)
-        XCTAssertEqual(clusterer.assign([0, 1, 0]), 1)
+        XCTAssertEqual(clusterer.assign([0, 1, 0]), 0, "one outlier must not invent a speaker")
+        XCTAssertEqual(clusterer.assign([0, 0.98, 0.2]), 1)
         XCTAssertEqual(clusterer.centroids.count, 2)
     }
 
@@ -95,7 +96,8 @@ final class SpeakerDiarizationTests: XCTestCase {
             newClusterMargin: 0.12
         ))
         XCTAssertEqual(clusterer.assign([1, 0, 0]), 0)
-        XCTAssertEqual(clusterer.assign([0.2, 0.98, 0]), 1)
+        XCTAssertEqual(clusterer.assign([0.2, 0.98, 0]), 0)
+        XCTAssertEqual(clusterer.assign([0.1, 0.99, 0]), 1)
         XCTAssertEqual(clusterer.centroids.count, 2)
     }
 
@@ -103,7 +105,8 @@ final class SpeakerDiarizationTests: XCTestCase {
         // K = 2：第三个不同声音不再开新簇，归入最相似的既有簇。
         var clusterer = SpeakerClusterer(config: .init(threshold: 0.6, maximumSpeakers: 2))
         XCTAssertEqual(clusterer.assign([1, 0, 0]), 0)
-        XCTAssertEqual(clusterer.assign([0, 1, 0]), 1)
+        XCTAssertEqual(clusterer.assign([0, 1, 0]), 0)
+        XCTAssertEqual(clusterer.assign([0, 1, 0.1]), 1)
         let third = clusterer.assign([0, 0, 1])
         XCTAssertEqual(third, 0)
         XCTAssertEqual(clusterer.centroids.count, 2)
@@ -154,6 +157,14 @@ final class SpeakerDiarizationTests: XCTestCase {
             config: .init(threshold: 0.6, maximumSpeakers: 2)
         )
         XCTAssertEqual(Set(groups).count, 2)
+    }
+
+    func testReclusterMergesIsolatedNoisyWindow() {
+        let groups = SpeakerClusterer.recluster(
+            [[1, 0, 0], [0.99, 0.1, 0], [0, 1, 0], [0.98, 0.2, 0]],
+            config: .init(threshold: 0.6, maximumSpeakers: 4)
+        )
+        XCTAssertEqual(Set(groups).count, 1)
     }
 
     func testClustererRebuildMatchesNewGroups() {

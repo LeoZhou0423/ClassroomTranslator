@@ -32,7 +32,10 @@ let package = Package(
                 .copy("Resources/zh-Hans.lproj"),
                 .copy("Resources/AppIcon.png"),
                 .copy("Resources/SpeakerCAMWaveZHEng.mlpackage"),
-                .copy("Resources/SherpaStreamEN")
+                .copy("Resources/SherpaStreamEN"),
+                .copy("Resources/role_vocab.txt"),
+                // TalkMoves MiniLM 老师/学生二分类（生产角色识别）
+                .copy("Resources/RoleMiniLM.mlpackage")
             ]
         ),
         .testTarget(

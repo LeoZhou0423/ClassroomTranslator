@@ -26,6 +26,9 @@ struct SpeakerClusterer: Equatable {
 
     var config: Config
     private(set) var centroids: [[Float]] = []
+    // A single noisy/far-field window must not immediately invent a speaker.
+    // Keep one candidate and require the next novel window to agree with it.
+    private var pendingNovel: [Float]?
 
     init(config: Config = Config()) {
         self.config = config
@@ -48,6 +51,7 @@ struct SpeakerClusterer: Equatable {
         // 咳嗽、噪声或短句立刻裂成“说话人 2/3”。
         let mergeFloor = config.threshold - config.newClusterMargin
         if best >= 0, bestSimilarity >= mergeFloor {
+            pendingNovel = nil
             // EMA 更新质心后重新归一化。
             // 阈值以下属于弱匹配，只做很小的质心更新，避免离群窗口拖偏簇。
             let alpha = Float(bestSimilarity >= config.threshold ? config.emaAlpha : min(config.emaAlpha, 0.08))
@@ -58,15 +62,26 @@ struct SpeakerClusterer: Equatable {
             return best
         }
         if centroids.count < config.maximumSpeakers {
-            centroids.append(unit)
-            return centroids.count - 1
+            if let candidate = pendingNovel,
+               Self.dot(candidate, unit) >= config.threshold {
+                let combined = zip(candidate, unit).map { pair in (pair.0 + pair.1) * 0.5 }
+                centroids.append(Self.normalize(combined) ?? unit)
+                pendingNovel = nil
+                return centroids.count - 1
+            }
+            pendingNovel = unit
+            // Conservatively inherit the closest established speaker until a
+            // second consistent novel window confirms that this is a person.
+            return max(0, best)
         }
+        pendingNovel = nil
         return max(0, best)
     }
 
     /// 重聚类后按新分组重建质心，让在线 leader-follower 接续。
     mutating func rebuild(embeddings: [[Float]], groups: [Int]) {
         centroids = Self.centroids(for: embeddings, groups: groups)
+        pendingNovel = nil
     }
 
     /// 全量重聚类（每 10 句触发）：平均链接层次聚类，先按余弦 ≥ τ 合并，
@@ -108,6 +123,26 @@ struct SpeakerClusterer: Equatable {
             guard overCap || bestValue >= config.threshold else { break }
             clusters[bestA].formUnion(clusters[bestB])
             clusters.remove(at: bestB)
+        }
+
+        // One isolated window is usually a cough, clipped boundary, or noisy
+        // VM/microphone frame. A real new speaker needs at least two agreeing
+        // utterances; merge singleton clusters into their nearest neighbour.
+        var singletonIndex = clusters.firstIndex { $0.count == 1 }
+        while clusters.count > 1, let source = singletonIndex {
+            var target = -1
+            var bestValue = -Double.greatestFiniteMagnitude
+            for index in clusters.indices where index != source {
+                let value = averageSimilarity(clusters[source], clusters[index], matrix: similarity)
+                if value > bestValue {
+                    bestValue = value
+                    target = index
+                }
+            }
+            guard target >= 0 else { break }
+            clusters[target].formUnion(clusters[source])
+            clusters.remove(at: source)
+            singletonIndex = clusters.firstIndex { $0.count == 1 }
         }
 
         // 按首次出现顺序重编号。

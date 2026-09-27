@@ -1,0 +1,11 @@
+{
+  "test_loss": 0.38753899931907654,
+  "test_accuracy": 0.8294946147473073,
+  "test_f1_macro": 0.7503766373317557,
+  "test_f1_teacher": 0.8909102474397304,
+  "test_f1_student": 0.609843027223781,
+  "test_runtime": 3.4286,
+  "test_samples_per_second": 8801.038,
+  "test_steps_per_second": 68.833,
+  "epoch": 3.0
+}

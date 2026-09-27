@@ -61,6 +61,7 @@ final class StableRecordingViewController: NSViewController {
     private let speakerLabel = NSTextField(labelWithString: "")
     /// task-4：说话人识别引擎。模型缺失时 init 置 nil → 段落无标签，只能手动标注。
     private var speakerEngine: SpeakerEngine?
+    private let roleCoordinator = RoleAssignmentCoordinator.makeDefault()
 
     private var sessionState = RecordingSessionState()
     private var activeRecord: TranscriptRecord?
@@ -466,6 +467,8 @@ final class StableRecordingViewController: NSViewController {
             )
             self.stopEndingStatusUpdates()
             self.setStatus(String(localized: "Saving…"))
+            // 身份收束：还没高置信的人 → 强制写入并标低置信
+            self.finalizeRoleAssignments()
             if courseExists, let record = activeRecord {
                 historyStore.finishRecord(record, duration: sessionState.elapsed())
                 self.setStatus(
@@ -520,6 +523,7 @@ final class StableRecordingViewController: NSViewController {
         speechManager.stopRecording()
         translationCoordinator.cancelAll()
         if courseExists, let activeRecord {
+            finalizeRoleAssignments()
             if alreadyEnded {
                 historyStore.checkpoint(activeRecord, duration: sessionState.elapsed())
             } else {
@@ -555,9 +559,54 @@ final class StableRecordingViewController: NSViewController {
                 rebuildFinalizedText(from: record)
                 refreshTranscript()
             }
+            // 低置信又攒了新话 → 该人全部文本合并重判
+            let rechecked = self.roleCoordinator.recheck()
+            for (person, decision) in rechecked {
+                self.applyRoleDecisionToActiveRecord(person: person, decision: decision)
+            }
             updateSpeakerLabel(currentLabel)
         }
         speakerEngine = engine
+    }
+
+    /// 写入身份并标记置信度（高/低）。角色 + 序号显示名写入 SpeakerAlias；
+    /// 转写前缀 / 字幕 / 导出统一走 SpeakerLabels.prefix。
+    private func applyRoleDecisionToActiveRecord(person: String?, decision: RoleDecision) {
+        guard courseExists, let record = activeRecord, let person, !person.isEmpty else { return }
+        var map = SpeakerAliases.decode(record.speakerNames)
+        let order = orderedPersonLabels(in: record)
+        // 收集本会话已有自动决策，便于多人同角色统一编号（老师1/老师2）
+        var decisions: [String: RoleDecision] = [:]
+        for label in order {
+            if let d = roleCoordinator.book.decision(for: label) {
+                decisions[label] = d
+            }
+        }
+        decisions[person] = decision
+        roleCoordinator.applyToAliases(decisions: decisions, into: &map, order: order)
+        record.speakerNames = SpeakerAliases.encode(map)
+        rebuildFinalizedText(from: record)
+        refreshTranscript()
+        updateSpeakerLabel(SpeakerAliases.resolve(person, in: map))
+    }
+
+    private func orderedPersonLabels(in record: TranscriptRecord) -> [String] {
+        var seen: [String] = []
+        for seg in record.segments {
+            if let s = seg.speaker, !s.isEmpty, !seen.contains(s) {
+                seen.append(s)
+            }
+        }
+        return seen
+    }
+
+    /// 会话结束：未高置信的人强制定案（低置信写入）。
+    private func finalizeRoleAssignments() {
+        guard courseExists, let record = activeRecord else { return }
+        let decisions = roleCoordinator.finalize()
+        for (person, decision) in decisions {
+            applyRoleDecisionToActiveRecord(person: person, decision: decision)
+        }
     }
 
     /// task-4：控制条显示当前（临时/已解析）说话人。
@@ -633,6 +682,10 @@ final class StableRecordingViewController: NSViewController {
             historyStore.addSegmentIfNew(segment, to: activeRecord)
             rebuildFinalizedText(from: activeRecord)
             speakerEngine?.segmentsCommitted([segment.id])
+            // 身份：先分人（speaker），再用该人全文判老师/学生；不够置信则等。
+            if let decision = roleCoordinator.note(utterance: sentence, personLabel: speakerEngine?.currentLabel) {
+                applyRoleDecisionToActiveRecord(person: speakerEngine?.currentLabel, decision: decision)
+            }
         }
         if partialText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
             partialText = ""
