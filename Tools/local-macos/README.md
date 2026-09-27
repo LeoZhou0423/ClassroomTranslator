@@ -58,7 +58,9 @@ bridged from Windows:
 
 1. Start the VM normally (`macos-vm.ps1 start` also arms the in-container
    audio bridge automatically).
-2. In a second PowerShell window, start the Windows microphone bridge:
+2. In a second PowerShell window, start **one** of the Windows bridges:
+
+   **A. Real microphone** (default classroom capture):
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File Tools/local-macos/mic-bridge.ps1
@@ -67,6 +69,21 @@ bridged from Windows:
    First run downloads ffmpeg once (~80 MB) into `tools/` (gitignored).
    It auto-picks the first DirectShow audio input; override with
    `-Device "exact name"` if you have several microphones.
+
+   **B. System playback (loopback)** — feed *what this PC is playing*
+   (video, slides, recorded lesson) into the VM as if it were a mic:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File Tools/local-macos/loopback-bridge.ps1
+   ```
+
+   Uses WASAPI loopback (default speaker). List devices:
+
+   ```powershell
+   python Tools\local-macos\loopback-bridge.py --list
+   python Tools\local-macos\loopback-bridge.py --device "Realtek"
+   ```
+
 3. In macOS, accept the microphone/speech permission prompts, then use the
    app. Keep the bridge running while recording; when it is not running the
    guest microphone delivers silence (the app shows a zero input level).
