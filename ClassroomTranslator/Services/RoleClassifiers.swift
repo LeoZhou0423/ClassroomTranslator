@@ -101,9 +101,9 @@ final class RoleAssignmentCoordinator {
         for (person, d) in decisions {
             var alias = map[person] ?? SpeakerAlias()
             let previousNickname = alias.nickname
-            let generatedNames: Set<String> = [
+            let generatedNames = Set([
                 String(localized: "Teacher"), String(localized: "Student"), String(localized: "Speaker"),
-            ].union((1...4).flatMap { index in [
+            ]).union((1...4).flatMap { index in [
                 RoleDisplayNames.teacherName(index),
                 RoleDisplayNames.studentName(index),
                 RoleDisplayNames.otherName(index),

@@ -185,10 +185,7 @@ final class SpeakerEngine {
 
         Task.detached(priority: .utility) { [weak self] in
             let embedding = model.embed(window: batch.window)
-            await MainActor.run {
-                guard let self else { return }
-                self.resolve(batch, embedding: embedding, sessionGeneration: sessionGeneration)
-            }
+            await self?.resolve(batch, embedding: embedding, sessionGeneration: sessionGeneration)
         }
     }
 
