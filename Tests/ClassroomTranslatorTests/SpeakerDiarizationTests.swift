@@ -73,7 +73,9 @@ final class SpeakerDiarizationTests: XCTestCase {
         var clusterer = SpeakerClusterer(config: .init(threshold: 0.6, maximumSpeakers: 4))
         XCTAssertEqual(clusterer.assign([1, 0, 0]), 0)
         XCTAssertEqual(clusterer.assign([0, 1, 0]), 0, "one outlier must not invent a speaker")
+        XCTAssertFalse(clusterer.confirmedPreviousNovel)
         XCTAssertEqual(clusterer.assign([0, 0.98, 0.2]), 1)
+        XCTAssertTrue(clusterer.confirmedPreviousNovel)
         XCTAssertEqual(clusterer.centroids.count, 2)
     }
 
@@ -179,27 +181,21 @@ final class SpeakerDiarizationTests: XCTestCase {
         XCTAssertEqual(clusterer.assign([0, 1, 0]), groups[2])
     }
 
-    // MARK: - 命名规则（§4.4 / §4.6.3）
+    // MARK: - 声纹编号（角色由 MiniLM 单独判断）
 
     func testSingleShortClusterUsesGenericSpeakerName() {
-        // 单簇 <6s：不硬猜老师。
         let labels = SpeakerLabeler.baseLabels(durations: [4], counts: [3])
-        XCTAssertEqual(labels, [SpeakerLabeler.genericSpeakerName])
+        XCTAssertEqual(labels, [SpeakerLabeler.numberedSpeakerName(1)])
     }
 
-    func testSingleQualifiedClusterBecomesTeacher() {
-        // 单簇 ≥2 句、≥6s → 老师。
+    func testLongSingleClusterDoesNotGuessTeacher() {
         let labels = SpeakerLabeler.baseLabels(durations: [40], counts: [6])
-        XCTAssertEqual(labels, [SpeakerLabeler.teacherName])
+        XCTAssertEqual(labels, [SpeakerLabeler.numberedSpeakerName(1)])
     }
 
-    func testLongestQualifyingClusterIsTeacherOthersAreStudents() {
-        // 老师竞争：≥2 句且 ≥6s；其余按时长降序编号学生。
+    func testMultipleClustersReceiveNeutralNames() {
         let labels = SpeakerLabeler.baseLabels(durations: [12, 4, 2], counts: [5, 3, 1])
-        XCTAssertEqual(labels[0], SpeakerLabeler.teacherName)
-        XCTAssertEqual(labels[1], SpeakerLabeler.studentName(1))
-        // 碎片簇（<2 句且 <3s）→ 其他，不冒充学生。
-        XCTAssertEqual(labels[2], SpeakerLabeler.otherName(1))
+        XCTAssertEqual(labels, (1...3).map(SpeakerLabeler.numberedSpeakerName))
     }
 
     func testNoTeacherCandidateMeansNumberedSpeakers() {
@@ -209,14 +205,13 @@ final class SpeakerDiarizationTests: XCTestCase {
         XCTAssertEqual(labels[1], SpeakerLabeler.numberedSpeakerName(2))
     }
 
-    func testTeacherHysteresisKeepsPreviousTeacherWhenMarginSmall() {
-        // base 老师是簇1（6.0s），但旧老师票都在簇0（5.5s），时长差 0.5 < 2s → 不翻转。
+    func testExistingIdentitySurvivesDurationChange() {
         let durations = [5.5, 6.0]
         let counts = [3, 3]
         let utteranceGroups = [0, 0, 1, 1]
         let previous: [String?] = [
-            SpeakerLabeler.teacherName, SpeakerLabeler.teacherName,
-            SpeakerLabeler.studentName(1), SpeakerLabeler.studentName(1),
+            SpeakerLabeler.numberedSpeakerName(1), SpeakerLabeler.numberedSpeakerName(1),
+            SpeakerLabeler.numberedSpeakerName(2), SpeakerLabeler.numberedSpeakerName(2),
         ]
         let labels = SpeakerLabeler.labels(
             utteranceGroups: utteranceGroups,
@@ -224,8 +219,8 @@ final class SpeakerDiarizationTests: XCTestCase {
             durations: durations,
             counts: counts
         )
-        XCTAssertEqual(labels[0], SpeakerLabeler.teacherName)
-        XCTAssertNotEqual(labels[1], SpeakerLabeler.teacherName)
+        XCTAssertEqual(labels[0], SpeakerLabeler.numberedSpeakerName(1))
+        XCTAssertEqual(labels[1], SpeakerLabeler.numberedSpeakerName(2))
     }
 
     func testStudentNumberingStableAcrossDurationRankFlip() {

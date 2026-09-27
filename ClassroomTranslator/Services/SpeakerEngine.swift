@@ -43,7 +43,7 @@ final class SpeakerEngine {
     private var batches: [Batch] = []
     private var pumping = false
     private var generation = 0
-    private static let maximumPendingBatches = 1
+    private static let maximumPendingBatches = 6
 
     var onLabelsResolved: ResolutionHandler?
 
@@ -60,6 +60,10 @@ final class SpeakerEngine {
 
     /// 模型可用且开关打开时才推理。
     var canInfer: Bool { active && config.isEnabled && model != nil }
+
+    var resolvedSegmentIDs: Set<UUID> {
+        Set(utterances.flatMap(\.segmentIDs))
+    }
 
     /// 当前（临时）标签：新段落先挂它，窗口解析后被精确标签覆盖。
     private(set) var currentLabel: String?
@@ -99,6 +103,14 @@ final class SpeakerEngine {
         attached = []
         batches = []
         flushScheduled = false
+    }
+
+    /// 收尾时让已提交的声纹窗口完成回写，再进行角色分类和保存。
+    func waitUntilIdle() async {
+        while pumping || !batches.isEmpty || flushScheduled {
+            try? await Task.sleep(for: .milliseconds(50))
+            if Task.isCancelled { return }
+        }
     }
 
     /// 段落批量落地（enqueueFinal 之后调用）。provisional 标签在
@@ -189,6 +201,11 @@ final class SpeakerEngine {
         guard let embedding else { return }
 
         let group = clusterer.assign(embedding) ?? 0
+        if clusterer.confirmedPreviousNovel, !utterances.isEmpty {
+            // The first novel window was provisionally attached to the old
+            // speaker. Confirmation must move its transcript segments too.
+            utterances[utterances.count - 1].group = group
+        }
         utterances.append(Utterance(
             embedding: embedding,
             duration: batch.duration,

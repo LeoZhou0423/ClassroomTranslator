@@ -465,6 +465,14 @@ final class StableRecordingViewController: NSViewController {
                 onTimeout: { self.translationCoordinator.cancelAll() },
                 operation: { await self.translationCoordinator.waitUntilIdle() }
             )
+            _ = await RecordingStartupStep.run(
+                timeoutNanoseconds: 10_000_000_000,
+                onTimeout: { self.speakerEngine?.shutdown() },
+                operation: {
+                    if let engine = self.speakerEngine { await engine.waitUntilIdle() }
+                }
+            )
+            self.speakerEngine?.shutdown()
             self.stopEndingStatusUpdates()
             self.setStatus(String(localized: "Saving…"))
             // 身份收束：还没高置信的人 → 强制写入并标低置信
@@ -552,17 +560,19 @@ final class StableRecordingViewController: NSViewController {
             ring: speechManager.speakerRing,
             model: SpeakerEmbeddingModel(bundle: .lingoResources)
         )
-        engine.onLabelsResolved = { [weak self] updates, currentLabel in
-            guard let self else { return }
+        engine.onLabelsResolved = { [weak self, weak engine] updates, currentLabel in
+            guard let self, let engine else { return }
             if courseExists, let record = activeRecord {
                 historyStore.updateSpeakers(updates, in: record)
                 rebuildFinalizedText(from: record)
                 refreshTranscript()
-            }
-            // 低置信又攒了新话 → 该人全部文本合并重判
-            let rechecked = self.roleCoordinator.recheck()
-            for (person, decision) in rechecked {
-                self.applyRoleDecisionToActiveRecord(person: person, decision: decision)
+                let resolved = engine.resolvedSegmentIDs
+                let decisions = roleCoordinator.rebuild(
+                    segments: record.segments.filter { resolved.contains($0.id) }
+                )
+                for (person, decision) in decisions {
+                    applyRoleDecisionToActiveRecord(person: person, decision: decision)
+                }
             }
             updateSpeakerLabel(currentLabel)
         }
@@ -658,6 +668,10 @@ final class StableRecordingViewController: NSViewController {
             self.partialRevision += 1
             let eventRevision = self.partialRevision
             if isFinal {
+                // A final recognition snapshot supersedes its volatile partial.
+                // Otherwise pause/end can save the old partial a second time.
+                self.partialText = ""
+                self.partialTranslation = ""
                 self.enqueueFinal(text, revision: eventRevision)
             } else {
                 self.partialText = text
@@ -682,10 +696,6 @@ final class StableRecordingViewController: NSViewController {
             historyStore.addSegmentIfNew(segment, to: activeRecord)
             rebuildFinalizedText(from: activeRecord)
             speakerEngine?.segmentsCommitted([segment.id])
-            // 身份：先分人（speaker），再用该人全文判老师/学生；不够置信则等。
-            if let decision = roleCoordinator.note(utterance: sentence, personLabel: speakerEngine?.currentLabel) {
-                applyRoleDecisionToActiveRecord(person: speakerEngine?.currentLabel, decision: decision)
-            }
         }
         if partialText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
             partialText = ""
@@ -718,7 +728,8 @@ final class StableRecordingViewController: NSViewController {
         guard response.request.generation == translationGeneration else { return }
         if response.request.kind == .partial {
             guard sessionState.phase == .recording,
-                  response.request.revision >= minimumValidPartialRevision else { return }
+                  response.request.revision >= minimumValidPartialRevision,
+                  partialText == response.request.text else { return }
         }
         if !response.succeeded, response.request.kind == .partial {
             setStatus(

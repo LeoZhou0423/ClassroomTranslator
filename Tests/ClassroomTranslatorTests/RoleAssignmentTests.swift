@@ -4,6 +4,26 @@ import XCTest
 /// 身份判定：置信度门槛 / 结束强制定案 / 低置信全文合并重判 / 多人角色写入。
 final class RoleAssignmentTests: XCTestCase {
     @MainActor
+    func testRebuildSeparatesSpeechAfterSpeakerBackfill() {
+        let book = RoleAssignmentBook()
+        book.policy.highConfidence = 0.8
+        book.classify = { text in
+            text.contains("objective") ? ("teacher", 0.95) : ("student", 0.9)
+        }
+        let segments = [
+            TranscriptSegment(original: "Our objective is geometry", speaker: "Speaker 1"),
+            TranscriptSegment(original: "Open your books now", speaker: "Speaker 1"),
+            TranscriptSegment(original: "I think the answer is four", speaker: "Speaker 2"),
+            TranscriptSegment(original: "Could you explain that again", speaker: "Speaker 2"),
+        ]
+        let decisions = book.replaceTranscript(segments)
+        XCTAssertEqual(decisions["Speaker 1"]?.role, .teacher)
+        XCTAssertEqual(decisions["Speaker 2"]?.role, .student)
+        XCTAssertFalse(book.combinedText(for: "Speaker 1").contains("answer"))
+        XCTAssertFalse(book.combinedText(for: "Speaker 2").contains("objective"))
+    }
+
+    @MainActor
     func testWaitsWhenConfidenceLow() {
         var st = RoleAssignmentState()
         let policy = RoleAssignmentPolicy()

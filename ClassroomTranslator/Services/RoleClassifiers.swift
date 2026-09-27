@@ -75,6 +75,10 @@ final class RoleAssignmentCoordinator {
         return book.ingest(utterance: utterance, person: person)
     }
 
+    func rebuild(segments: [TranscriptSegment]) -> [String: RoleDecision] {
+        book.replaceTranscript(segments)
+    }
+
     /// 低置信且有新话：全文合并重判。
     func recheck() -> [String: RoleDecision] {
         book.recheckLowConfidence()
@@ -96,10 +100,19 @@ final class RoleAssignmentCoordinator {
         let display = RoleDisplayNames.numberedDisplayNames(decisions: decisions, order: sequence)
         for (person, d) in decisions {
             var alias = map[person] ?? SpeakerAlias()
+            let previousNickname = alias.nickname
+            let generatedNames: Set<String> = [
+                String(localized: "Teacher"), String(localized: "Student"), String(localized: "Speaker"),
+            ].union((1...4).flatMap { index in [
+                RoleDisplayNames.teacherName(index),
+                RoleDisplayNames.studentName(index),
+                RoleDisplayNames.otherName(index),
+            ] })
             alias.role = d.role.speakerRole
             // 先写入身份，再标记高/低置信
             alias.roleConfidence = d.confidence.rawValue
-            if !alias.hasNickname, let name = display[person] {
+            if (!alias.hasNickname || (alias.roleConfidence != nil && generatedNames.contains(previousNickname))),
+               let name = display[person] {
                 alias.nickname = name
             }
             map[person] = alias

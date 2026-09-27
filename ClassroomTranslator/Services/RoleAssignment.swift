@@ -173,6 +173,27 @@ final class RoleAssignmentBook {
         states[person]?.decision
     }
 
+    /// 声纹标签可能在确认第二个窗口或重聚类后回填。按当前的最终分组
+    /// 重建每个人的全文，防止临时标签把不同人的话混到一起。
+    func replaceTranscript(_ segments: [TranscriptSegment]) -> [String: RoleDecision] {
+        var rebuilt: [String: RoleAssignmentState] = [:]
+        for segment in segments where segment.isFinal {
+            guard let person = segment.speaker, !person.isEmpty,
+                  person != SpeakerLabeler.genericSpeakerName else { continue }
+            var state = rebuilt[person] ?? RoleAssignmentState()
+            _ = state.append(segment.original, policy: policy)
+            rebuilt[person] = state
+        }
+        states = rebuilt
+        var decisions: [String: RoleDecision] = [:]
+        for person in rebuilt.keys {
+            if let decision = judge(person: person, forced: false) {
+                decisions[person] = decision
+            }
+        }
+        return decisions
+    }
+
     /// 新语句：写入 →（需要时）用该人**全部文本**重判。
     func ingest(utterance: String, person: String) -> RoleDecision? {
         var st = states[person] ?? RoleAssignmentState()

@@ -29,6 +29,9 @@ struct SpeakerClusterer: Equatable {
     // A single noisy/far-field window must not immediately invent a speaker.
     // Keep one candidate and require the next novel window to agree with it.
     private var pendingNovel: [Float]?
+    /// The previous window was provisionally assigned to an existing speaker.
+    /// When this window confirms the candidate, the caller must relabel it.
+    private(set) var confirmedPreviousNovel = false
 
     init(config: Config = Config()) {
         self.config = config
@@ -36,6 +39,7 @@ struct SpeakerClusterer: Equatable {
 
     /// 归属簇下标（0..<centroids.count 或新簇）。embedding 为空返回 nil。
     mutating func assign(_ embedding: [Float]) -> Int? {
+        confirmedPreviousNovel = false
         guard let unit = Self.normalize(embedding) else { return nil }
         var best = -1
         var bestSimilarity = -Double.greatestFiniteMagnitude
@@ -73,6 +77,7 @@ struct SpeakerClusterer: Equatable {
                 let combined = zip(candidate, unit).map { pair in (pair.0 + pair.1) * 0.5 }
                 centroids.append(Self.normalize(combined) ?? unit)
                 pendingNovel = nil
+                confirmedPreviousNovel = true
                 return centroids.count - 1
             }
             pendingNovel = unit
@@ -81,6 +86,7 @@ struct SpeakerClusterer: Equatable {
             return best
         }
         pendingNovel = nil
+        confirmedPreviousNovel = false
         return best
     }
 
