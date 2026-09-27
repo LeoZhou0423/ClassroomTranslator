@@ -16,23 +16,14 @@ final class SpeakerEmbeddingModel: @unchecked Sendable {
     private let capacity = SpeakerWindowPolicy.maximumWindowSamples
 
     init?(bundle: Bundle = .lingoResources) {
-        let modelURL = bundle.url(
-            forResource: Self.resourceName,
-            withExtension: "mlpackage"
-        ) ?? bundle.url(
-            forResource: Self.resourceName,
-            withExtension: "mlpackage",
-            subdirectory: "Resources"
-        )
-        guard let modelURL else {
-            StartupLog.mark("speaker.model-missing")
-            return nil
-        }
-
         let configuration = MLModelConfiguration()
         // 与 AccentClassifier 一致：CPU 上跑，避免 ANE 的不确定调度。
         configuration.computeUnits = .cpuOnly
-        guard let model = try? MLModel(contentsOf: modelURL, configuration: configuration) else {
+        guard let model = BundledMLModelLoader.load(
+            resource: Self.resourceName,
+            bundle: bundle,
+            configuration: configuration
+        ) else {
             StartupLog.mark("speaker.model-load-failed")
             return nil
         }

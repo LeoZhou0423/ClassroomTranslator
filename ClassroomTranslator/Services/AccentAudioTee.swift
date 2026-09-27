@@ -9,6 +9,8 @@ final class AccentAudioTee: @unchecked Sendable {
     private var emitted = false
     private var enabled = true
     private var readyHandler: (@Sendable ([Float], Int) -> Void)?
+    /// Ignore silence/background noise and collect actual voiced audio.
+    private let minimumSpeechRMS: Float = 0.006
 
     var onReady: (@Sendable ([Float], Int) -> Void)? {
         get {
@@ -65,6 +67,7 @@ final class AccentAudioTee: @unchecked Sendable {
         } else {
             converted = AccentClassifier.resample(mono, from: Int(srcRate.rounded()), to: Int(sampleRate))
         }
+        guard rms(converted) >= minimumSpeechRMS else { return }
 
         lock.lock()
         guard enabled, !emitted else {
@@ -85,5 +88,12 @@ final class AccentAudioTee: @unchecked Sendable {
             return
         }
         lock.unlock()
+    }
+
+    private func rms(_ values: [Float]) -> Float {
+        guard !values.isEmpty else { return 0 }
+        var sum: Float = 0
+        for value in values { sum += value * value }
+        return sqrt(sum / Float(values.count))
     }
 }

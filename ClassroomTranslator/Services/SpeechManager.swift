@@ -14,6 +14,7 @@ final class SpeechManager {
     /// 语言模型状态变化回调（UI 显示"正在下载模型..."等提示）
     var onLanguageModelStatusChanged: ((String) -> Void)?
     var onAudioLevelChanged: ((Float) -> Void)?
+    var onAccentDetected: ((_ accent: String, _ locale: String, _ confidence: Float) -> Void)?
 
     // task-6 Step 1：唯一依赖 SpeechEngine 协议的行（构造经工厂，设置项
     // speechEngine，默认 apple）。编排逻辑本身零改动。
@@ -376,8 +377,12 @@ final class SpeechManager {
 
     func startAutoDetectRecording() async throws {
         StartupLog.mark("sm.auto-enter")
-        UserDefaults.standard.removeObject(forKey: "detectedRecognitionLanguage")
-        currentLanguageCode = Self.safeAutomaticEnglishLocale()
+        // Reuse the previous confident result. A new result is saved for the
+        // next recording rather than restarting SpeechAnalyzer mid-sentence.
+        let previousDetected = UserDefaults.standard.string(forKey: "detectedRecognitionLanguage")
+        currentLanguageCode = previousDetected.flatMap {
+            Self.allEnglishLocales.contains($0) ? $0 : nil
+        } ?? Self.safeAutomaticEnglishLocale()
         accentDetectionActive = false
         driver.onAccentSamples = nil
         try await startRecording()
@@ -424,37 +429,23 @@ final class SpeechManager {
               isRecording,
               recordingGeneration == generation else { return }
 
-        let locale = result.localeIdentifier
-        guard result.confidence >= AccentClassifier.confidenceThreshold,
-              locale != currentLanguageCode else {
+        guard result.confidence >= AccentClassifier.confidenceThreshold else {
             onLanguageModelStatusChanged?("")
             return
         }
 
+        let locale = result.localeIdentifier
+        UserDefaults.standard.set(locale, forKey: "detectedRecognitionLanguage")
+        UserDefaults.standard.set(result.accent, forKey: "detectedAccentName")
+        onAccentDetected?(result.accent, locale, result.confidence)
+
         onLanguageModelStatusChanged?(String(
-            format: String(localized: "Detected %@ (%@)…"),
+            format: String(localized: "Detected %@ (%@)."),
             locale,
             result.accent
         ))
-        UserDefaults.standard.set(locale, forKey: "detectedRecognitionLanguage")
-        currentLanguageCode = locale
         driver.onAccentSamples = nil
-
-        if !currentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            commitFinal(currentText)
-        }
-        let savedCommittedText = committedText
-        isRecording = false
-        do {
-            try await startRecording()
-            onLanguageModelStatusChanged?(String(format: String(localized: "Detected %@."), locale))
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            onLanguageModelStatusChanged?("")
-        } catch {
-            committedText = savedCommittedText
-            isRecording = false
-            onRecordingInterrupted?()
-        }
+        StartupLog.mark("sm.accent-detected accent=\(result.accent) locale=\(locale) confidence=\(result.confidence)")
     }
 
     func stopAutoDetectRecording() {

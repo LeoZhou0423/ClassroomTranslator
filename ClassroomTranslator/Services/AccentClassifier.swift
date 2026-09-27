@@ -47,21 +47,13 @@ final class AccentClassifier: @unchecked Sendable {
     }
 
     init?(bundle: Bundle = .main) {
-        let modelURL = bundle.url(
-            forResource: "AccentECAPA",
-            withExtension: "mlpackage"
-        ) ?? bundle.url(
-            forResource: "AccentECAPA",
-            withExtension: "mlpackage",
-            subdirectory: "Resources"
-        )
-        guard let modelURL else {
-            return nil
-        }
-
         let config = MLModelConfiguration()
         config.computeUnits = .cpuOnly
-        guard let model = try? MLModel(contentsOf: modelURL, configuration: config) else {
+        guard let model = BundledMLModelLoader.load(
+            resource: "AccentECAPA",
+            bundle: bundle,
+            configuration: config
+        ) else {
             return nil
         }
         self.model = model

@@ -28,7 +28,7 @@ final class AppleSpeechEngine: @unchecked Sendable, SpeechEngine {
     /// 每次 stopAsync 自增；start 用它判断“我这次启动是否已被更晚的 stop 作废”，
     /// 避免 stop 的快照早于 start 写入状态时，引擎被重新拉起后无人关闭。
     private var stopEpoch = 0
-    private let accentTee = AccentAudioTee(targetSeconds: 2.5)
+    private let accentTee = AccentAudioTee(targetSeconds: 4.0)
     /// 说话人识别取窗环形缓冲（task-4）。tap 里与 accentTee 并联 append。
     let speakerRing = SpeakerAudioRing(capacitySeconds: 30)
 

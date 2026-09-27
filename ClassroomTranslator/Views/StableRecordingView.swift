@@ -53,6 +53,8 @@ final class StableRecordingViewController: NSViewController {
     private let openSettingsButton = NSButton(title: String(localized: "Open System Settings"), target: nil, action: nil)
     /// PSY-06：状态区常驻小字，说明自动保存节奏，避免真丢数据时被理解成"数据丢失 bug"。
     private let autosaveHint = NSTextField(labelWithString: String(localized: "Auto-saves every 30 seconds"))
+    /// Auto 模式永久显示本次检测到的口音，而不是只闪过一条状态消息。
+    private let accentLabel = NSTextField(labelWithString: "")
     /// VIS-01/VIS-07：电平条前的麦克风图标，不靠 tooltip 也能自明。
     private let micIconView = NSImageView()
     /// task-4：控制条上的「当前说话人」（纯 AppKit；detachesHiddenViews 收起空位）。
@@ -121,8 +123,8 @@ final class StableRecordingViewController: NSViewController {
 
         let title = NSTextField(labelWithString: course.name)
         title.font = .systemFont(ofSize: 17, weight: .semibold)
-        let accent = NSTextField(labelWithString: "\(course.accentName) → \(course.targetLanguageName)")
-        accent.textColor = .secondaryLabelColor
+        accentLabel.stringValue = "\(course.accentName) → \(course.targetLanguageName)"
+        accentLabel.textColor = .secondaryLabelColor
 
         // PSY-06：把"每 30 秒自动保存"摆到明面上；空间不够时先截断这行小字，
         // 保证课程标题和返回按钮永远优先。
@@ -132,7 +134,7 @@ final class StableRecordingViewController: NSViewController {
         autosaveHint.setContentHuggingPriority(.required, for: .horizontal)
         autosaveHint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let header = NSStackView(views: [closeButton, title, accent, autosaveHint])
+        let header = NSStackView(views: [closeButton, title, accentLabel, autosaveHint])
         header.orientation = .horizontal
         header.spacing = 12
         title.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -530,6 +532,7 @@ final class StableRecordingViewController: NSViewController {
         speechManager.onRecordingInterrupted = nil
         speechManager.onLanguageModelStatusChanged = nil
         speechManager.onAudioLevelChanged = nil
+        speechManager.onAccentDetected = nil
     }
 
     /// task-4：装配说话人识别引擎与回写回调。回写经批量 updateSpeakers，
@@ -568,6 +571,11 @@ final class StableRecordingViewController: NSViewController {
             if level > 0.03 && partialText.isEmpty {
                 setStatus(String(localized: "Sound detected · recognizing…"))
             }
+        }
+        speechManager.onAccentDetected = { [weak self] accent, locale, confidence in
+            guard let self else { return }
+            let percent = Int((confidence * 100).rounded())
+            accentLabel.stringValue = "Auto · \(accent) (\(locale), \(percent)%) → \(course.targetLanguageName)"
         }
         speechManager.onRecordingInterrupted = { [weak self] in
             guard let self, sessionState.phase != .ended else { return }
