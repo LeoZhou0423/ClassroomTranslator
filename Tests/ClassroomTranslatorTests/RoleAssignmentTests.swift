@@ -83,10 +83,10 @@ final class RoleAssignmentTests: XCTestCase {
         XCTAssertEqual(map["T1"]?.role, .teacher)
         XCTAssertEqual(map["T2"]?.role, .teacher)
         XCTAssertEqual(map["S1"]?.role, .student)
-        // UI 显示：多老师/多学生加序号
+        // UI 显示：多老师加序号；单个学生不强制带 1
         XCTAssertEqual(map["T1"]?.nickname, RoleDisplayNames.teacherName(1))
         XCTAssertEqual(map["T2"]?.nickname, RoleDisplayNames.teacherName(2))
-        XCTAssertEqual(map["S1"]?.nickname, RoleDisplayNames.studentName(1))
+        XCTAssertEqual(map["S1"]?.nickname, String(localized: "Student"))
         XCTAssertEqual(map["T1"]?.roleConfidence, RoleConfidence.high.rawValue)
     }
 
@@ -103,11 +103,12 @@ final class RoleAssignmentTests: XCTestCase {
         let forced = book.finalizeAll()
         XCTAssertEqual(forced["P"]?.confidence, .low)
 
-        _ = book.ingest(utterance: "Our objective is to explore functions carefully", person: "P")
-        let again = book.recheckLowConfidence()
-        XCTAssertEqual(again["P"]?.role, .teacher)
-        XCTAssertEqual(again["P"]?.confidence, .high)
-        XCTAssertEqual(again["P"]?.evidenceText.contains("hello"), true)
-        XCTAssertEqual(again["P"]?.evidenceText.contains("objective"), true)
+        // 新信息到来 → ingest 用**全文**重判（hello + well + objective）
+        let updated = book.ingest(utterance: "Our objective is to explore functions carefully", person: "P")
+        XCTAssertEqual(updated?.role, .teacher)
+        XCTAssertEqual(updated?.confidence, .high)
+        XCTAssertEqual(updated?.evidenceText.contains("hello"), true)
+        XCTAssertEqual(updated?.evidenceText.contains("objective"), true)
+        XCTAssertEqual(book.decision(for: "P")?.confidence, .high)
     }
 }

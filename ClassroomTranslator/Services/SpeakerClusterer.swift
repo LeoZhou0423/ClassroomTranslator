@@ -61,6 +61,12 @@ struct SpeakerClusterer: Equatable {
             centroids[best] = Self.normalize(blended) ?? centroids[best]
             return best
         }
+        // 首个说话人：立即建簇（空表时不走 pending，否则会返回 0 却没有质心）。
+        if centroids.isEmpty {
+            centroids.append(unit)
+            pendingNovel = nil
+            return 0
+        }
         if centroids.count < config.maximumSpeakers {
             if let candidate = pendingNovel,
                Self.dot(candidate, unit) >= config.threshold {
@@ -72,10 +78,10 @@ struct SpeakerClusterer: Equatable {
             pendingNovel = unit
             // Conservatively inherit the closest established speaker until a
             // second consistent novel window confirms that this is a person.
-            return max(0, best)
+            return best
         }
         pendingNovel = nil
-        return max(0, best)
+        return best
     }
 
     /// 重聚类后按新分组重建质心，让在线 leader-follower 接续。

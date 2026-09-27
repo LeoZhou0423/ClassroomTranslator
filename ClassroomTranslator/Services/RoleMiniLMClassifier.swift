@@ -178,10 +178,26 @@ final class RoleMiniLMClassifier: RoleClassifying, @unchecked Sendable {
                 "attention_mask": mask,
                 "token_type_ids": types,
             ]),
-            let prediction = try? model.prediction(from: provider),
-            let logits = prediction.featureValue(for: "logits")?.multiArrayValue
+            let prediction = try? model.prediction(from: provider)
         else {
             StartupLog.mark("role.infer-failed")
+            return nil
+        }
+
+        // CoreML 导出后输出名可能是 logits / var_1 / 0 等；取第一个 2 元多维数组。
+        var logits: MLMultiArray?
+        if let named = prediction.featureValue(for: "logits")?.multiArrayValue {
+            logits = named
+        } else {
+            for key in prediction.featureNames {
+                if let arr = prediction.featureValue(for: key)?.multiArrayValue, arr.count >= 2 {
+                    logits = arr
+                    break
+                }
+            }
+        }
+        guard let logits else {
+            StartupLog.mark("role.logits-missing")
             return nil
         }
 

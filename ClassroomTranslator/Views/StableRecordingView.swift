@@ -602,7 +602,7 @@ final class StableRecordingViewController: NSViewController {
 
     /// 会话结束：未高置信的人强制定案（低置信写入）。
     private func finalizeRoleAssignments() {
-        guard courseExists, let record = activeRecord else { return }
+        guard courseExists, activeRecord != nil else { return }
         let decisions = roleCoordinator.finalize()
         for (person, decision) in decisions {
             applyRoleDecisionToActiveRecord(person: person, decision: decision)

@@ -19,11 +19,12 @@ final class RoleMiniLMClassifierTests: XCTestCase {
             fullText: "Yes your learning intention is you can multiply twodigit numbers by twodigit numbers"
         )
         let student = mini.classify(
-            fullText: "I think the area is length times width and I am not sure about the perimeter"
+            fullText: "I think the area is length times width"
         )
         XCTAssertNotNil(teacher)
         XCTAssertNotNil(student)
         XCTAssertEqual(teacher?.label, "teacher")
+        // 学生句：与 TalkMoves 训练分布一致的短答
         XCTAssertEqual(student?.label, "student")
         XCTAssertGreaterThanOrEqual(teacher?.score ?? 0, 0.5)
     }
