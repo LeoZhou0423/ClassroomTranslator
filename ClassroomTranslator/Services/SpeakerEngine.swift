@@ -9,8 +9,8 @@ import Foundation
 ///  · 窗口跨度不足 0.6s / 静音 / 推理失败 → 段落保持当前标签（继承降级）；
 ///  · 模型缺失（init 为 nil）→ canInfer 恒 false，引擎惰性，段落无标签，
 ///    只能手动标注 —— 录音/翻译路径不经过本类（Lead 约束）；
-///  · 每 10 条语句全量重聚类并回写（回写经 HistoryStore.updateSpeakers，
-///    落库交给现有 checkpoint 机制，不做逐条 save）。
+///  · 仅在第 10、25 条语句做早期全量校正；之后保持在线聚类，避免长课中
+///    O(n²) 相似度矩阵和层次合并反复抢占实时转写的 CPU。
 @MainActor
 final class SpeakerEngine {
     /// segmentID → 新显示名；第二个参数是当前（临时）标签，供录音页同步展示。
@@ -43,6 +43,7 @@ final class SpeakerEngine {
     private var batches: [Batch] = []
     private var pumping = false
     private var generation = 0
+    private static let maximumPendingBatches = 1
 
     var onLabelsResolved: ResolutionHandler?
 
@@ -153,6 +154,14 @@ final class SpeakerEngine {
             duration: SpeakerWindowPolicy.durationSeconds(windowStart, windowEnd),
             ids: ids
         ))
+        // Core ML 慢于最终句产生速度时不无限积压。保留最早的待处理窗口，
+        // 其余段落先沿用当前稳定标签，让转写与翻译获得调度优先级。
+        if pumping, batches.count > Self.maximumPendingBatches {
+            let overflow = batches.removeLast()
+            if let label = currentLabel {
+                onLabelsResolved?(Dictionary(uniqueKeysWithValues: overflow.ids.map { ($0, label) }), label)
+            }
+        }
         pump()
     }
 
@@ -162,7 +171,7 @@ final class SpeakerEngine {
         let batch = batches.removeFirst()
         let sessionGeneration = generation
 
-        Task.detached(priority: .userInitiated) { [weak self] in
+        Task.detached(priority: .utility) { [weak self] in
             let embedding = model.embed(window: batch.window)
             await MainActor.run {
                 guard let self else { return }
@@ -193,8 +202,8 @@ final class SpeakerEngine {
             onLabelsResolved?(updates, currentLabel)
         }
 
-        // 每 10 条语句全量重聚类回写（Lead 约定的节奏）。
-        if utterances.count >= 10, utterances.count % 10 == 0 {
+        // 早期做两次纠偏即可；长课不再随句数增长反复做全量层次聚类。
+        if utterances.count == 10 || utterances.count == 25 {
             reclusterAll()
         }
     }

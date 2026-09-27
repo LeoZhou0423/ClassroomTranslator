@@ -9,11 +9,18 @@ struct SpeakerClusterer: Equatable {
         var threshold: Double
         var maximumSpeakers: Int
         var emaAlpha: Double
+        var newClusterMargin: Double
 
-        init(threshold: Double = 0.6, maximumSpeakers: Int = 4, emaAlpha: Double = 0.3) {
+        init(
+            threshold: Double = 0.6,
+            maximumSpeakers: Int = 4,
+            emaAlpha: Double = 0.3,
+            newClusterMargin: Double = 0.12
+        ) {
             self.threshold = min(max(threshold, 0.45), 0.75)
             self.maximumSpeakers = min(max(maximumSpeakers, 2), 4)
             self.emaAlpha = min(max(emaAlpha, 0.05), 0.9)
+            self.newClusterMargin = min(max(newClusterMargin, 0), 0.25)
         }
     }
 
@@ -36,9 +43,14 @@ struct SpeakerClusterer: Equatable {
                 best = index
             }
         }
-        if best >= 0, bestSimilarity >= config.threshold {
+        // VM/远场麦克风会让同一个人的相邻窗口有明显抖动。处在阈值附近时
+        // 优先并入最相似的已有簇，只有显著低于阈值才创建新人，避免一次
+        // 咳嗽、噪声或短句立刻裂成“说话人 2/3”。
+        let mergeFloor = config.threshold - config.newClusterMargin
+        if best >= 0, bestSimilarity >= mergeFloor {
             // EMA 更新质心后重新归一化。
-            let alpha = Float(config.emaAlpha)
+            // 阈值以下属于弱匹配，只做很小的质心更新，避免离群窗口拖偏簇。
+            let alpha = Float(bestSimilarity >= config.threshold ? config.emaAlpha : min(config.emaAlpha, 0.08))
             let blended = zip(centroids[best], unit).map { pair in
                 (1 - alpha) * pair.0 + alpha * pair.1
             }

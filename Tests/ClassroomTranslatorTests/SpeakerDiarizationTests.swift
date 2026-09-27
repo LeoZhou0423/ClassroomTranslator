@@ -76,6 +76,29 @@ final class SpeakerDiarizationTests: XCTestCase {
         XCTAssertEqual(clusterer.centroids.count, 2)
     }
 
+    func testClustererAbsorbsBorderlineVariationInsteadOfCreatingFalseSpeaker() {
+        var clusterer = SpeakerClusterer(config: .init(
+            threshold: 0.6,
+            maximumSpeakers: 4,
+            newClusterMargin: 0.12
+        ))
+        XCTAssertEqual(clusterer.assign([1, 0, 0]), 0)
+        // cosine ~= 0.55：旧逻辑会立即创建第二人；现在视为同一人的弱匹配。
+        XCTAssertEqual(clusterer.assign([0.55, 0.835, 0]), 0)
+        XCTAssertEqual(clusterer.centroids.count, 1)
+    }
+
+    func testClustererStillCreatesSpeakerForClearlyDifferentVoice() {
+        var clusterer = SpeakerClusterer(config: .init(
+            threshold: 0.6,
+            maximumSpeakers: 4,
+            newClusterMargin: 0.12
+        ))
+        XCTAssertEqual(clusterer.assign([1, 0, 0]), 0)
+        XCTAssertEqual(clusterer.assign([0.2, 0.98, 0]), 1)
+        XCTAssertEqual(clusterer.centroids.count, 2)
+    }
+
     func testClustererCapsAtMaxSpeakers() {
         // K = 2：第三个不同声音不再开新簇，归入最相似的既有簇。
         var clusterer = SpeakerClusterer(config: .init(threshold: 0.6, maximumSpeakers: 2))

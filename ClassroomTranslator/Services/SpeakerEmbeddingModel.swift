@@ -14,6 +14,9 @@ final class SpeakerEmbeddingModel: @unchecked Sendable {
     private let inputNames: (waveform: String, numSamples: String)
     private let lock = NSLock()
     private let capacity = SpeakerWindowPolicy.maximumWindowSamples
+    private let waveform: MLMultiArray
+    private let numSamples: MLMultiArray
+    private var previousSampleCount = 0
 
     init?(bundle: Bundle = .lingoResources) {
         let configuration = MLModelConfiguration()
@@ -28,6 +31,16 @@ final class SpeakerEmbeddingModel: @unchecked Sendable {
             return nil
         }
         self.model = model
+
+        guard let waveform = try? MLMultiArray(
+            shape: [1, NSNumber(value: capacity)],
+            dataType: .float32
+        ), let numSamples = try? MLMultiArray(shape: [1, 1], dataType: .float32) else {
+            StartupLog.mark("speaker.model-buffer-allocation-failed")
+            return nil
+        }
+        self.waveform = waveform
+        self.numSamples = numSamples
 
         let inputs = model.modelDescription.inputDescriptionsByName
         guard inputs["waveform"]?.multiArrayConstraint != nil,
@@ -44,15 +57,15 @@ final class SpeakerEmbeddingModel: @unchecked Sendable {
     func embed(window: [Float]) -> [Float]? {
         guard !window.isEmpty, window.count <= capacity else { return nil }
 
-        guard let waveform = try? MLMultiArray(
-            shape: [1, NSNumber(value: capacity)],
-            dataType: .float32
-        ) else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
         let count = window.count
-        for index in 0..<capacity {
-            waveform[index] = NSNumber(value: index < count ? window[index] : 0)
+        for index in 0..<count { waveform[index] = NSNumber(value: window[index]) }
+        // 上一次窗口更长时，只清掉残留的尾部；首次使用时数组本身已为零。
+        if previousSampleCount > count {
+            for index in count..<previousSampleCount { waveform[index] = 0 }
         }
-        guard let numSamples = try? MLMultiArray(shape: [1, 1], dataType: .float32) else { return nil }
+        previousSampleCount = count
         numSamples[0] = NSNumber(value: Float(count))
 
         guard let provider = try? MLDictionaryFeatureProvider(dictionary: [
@@ -60,8 +73,6 @@ final class SpeakerEmbeddingModel: @unchecked Sendable {
             inputNames.numSamples: numSamples,
         ]) else { return nil }
 
-        lock.lock()
-        defer { lock.unlock() }
         guard let prediction = try? model.prediction(from: provider),
               let embedding = prediction.featureValue(for: Self.outputFeatureName)?.multiArrayValue,
               embedding.count == 192 else {
