@@ -24,6 +24,23 @@ final class RoleAssignmentTests: XCTestCase {
     }
 
     @MainActor
+    func testUnchangedSpeakerTranscriptDoesNotRepeatModelInference() {
+        let book = RoleAssignmentBook()
+        var calls = 0
+        book.classify = { _ in
+            calls += 1
+            return ("student", 0.9)
+        }
+        let segments = [
+            TranscriptSegment(original: "I think the answer is four", speaker: "Speaker 1"),
+            TranscriptSegment(original: "Can you repeat that please", speaker: "Speaker 1"),
+        ]
+        _ = book.replaceTranscript(segments)
+        _ = book.replaceTranscript(segments)
+        XCTAssertEqual(calls, 1)
+    }
+
+    @MainActor
     func testWaitsWhenConfidenceLow() {
         var st = RoleAssignmentState()
         let policy = RoleAssignmentPolicy()
