@@ -147,13 +147,13 @@ final class SpeakerDiarizationTests: XCTestCase {
     // MARK: - 命名规则（§4.4 / §4.6.3）
 
     func testSingleShortClusterUsesGenericSpeakerName() {
-        // 单簇总时长 <30s：不硬猜老师。
-        let labels = SpeakerLabeler.baseLabels(durations: [10], counts: [3])
+        // 单簇 <6s：不硬猜老师。
+        let labels = SpeakerLabeler.baseLabels(durations: [4], counts: [3])
         XCTAssertEqual(labels, [SpeakerLabeler.genericSpeakerName])
     }
 
     func testSingleQualifiedClusterBecomesTeacher() {
-        // 单簇 ≥2 句、≥6s、总时长 ≥30s → 老师。
+        // 单簇 ≥2 句、≥6s → 老师。
         let labels = SpeakerLabeler.baseLabels(durations: [40], counts: [6])
         XCTAssertEqual(labels, [SpeakerLabeler.teacherName])
     }
@@ -163,7 +163,8 @@ final class SpeakerDiarizationTests: XCTestCase {
         let labels = SpeakerLabeler.baseLabels(durations: [12, 4, 2], counts: [5, 3, 1])
         XCTAssertEqual(labels[0], SpeakerLabeler.teacherName)
         XCTAssertEqual(labels[1], SpeakerLabeler.studentName(1))
-        XCTAssertEqual(labels[2], SpeakerLabeler.studentName(2))
+        // 碎片簇（<2 句且 <3s）→ 其他，不冒充学生。
+        XCTAssertEqual(labels[2], SpeakerLabeler.otherName(1))
     }
 
     func testNoTeacherCandidateMeansNumberedSpeakers() {

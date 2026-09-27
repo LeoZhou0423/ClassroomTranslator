@@ -72,7 +72,7 @@ final class SpeakerEngine {
             batches = []
             pumping = false
             clusterer = SpeakerClusterer(config: config.clusterConfig)
-            currentLabel = nil
+            currentLabel = SpeakerLabeler.genericSpeakerName
             generation += 1
         }
         // 每次开始录音 ring 都会被 setSpeakerCapture(true) 清零，
@@ -118,9 +118,7 @@ final class SpeakerEngine {
     }
 
     private func flushAttached() {
-        let ids = attached
-        attached = []
-        guard canInfer, !ids.isEmpty else { return }
+        guard canInfer, !attached.isEmpty else { return }
 
         let end = ring.endIndex
         var start = windowEnd ?? ring.availableStart
@@ -141,11 +139,13 @@ final class SpeakerEngine {
         guard case let .window(windowStart, windowEnd) = decision,
               let samples = ring.window(from: windowStart, to: windowEnd),
               !samples.isEmpty else {
-            return  // 继承：段落保持创建时的 currentLabel
+            return  // 继承：ids 留在 attached，随下个有效窗口归组（开头短句不再丢标签）
         }
         guard SpeakerWindowPolicy.rms(samples) >= SpeakerWindowPolicy.silenceRMS else {
-            return  // 静音窗口：继承
+            return  // 静音窗口：ids 保留待下个窗口
         }
+        let ids = attached
+        attached = []
         batches.append(Batch(
             window: samples,
             duration: SpeakerWindowPolicy.durationSeconds(windowStart, windowEnd),

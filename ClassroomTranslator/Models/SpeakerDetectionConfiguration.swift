@@ -8,7 +8,7 @@ struct SpeakerDetectionConfiguration: Equatable {
     static let enabledKey = "speakerDetectionEnabled"
     static let maxSpeakersKey = "speakerMaxSpeakers"
     static let thresholdKey = "speakerThreshold"
-    static let defaultThreshold = 0.6
+    static let defaultThreshold = 0.5
 
     let isEnabled: Bool
     let maximumSpeakers: Int

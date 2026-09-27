@@ -252,6 +252,7 @@ final class StableRecordingViewController: NSViewController {
         sessionState.beginStarting()
         // 权限弹窗可能停留很久；期间课程若被删除，后面就再不能读 course 的属性了。
         let accentCode = course.accentCode
+        let targetLanguageName = course.targetLanguageName
         speechManager.configureContext(courseName: course.name)
         openSettingsButton.isHidden = true
         permissionRecoveryURL = nil
@@ -328,6 +329,10 @@ final class StableRecordingViewController: NSViewController {
                     speakerEngine?.activate(recordID: record.id)
                 }
                 sessionState.start()
+                // 顶部立即显示本次实际使用的 locale（Auto 模式起跑用上次检测值或 en-GB）。
+                if accentCode == "auto" {
+                    accentLabel.stringValue = "Auto (\(speechManager.currentLanguageCode)) \u{2192} \(targetLanguageName)"
+                }
                 startTimer()
                 startCheckpointTimer()
                 if overlayVisible { subtitleWindow.showWindow() }
@@ -575,7 +580,7 @@ final class StableRecordingViewController: NSViewController {
         speechManager.onAccentDetected = { [weak self] accent, locale, confidence in
             guard let self else { return }
             let percent = Int((confidence * 100).rounded())
-            accentLabel.stringValue = "Auto · \(accent) (\(locale), \(percent)%) → \(course.targetLanguageName)"
+            accentLabel.stringValue = "Auto (\(locale)) · \(accent) \(percent)% → \(course.targetLanguageName)"
         }
         speechManager.onRecordingInterrupted = { [weak self] in
             guard let self, sessionState.phase != .ended else { return }

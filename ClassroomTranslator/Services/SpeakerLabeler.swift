@@ -14,13 +14,14 @@ struct SpeakerLabeler {
     struct Config: Equatable {
         var teacherMinSegments = 2
         var teacherMinSeconds: Double = 6
-        var singleClusterTeacherSeconds: Double = 30
+        /// 单簇即判老师的总时长门槛；调低到 6s 让老师角色尽快出现。
+        var singleClusterTeacherSeconds: Double = 6
         var teacherSwapMarginSeconds: Double = 2
 
         init(
             teacherMinSegments: Int = 2,
             teacherMinSeconds: Double = 6,
-            singleClusterTeacherSeconds: Double = 30,
+            singleClusterTeacherSeconds: Double = 6,
             teacherSwapMarginSeconds: Double = 2
         ) {
             self.teacherMinSegments = teacherMinSegments
@@ -39,6 +40,11 @@ struct SpeakerLabeler {
 
     static func numberedSpeakerName(_ rank: Int) -> String {
         String(format: String(localized: "Speaker %lld"), rank)
+    }
+
+    /// 证据不足的碎片簇（<2 句且 <3s）标注为"其他"，不冒充学生。
+    static func otherName(_ rank: Int) -> String {
+        String(format: String(localized: "Other %lld"), rank)
     }
 
     /// 基础命名（无历史时直接用；也是投票逻辑的回退基线）。
@@ -75,8 +81,16 @@ struct SpeakerLabeler {
         var labels = [String](repeating: "", count: groups)
         if teacherIndex >= 0 {
             labels[teacherIndex] = teacherName
-            for (rank, index) in others.enumerated() {
-                labels[index] = studentName(rank + 1)
+            var studentRank = 0
+            var otherRank = 0
+            for index in others {
+                if counts[index] >= 2 || durations[index] >= 3 {
+                    studentRank += 1
+                    labels[index] = studentName(studentRank)
+                } else {
+                    otherRank += 1
+                    labels[index] = otherName(otherRank)
+                }
             }
         } else {
             for (rank, index) in others.enumerated() {

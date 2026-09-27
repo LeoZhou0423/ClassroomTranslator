@@ -56,6 +56,7 @@ final class SubtitleWindowController: NSWindowController {
         NotificationCenter.default.addObserver(self, selector: #selector(mainWindowWillEnterFullScreen(_:)), name: NSWindow.willEnterFullScreenNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(mainWindowDidExitFullScreen(_:)), name: NSWindow.didExitFullScreenNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(settingsDidChange(_:)), name: UserDefaults.didChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(windowDidResize(_:)), name: NSWindow.didResizeNotification, object: window)
 
         applyDisplaySettings()
         // VIS-05 / STAB-07：autosave 恢复优先；没有存档才落到屏幕底部居中。
@@ -77,6 +78,19 @@ final class SubtitleWindowController: NSWindowController {
             x: visible.midX - frame.width / 2,
             y: visible.minY + 40
         ))
+    }
+
+    @objc private func windowDidResize(_ note: Notification) {
+        renderLatestCue()
+    }
+
+    /// 字号随悬浮窗尺寸缩放（以默认 600x200 为基准 1.0x，取宽高缩放较小者，0.6x--4x）。
+    private func fontScale() -> Double {
+        guard let window else { return 1 }
+        let size = window.frame.size
+        guard size.width > 0, size.height > 0 else { return 1 }
+        let scale = min(Double(size.width) / 600, Double(size.height) / 200)
+        return min(max(scale, 0.6), 4.0)
     }
 
     @objc private func settingsDidChange(_ note: Notification) {
@@ -132,7 +146,7 @@ final class SubtitleWindowController: NSWindowController {
 
     private func renderLatestCue() {
         let configuration = SubtitleDisplayConfiguration()
-        let fontSize = configuration.fontSize
+        let fontSize = max(configuration.fontSize * fontScale(), 12)
         let showOriginal = configuration.showOriginal
         let originalCue = SubtitleCueBuilder.cue(
             from: latestOriginal,

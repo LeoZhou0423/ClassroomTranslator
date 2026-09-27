@@ -12,8 +12,9 @@ enum SpeakerWindowPolicy {
     static let maximumWindowSamples = 4 * sampleRate
     static let minimumWindowSamples = 9_600          // 0.6s @16k
     static let tailLagSamples = 3_200                // 0.2s @16k
-    /// 静音门限 ≈ −45 dBFS：低于此 RMS 视为无语音，继承上一标签。
-    static let silenceRMS: Float = 0.0056
+    /// 静音门限 ≈ −54 dBFS：VM 桥接音频整体偏小（实测 RMS −62 dBFS），
+    /// 过高的门限会把近讲语音误判成静音 → 永远不开窗 → 无标签/标签漂移。
+    static let silenceRMS: Float = 0.002
 
     enum Decision: Equatable {
         /// 数据不足 / 窗口太短 / 有效样本过少 → 不推理，段落保持既有标签。
