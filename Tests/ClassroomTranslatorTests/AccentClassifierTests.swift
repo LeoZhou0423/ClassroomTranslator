@@ -36,4 +36,9 @@ final class AccentClassifierTests: XCTestCase {
     func testAutomaticEnglishStartsWithUKEnglish() {
         XCTAssertEqual(SpeechManager.safeAutomaticEnglishLocale(), "en-GB")
     }
+
+    func testAccentCaptureAcceptsQuietVMSpeechButRejectsSilence() {
+        XCTAssertFalse(AccentAudioTee.containsSpeech([Float](repeating: 0, count: 1_600)))
+        XCTAssertTrue(AccentAudioTee.containsSpeech([Float](repeating: 0.002, count: 1_600)))
+    }
 }

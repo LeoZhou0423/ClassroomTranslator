@@ -33,6 +33,8 @@ final class SpeechManager {
     private let accentClassifier: AccentClassifier?
     private var accentDetectionTask: Task<Void, Never>?
     private var accentDetectionActive = false
+    private var accentDetectionAttempts = 0
+    private static let maximumAccentDetectionAttempts = 3
 
     private(set) var currentLanguageCode: String
 
@@ -356,6 +358,7 @@ final class SpeechManager {
     func stopRecording() {
         recordingGeneration += 1
         accentDetectionActive = false
+        accentDetectionAttempts = 0
         accentDetectionTask?.cancel()
         accentDetectionTask = nil
         driver.onAccentSamples = nil
@@ -384,6 +387,7 @@ final class SpeechManager {
             Self.allEnglishLocales.contains($0) ? $0 : nil
         } ?? Self.safeAutomaticEnglishLocale()
         accentDetectionActive = false
+        accentDetectionAttempts = 0
         driver.onAccentSamples = nil
         try await startRecording()
 
@@ -415,7 +419,7 @@ final class SpeechManager {
 
         accentDetectionTask?.cancel()
         accentDetectionTask = Task { [weak self] in
-            let result = await Task.detached(priority: .userInitiated) {
+            let result = await Task.detached(priority: .utility) {
                 classifier.classify(monoSamples: samples, sampleRate: sampleRate)
             }.value
 
@@ -425,12 +429,18 @@ final class SpeechManager {
     }
 
     private func applyDetectedAccent(_ result: AccentClassifier.Result?, generation: Int) async {
-        guard let result,
-              isRecording,
-              recordingGeneration == generation else { return }
+        guard isRecording, recordingGeneration == generation else { return }
+        accentDetectionAttempts += 1
+
+        guard let result else {
+            retryAccentDetectionIfPossible(reason: "inference-failed")
+            return
+        }
 
         guard result.confidence >= AccentClassifier.confidenceThreshold else {
-            onLanguageModelStatusChanged?("")
+            retryAccentDetectionIfPossible(
+                reason: "low-confidence accent=\(result.accent) confidence=\(result.confidence)"
+            )
             return
         }
 
@@ -446,6 +456,19 @@ final class SpeechManager {
         ))
         driver.onAccentSamples = nil
         StartupLog.mark("sm.accent-detected accent=\(result.accent) locale=\(locale) confidence=\(result.confidence)")
+    }
+
+    private func retryAccentDetectionIfPossible(reason: String) {
+        accentDetectionActive = false
+        StartupLog.mark("sm.accent-retry attempt=\(accentDetectionAttempts) reason=\(reason)")
+        if accentDetectionAttempts < Self.maximumAccentDetectionAttempts {
+            onLanguageModelStatusChanged?(String(localized: "Accent uncertain · listening again…"))
+            driver.setAccentCapture(enabled: true)
+        } else {
+            driver.onAccentSamples = nil
+            driver.setAccentCapture(enabled: false)
+            onLanguageModelStatusChanged?(String(localized: "Accent could not be determined · using the current English model"))
+        }
     }
 
     func stopAutoDetectRecording() {

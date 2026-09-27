@@ -329,9 +329,10 @@ final class StableRecordingViewController: NSViewController {
                     speakerEngine?.activate(recordID: record.id)
                 }
                 sessionState.start()
-                // 顶部立即显示本次实际使用的 locale（Auto 模式起跑用上次检测值或 en-GB）。
+                // Auto 仍需用具体 locale 启动 SpeechAnalyzer；该值只是当前模型，
+                // 不代表口音检测已经完成。
                 if accentCode == "auto" {
-                    accentLabel.stringValue = "Auto (\(speechManager.currentLanguageCode)) \u{2192} \(targetLanguageName)"
+                    accentLabel.stringValue = "Auto · detecting accent… (current \(speechManager.currentLanguageCode)) \u{2192} \(targetLanguageName)"
                 }
                 startTimer()
                 startCheckpointTimer()
