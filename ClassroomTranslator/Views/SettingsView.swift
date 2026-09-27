@@ -23,7 +23,7 @@ struct SettingsView: View {
     /// 模型缺失时即使开着也整体降级为手动标注。
     @AppStorage("speakerDetectionEnabled") private var speakerDetectionEnabled: Bool = true
     @AppStorage("speakerMaxSpeakers") private var speakerMaxSpeakers: Int = 4
-    @AppStorage("speakerThreshold") private var speakerThreshold: Double = 0.6
+    @AppStorage("speakerThreshold") private var speakerThreshold: Double = 0.5
     /// task-6：语音引擎选择。字面量 key 与 SpeechEngineKind.defaultsKey 一致，
     /// 由单测 testDefaultsKeyIsSpeechEngine 锁定；默认 apple（Step 1 暂只暴露 Apple）。
     @AppStorage("speechEngine") private var speechEngineChoice: String = "apple"

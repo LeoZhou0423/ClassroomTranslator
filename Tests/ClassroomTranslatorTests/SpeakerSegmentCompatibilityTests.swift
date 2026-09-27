@@ -96,7 +96,7 @@ final class SpeakerSegmentCompatibilityTests: XCTestCase {
         let fresh = SpeakerDetectionConfiguration(defaults: defaults)
         XCTAssertTrue(fresh.isEnabled, "说话人识别默认开启")
         XCTAssertEqual(fresh.maximumSpeakers, 4)
-        XCTAssertEqual(fresh.threshold, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(fresh.threshold, 0.5, accuracy: 0.0001)
 
         defaults.set(false, forKey: SpeakerDetectionConfiguration.enabledKey)
         defaults.set(2, forKey: SpeakerDetectionConfiguration.maxSpeakersKey)
@@ -111,7 +111,7 @@ final class SpeakerSegmentCompatibilityTests: XCTestCase {
         defaults.set(0.0, forKey: SpeakerDetectionConfiguration.thresholdKey)
         let clamped = SpeakerDetectionConfiguration(defaults: defaults)
         XCTAssertEqual(clamped.maximumSpeakers, 4)
-        XCTAssertEqual(clamped.threshold, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(clamped.threshold, 0.5, accuracy: 0.0001)
     }
 
     func testClusterConfigClampsThresholdAndSpeakerCount() {
