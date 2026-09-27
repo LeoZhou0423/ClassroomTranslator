@@ -101,17 +101,10 @@ final class RoleAssignmentCoordinator {
         for (person, d) in decisions {
             var alias = map[person] ?? SpeakerAlias()
             let previousNickname = alias.nickname
-            let generatedNames = Set([
-                String(localized: "Teacher"), String(localized: "Student"), String(localized: "Speaker"),
-            ]).union((1...4).flatMap { index in [
-                RoleDisplayNames.teacherName(index),
-                RoleDisplayNames.studentName(index),
-                RoleDisplayNames.otherName(index),
-            ] })
             alias.role = d.role.speakerRole
             // 先写入身份，再标记高/低置信
             alias.roleConfidence = d.confidence.rawValue
-            if (!alias.hasNickname || (alias.roleConfidence != nil && generatedNames.contains(previousNickname))),
+            if (!alias.hasNickname || (alias.roleConfidence != nil && RoleDisplayNames.isAutomaticName(previousNickname))),
                let name = display[person] {
                 alias.nickname = name
             }

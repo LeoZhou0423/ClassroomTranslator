@@ -3,6 +3,15 @@ import Foundation
 /// 角色显示名：多老师/多学生只加序号（老师1、老师2、学生1…）。
 /// 写入 SpeakerAlias.nickname（无自定义昵称时），使转写前缀 / 详情 / 导出一致显示。
 enum RoleDisplayNames {
+    static func isAutomaticName(_ name: String) -> Bool {
+        if [String(localized: "Teacher"), String(localized: "Student"), String(localized: "Speaker")].contains(name) {
+            return true
+        }
+        return (1...4).contains { index in
+            name == teacherName(index) || name == studentName(index) || name == otherName(index)
+        }
+    }
+
     static func teacherName(_ index: Int) -> String {
         String(format: String(localized: "Teacher %lld"), index)
     }

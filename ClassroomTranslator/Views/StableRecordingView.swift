@@ -570,6 +570,16 @@ final class StableRecordingViewController: NSViewController {
                 let decisions = roleCoordinator.rebuild(
                     segments: record.segments.filter { resolved.contains($0.id) }
                 )
+                var aliases = SpeakerAliases.decode(record.speakerNames)
+                for person in Array(aliases.keys) {
+                    guard var alias = aliases[person], alias.roleConfidence != nil,
+                          decisions[person] == nil else { continue }
+                    alias.role = .other
+                    alias.roleConfidence = nil
+                    if RoleDisplayNames.isAutomaticName(alias.nickname) { alias.nickname = "" }
+                    aliases[person] = alias
+                }
+                record.speakerNames = SpeakerAliases.encode(aliases)
                 for (person, decision) in decisions {
                     applyRoleDecisionToActiveRecord(person: person, decision: decision)
                 }
