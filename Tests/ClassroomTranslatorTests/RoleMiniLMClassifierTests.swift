@@ -39,6 +39,17 @@ final class RoleMiniLMClassifierTests: XCTestCase {
     }
 
     @MainActor
+    func testWordPieceMatchesGoldenIds() throws {
+        guard let tok = WordPieceTokenizer() else {
+            throw XCTSkip("role_vocab.txt missing")
+        }
+        // 与 HF tokenizer.json 对齐的黄金 token 序列
+        let encoded = tok.encode(text: "I think the area is length times width", maxLength: 128)
+        let expected: [Int32] = [101, 1045, 2228, 1996, 2181, 2003, 3091, 2335, 9381, 102]
+        XCTAssertEqual(Array(encoded.ids.prefix(expected.count)), expected)
+    }
+
+    @MainActor
     func testWordPieceEncodesWithinMaxLength() throws {
         guard let tok = WordPieceTokenizer() else {
             throw XCTSkip("role_vocab.txt missing")

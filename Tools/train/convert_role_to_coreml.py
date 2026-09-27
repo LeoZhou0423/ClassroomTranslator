@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""MiniLM role classifier -> CoreML via traced PyTorch (BERT-safe wrap).
+"""MiniLM role classifier -> CoreML (BERT-safe: explicit embeddings).
 
-Avoids coremltools ONNX frontend (removed in ct>=8) and the known
-`int`-cast crash inside BertEmbeddings by freezing position_ids.
+Avoids coremltools dropping gather inputs when position/token_type are
+passed through BertEmbeddings. We compose word+position+type ourselves,
+then run encoder + classifier head.
 """
 from __future__ import annotations
 
@@ -31,36 +32,50 @@ class RoleWrap(nn.Module):
     def __init__(self, model, max_len: int):
         super().__init__()
         self.model = model
+        emb = model.bert.embeddings
+        self.word_embeddings = emb.word_embeddings
+        self.position_embeddings = emb.position_embeddings
+        self.token_type_embeddings = emb.token_type_embeddings
+        self.LayerNorm = emb.LayerNorm
+        self.dropout = emb.dropout
+        self.encoder = model.bert.encoder
+        self.pooler = model.bert.pooler
+        self.classifier = model.classifier
         self.max_len = max_len
-        pos = torch.arange(max_len).unsqueeze(0)
-        self.register_buffer("position_ids", pos)
-        self.register_buffer("ones_mask", torch.ones(1, max_len, dtype=torch.int64))
+        self.register_buffer("position_ids", torch.arange(max_len).unsqueeze(0))
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, token_type_ids: torch.Tensor):
-        # force static position ids to avoid aten::int in embeddings
-        out = self.model.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=self.position_ids,
-        )
-        pooled = out.pooler_output
-        return self.model.classifier(pooled)
+        # Explicit gathers so CoreML keeps indices as real inputs.
+        w = self.word_embeddings(input_ids)
+        p = self.position_embeddings(self.position_ids)
+        t = self.token_type_embeddings(token_type_ids)
+        h = self.LayerNorm(w + p + t)
+        h = self.dropout(h)
+        ext = attention_mask[:, None, None, :].to(dtype=h.dtype)
+        ext = (1.0 - ext) * -10000.0
+        enc = self.encoder(h, attention_mask=ext)[0]
+        pooled = self.pooler(enc)
+        return self.classifier(pooled)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     here = Path(__file__).resolve().parent
     ap.add_argument("--src", type=Path, default=here / "role-cls-final")
-    ap.add_argument("--out-mlpackage", type=Path,
-                    default=here.parent.parent / "ClassroomTranslator" / "Resources" / "RoleMiniLM.mlpackage")
-    ap.add_argument("--out-vocab", type=Path,
-                    default=here.parent.parent / "ClassroomTranslator" / "Resources" / "role_vocab.txt")
+    ap.add_argument(
+        "--out-mlpackage",
+        type=Path,
+        default=here.parent.parent / "ClassroomTranslator" / "Resources" / "RoleMiniLM.mlpackage",
+    )
+    ap.add_argument(
+        "--out-vocab",
+        type=Path,
+        default=here.parent.parent / "ClassroomTranslator" / "Resources" / "role_vocab.txt",
+    )
     ap.add_argument("--max-length", type=int, default=128)
     args = ap.parse_args()
 
-    tok = args.src / "tokenizer.json"
-    extract_vocab(tok, args.out_vocab)
+    extract_vocab(args.src / "tokenizer.json", args.out_vocab)
 
     from transformers import BertConfig, BertForSequenceClassification
     import coremltools as ct
@@ -78,16 +93,13 @@ def main() -> int:
     ids = torch.zeros(1, L, dtype=torch.int64)
     mask = torch.ones(1, L, dtype=torch.int64)
     types = torch.zeros(1, L, dtype=torch.int64)
-
     with torch.no_grad():
         ref = wrap(ids, mask, types)
-        print("ref logits", ref.shape, ref[0].tolist())
+        print("ref logits", ref[0].tolist())
 
-    print("trace...")
     ts = torch.jit.trace(wrap, (ids, mask, types), strict=False)
-    ts = torch.jit.freeze(ts)
 
-    print("convert...")
+    print("convert mlprogram FP16 (GitHub size limit)...")
     mlmodel = ct.convert(
         ts,
         inputs=[
@@ -106,7 +118,6 @@ def main() -> int:
     mlmodel.input_description["attention_mask"] = "attention mask [1,128]"
     mlmodel.input_description["token_type_ids"] = "segment ids [1,128]"
     mlmodel.output_description["logits"] = "logits [1,2] student=0 teacher=1"
-
     args.out_mlpackage.parent.mkdir(parents=True, exist_ok=True)
     mlmodel.save(str(args.out_mlpackage))
     print("saved", args.out_mlpackage)
