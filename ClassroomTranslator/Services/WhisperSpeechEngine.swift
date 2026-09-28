@@ -109,9 +109,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                     try? await Task.sleep(nanoseconds: 500_000_000)
                 }
             }
-            await MainActor.run {
-                await WhisperModelStore.shared.download()
-            }
+            await WhisperModelStore.shared.download()
             poll.cancel()
             await MainActor.run {
                 onModelStatus(WhisperModelStore.shared.message)
