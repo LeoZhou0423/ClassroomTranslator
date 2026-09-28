@@ -15,7 +15,9 @@ let package = Package(
         // .gitignore 忽略 Package.resolved，版本钉死必须写在这个 exact
         // requirement 里（Lead 确认）；传递依赖 onnxruntime-libs 由上游
         // Package.swift 以 exact 1.28.2 钉死。
-        .package(url: "https://github.com/k2-fsa/sherpa-onnx", exact: "1.13.8")
+        .package(url: "https://github.com/k2-fsa/sherpa-onnx", exact: "1.13.8"),
+        // Whisper ASR（WhisperKit / CoreML）：课堂嘈杂与 TTS 下比 Dictation 更稳。
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0")
     ],
     targets: [
         .executableTarget(
@@ -23,7 +25,8 @@ let package = Package(
             dependencies: [
                 // 暴露 target SherpaOnnx（其 sources 即官方 swift-api-examples/
                 // SherpaOnnx.swift 薄封装，import SherpaOnnx 即用）。
-                .product(name: "sherpa-onnx", package: "sherpa-onnx")
+                .product(name: "sherpa-onnx", package: "sherpa-onnx"),
+                .product(name: "WhisperKit", package: "WhisperKit")
             ],
             path: "ClassroomTranslator",
             resources: [

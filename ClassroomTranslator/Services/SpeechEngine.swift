@@ -40,6 +40,7 @@ protocol SpeechEngine: AnyObject {
 enum SpeechEngineKind: String, CaseIterable {
     case apple
     case sherpa
+    case whisper
 
     /// @AppStorage 与 UserDefaults 共用的 key。
     /// 注意：SettingsView 里 @AppStorage 用字面量 "speechEngine" 绑定
@@ -59,6 +60,7 @@ enum SpeechEngineKind: String, CaseIterable {
         switch self {
         case .apple: return true
         case .sherpa: return SherpaSpeechEngine.isUsable()
+        case .whisper: return WhisperSpeechEngine.isUsable()
         }
     }
 
@@ -86,6 +88,13 @@ enum SpeechEngineFactory {
             }
             StartupLog.mark("engine.selected=sherpa")
             return SherpaSpeechEngine()
+        case .whisper:
+            guard WhisperSpeechEngine.isUsable() else {
+                StartupLog.mark("engine.whisper-unavailable fallback=apple")
+                return AppleSpeechEngine()
+            }
+            StartupLog.mark("engine.selected=whisper")
+            return WhisperSpeechEngine()
         }
     }
 }

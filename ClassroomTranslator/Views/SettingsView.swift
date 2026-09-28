@@ -126,6 +126,7 @@ struct SettingsView: View {
                         if SherpaSpeechEngine.modelsPresent() {
                             Text("Sherpa-onnx · English streaming").tag(SpeechEngineKind.sherpa.rawValue)
                         }
+                        Text("Whisper · better accuracy").tag(SpeechEngineKind.whisper.rawValue)
                     }
                     Text("Applies the next time the recording page opens.")
                         .font(.caption)
@@ -133,6 +134,11 @@ struct SettingsView: View {
                     // Lead Step 2 令第 5 条：首字延迟如实标注，避免被当成 bug。
                     if speechEngineChoice == SpeechEngineKind.sherpa.rawValue {
                         Text("Sherpa-onnx: first text appears after about 1–1.3 seconds of speech; this is model context, not a fault.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    if speechEngineChoice == SpeechEngineKind.whisper.rawValue {
+                        Text("Whisper: higher accuracy on classroom and TTS audio; first run downloads the model. Text updates every few seconds (batch decoding).")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -255,6 +261,7 @@ struct SettingsView: View {
         switch effective {
         case .apple: return "Apple SpeechAnalyzer"
         case .sherpa: return "Sherpa-onnx · English streaming"
+        case .whisper: return "Whisper · better accuracy"
         }
     }
 

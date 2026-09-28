@@ -97,6 +97,19 @@ final class SpeechEngineSelectionTests: XCTestCase {
         XCTAssertFalse(engine.running, "init 必须轻量：不触麦克风、不创建识别器")
     }
 
+    func testWhisperIsSelectableAndFactoryReturnsWhisperEngine() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("whisper", forKey: SpeechEngineKind.defaultsKey)
+        let kind = SpeechEngineKind(userDefaults: defaults)
+        XCTAssertEqual(kind, .whisper)
+        XCTAssertTrue(kind.isAvailable, "Whisper 默认可用（模型在 start 时下载）")
+        XCTAssertEqual(kind.resolved, .whisper)
+        let engine = SpeechEngineFactory.make(userDefaults: defaults)
+        XCTAssertTrue(engine is WhisperSpeechEngine)
+        XCTAssertFalse(engine.running)
+    }
+
     func testSherpaModelFilesRejectMissingAndTruncated() throws {
         // makeRecognizer 的最小体积防线（wrapper 对 C 失败是 trap 不是 nil）。
         let (bundle, dir) = try makeEmptyBundle()
