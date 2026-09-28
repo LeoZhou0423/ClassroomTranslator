@@ -10,7 +10,7 @@ import WhisperKit
 @Observable
 final class WhisperModelStore {
     static let shared = WhisperModelStore()
-    static let variant = "small"
+    static let variant = "tiny"
 
     var isDownloading = false
     /// 0...1，未知时为 nil

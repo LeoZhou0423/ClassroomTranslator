@@ -14,8 +14,10 @@ import WhisperKit
 ///  · 实时策略：滚动窗 + 静音分句（Whisper 批量解码，非真流式 token）
 final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     static let displayName = "Whisper"
-    /// WhisperKit CoreML 仓库默认模型名（small：质量/体积平衡）。
-    static let modelName = "small"
+    /// tiny：优先稳定性（VM/低配不 OOM）。要更高准度可在后续改成 base/small。
+    static let modelName = "tiny"
+    /// 滚动窗上限（秒）。过长会让 Whisper 反复整窗解码，吃内存且易拖垮 VM。
+    static let maxWindowSeconds = 8
 
     private static let availabilityLock = NSLock()
     private static var creationDisabled = false
@@ -202,12 +204,17 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         kitLock.unlock()
         #if canImport(WhisperKit)
         do {
-            // WhisperKit 0.9+：首用会从 Hugging Face 下载 CoreML 权重（small ≈ 准度优先）。
-            let kit = try await WhisperKit(model: modelName)
+            // VM 无 ANE/GPU 时 CoreML 会不稳甚至把进程打没：强制 CPU 计算。
+            let compute = ModelComputeOptions(
+                melCompute: .cpuOnly,
+                audioEncoderCompute: .cpuOnly,
+                textDecoderCompute: .cpuOnly
+            )
+            let kit = try await WhisperKit(model: modelName, computeOptions: compute, verbose: false, logLevel: .error)
             kitLock.lock()
             kitCache = kit
             kitLock.unlock()
-            StartupLog.mark("whisper.kit-ready model=\(modelName)")
+            StartupLog.mark("whisper.kit-ready model=\(modelName) compute=cpuOnly")
             return true
         } catch {
             StartupLog.mark("whisper.kit-load-error \(error.localizedDescription)")
@@ -369,8 +376,8 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
         stateLock.withLock {
             sampleBuffer.append(contentsOf: samples)
-            // 滚动窗 20s
-            let maxSamples = 20 * 16_000
+            // 滚动窗上限：避免内存和解码成本无限涨（VM 上易 OOM/卡死）
+            let maxSamples = Self.maxWindowSeconds * 16_000
             if sampleBuffer.count > maxSamples {
                 sampleBuffer.removeFirst(sampleBuffer.count - maxSamples)
             }
@@ -393,8 +400,8 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         let locale = UserDefaults.standard.string(forKey: "detectedRecognitionLanguage") ?? "en-US"
         Task { [weak self] in
             guard let self else { return }
-            let text = await self.transcribeWindow(window, locale: locale)
-            self.finishDecode(text: text)
+            let decoded = await self.transcribeWindow(window, locale: locale)
+            self.finishDecode(text: decoded)
         }
     }
 
