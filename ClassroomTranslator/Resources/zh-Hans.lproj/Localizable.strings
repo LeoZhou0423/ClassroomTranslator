@@ -296,6 +296,7 @@
 "Recommended for this Mac: %@" = "本机推荐：%@";
 "Whisper is unavailable in this virtual machine (CoreML crash). Use Apple SpeechAnalyzer or Sherpa-onnx." = "虚拟机中无法使用 Whisper（CoreML 会崩溃）。请改用 Apple SpeechAnalyzer 或 Sherpa-onnx。";
 "Whisper uses the CPU compatibility backend in this virtual machine. It is slower, but produces real Whisper results." = "虚拟机中将使用 CPU 兼容模式运行 Whisper。速度较慢，但输出是真实的 Whisper 识别结果。";
+"Virtual machines use the fixed Whisper tiny CPU model." = "虚拟机固定使用 Whisper tiny CPU 模型，其他档位在此环境中不会生效。";
 "Downloading Whisper model… This may take a few minutes. Do not close the app." = "正在下载 Whisper 模型… 可能需要几分钟，请勿关闭应用。";
 "Whisper model ready." = "Whisper 模型已就绪。";
 "Whisper model download failed. Check your network, then tap Start to retry. You can also pick Apple or Sherpa-onnx in Settings → Speech Engine." = "Whisper 模型下载失败。请检查网络后再点「开始」；也可在 设置 → 语音引擎 改用 Apple 或 Sherpa-onnx。";

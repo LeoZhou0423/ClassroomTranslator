@@ -44,13 +44,16 @@ final class WhisperModelStore {
     }
 
     func refreshReadyFlag() {
-        if usesOnnxCompatibilityBackend
+        let ready = usesOnnxCompatibilityBackend
             ? Self.onnxModelFilesPresent()
-            : Self.localModelFolderExists(variant: tier.variantName) {
-            isReady = true
+            : Self.localModelFolderExists(variant: tier.variantName)
+        isReady = ready
+        if ready {
             if message.isEmpty {
                 message = String(localized: "Whisper model ready.")
             }
+        } else if !isDownloading && message.isEmpty {
+            message = String(localized: "Whisper model not downloaded")
         }
     }
 

@@ -302,32 +302,43 @@ struct SettingsView: View {
     }
 
     /// Whisper 档位：按内存/VM 推荐默认值，用户可改。
+    @ViewBuilder
     private var whisperTierPicker: some View {
         let store = WhisperModelStore.shared
         let recommended = WhisperModelTier.recommended()
-        return VStack(alignment: .leading, spacing: 6) {
-            Picker("Model size", selection: Binding(
-                get: { store.tier },
-                set: { store.selectTier($0) }
-            )) {
-                ForEach(WhisperModelTier.allCases) { tier in
-                    Text(tier.title).tag(tier)
-                }
+        if store.usesOnnxCompatibilityBackend {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(WhisperModelTier.tiny.title)
+                    .font(.body)
+                Text(String(localized: "Virtual machines use the fixed Whisper tiny CPU model."))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            Text(store.tier.detail)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            if store.tier != recommended {
-                Text(String(
-                    format: String(localized: "Recommended for this Mac: %@"),
-                    recommended.title
-                ))
-                .font(.caption2)
-                .foregroundColor(.orange)
-            } else {
-                Text(String(localized: "Recommended for this Mac"))
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("Model size", selection: Binding(
+                    get: { store.tier },
+                    set: { store.selectTier($0) }
+                )) {
+                    ForEach(WhisperModelTier.allCases) { tier in
+                        Text(tier.title).tag(tier)
+                    }
+                }
+                Text(store.tier.detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if store.tier != recommended {
+                    Text(String(
+                        format: String(localized: "Recommended for this Mac: %@"),
+                        recommended.title
+                    ))
                     .font(.caption2)
-                    .foregroundColor(.green)
+                    .foregroundColor(.orange)
+                } else {
+                    Text(String(localized: "Recommended for this Mac"))
+                        .font(.caption2)
+                        .foregroundColor(.green)
+                }
             }
         }
     }
