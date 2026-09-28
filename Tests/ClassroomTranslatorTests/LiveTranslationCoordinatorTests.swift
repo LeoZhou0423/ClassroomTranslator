@@ -42,8 +42,13 @@ final class LiveTranslationCoordinatorTests: XCTestCase {
         }
         coordinator.submit(.init(kind: .final, text: "lesson", cue: "lesson", revision: 1, generation: 1) { _ in })
         for _ in 0..<200 where continuation == nil { await Task.yield() }
+        guard let continuation else {
+            XCTFail("Translator did not start")
+            coordinator.cancelAll()
+            return
+        }
         XCTAssertEqual(coordinator.pendingCount, 1)
-        continuation?.resume(returning: "课程")
+        continuation.resume(returning: "课程")
         await coordinator.waitUntilIdle()
         XCTAssertEqual(coordinator.pendingCount, 0)
     }

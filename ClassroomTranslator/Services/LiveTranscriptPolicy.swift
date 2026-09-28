@@ -98,6 +98,13 @@ enum RecognitionTextDelta {
 /// recognizer snapshot. Preserve text that was already shown when a later
 /// window (especially the final silence window) contains only its shorter tail.
 enum WhisperTranscriptAccumulator {
+    static func appendingUtterance(_ utterance: String, to history: String) -> String {
+        let history = clean(history)
+        let utterance = clean(utterance)
+        guard !utterance.isEmpty else { return history }
+        return history.isEmpty ? utterance : history + " " + utterance
+    }
+
     /// A silence-boundary decode may legitimately return no text even though
     /// an earlier rolling-window decode already produced a good partial. Keep
     /// that accumulated text so the caller can commit and translate it.

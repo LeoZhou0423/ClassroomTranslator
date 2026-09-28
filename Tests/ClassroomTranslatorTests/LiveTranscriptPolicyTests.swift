@@ -106,6 +106,16 @@ final class LiveTranscriptPolicyTests: XCTestCase {
         )
     }
 
+    func testWhisperRepeatedUtteranceRemainsInSessionHistory() {
+        XCTAssertEqual(
+            WhisperTranscriptAccumulator.appendingUtterance(
+                "Please repeat after me",
+                to: "Please repeat after me"
+            ),
+            "Please repeat after me Please repeat after me"
+        )
+    }
+
     func testWhisperRollingWindowsAppendOnlyUnseenTail() {
         XCTAssertEqual(
             WhisperTranscriptAccumulator.merged(

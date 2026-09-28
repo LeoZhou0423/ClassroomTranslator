@@ -261,7 +261,17 @@ final class SpeechManager {
 
     private func commitFinal(_ finalText: String) {
         var delta: String
-        if committedText.isEmpty {
+        if effectiveEngineKind == .whisper {
+            // WhisperSpeechEngine emits one self-contained utterance per
+            // silence boundary. Comparing it with the entire session history
+            // incorrectly deletes legitimate repetitions (for example a
+            // teacher asks the class to repeat the same sentence).
+            delta = finalText
+            committedText = WhisperTranscriptAccumulator.appendingUtterance(
+                finalText,
+                to: committedText
+            )
+        } else if committedText.isEmpty {
             delta = finalText
             committedText = finalText
         } else if finalText.hasPrefix(committedText) {
