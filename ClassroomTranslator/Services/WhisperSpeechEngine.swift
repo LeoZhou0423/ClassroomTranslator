@@ -32,13 +32,13 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     /// VM 上 WhisperKit/CoreML 在 MLMMultiArray 分配处必崩（已两次 crash report）。
     /// 虚拟机一律禁用 Whisper，工厂回退 Apple。
     static func isUsable() -> Bool {
-        if WhisperModelTier.detectVirtualMachine() {
+        if !WhisperModelTier.supportsWhisperRuntime() {
             availabilityLock.withLock {
                 if !creationDisabled {
                     creationDisabled = true
                 }
             }
-            StartupLog.mark("whisper.disabled-on-vm")
+            StartupLog.mark("whisper.disabled-unsupported-runtime")
             return false
         }
         return availabilityLock.withLock { !creationDisabled }

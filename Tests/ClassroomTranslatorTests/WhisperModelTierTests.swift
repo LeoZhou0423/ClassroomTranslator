@@ -2,6 +2,12 @@ import XCTest
 @testable import ClassroomTranslator
 
 final class WhisperModelTierTests: XCTestCase {
+    func testWhisperRuntimeRequiresBothPhysicalMachineAndMetal() {
+        XCTAssertFalse(WhisperModelTier.supportsWhisperRuntime(isVirtualMachine: true, hasMetalDevice: true))
+        XCTAssertFalse(WhisperModelTier.supportsWhisperRuntime(isVirtualMachine: false, hasMetalDevice: false))
+        XCTAssertTrue(WhisperModelTier.supportsWhisperRuntime(isVirtualMachine: false, hasMetalDevice: true))
+    }
+
     func testVirtualMachineAlwaysTiny() {
         XCTAssertEqual(WhisperModelTier.recommended(physicalMemoryGB: 64, isVirtualMachine: true), .tiny)
     }

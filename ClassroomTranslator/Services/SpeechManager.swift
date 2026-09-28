@@ -20,6 +20,14 @@ final class SpeechManager {
     // speechEngine，默认 apple）。编排逻辑本身零改动。
     private let driver: any SpeechEngine = SpeechEngineFactory.make()
 
+    /// The engine that was actually constructed after availability fallback.
+    /// UI startup decisions must use this instead of the persisted preference.
+    var effectiveEngineKind: SpeechEngineKind {
+        if driver is WhisperSpeechEngine { return .whisper }
+        if driver is SherpaSpeechEngine { return .sherpa }
+        return .apple
+    }
+
     /// 说话人识别取窗缓冲（task-4）：录音页的 SpeakerEngine 直接读它。
     var speakerRing: SpeakerAudioRing { driver.speakerRing }
     private var isStarting = false

@@ -301,7 +301,10 @@ final class StableRecordingViewController: NSViewController {
 
             // 用户不会先去设置下载模型 —— 没下载就识别时，这里主动下载并显示进度，
             // 不要进麦克风启动超时（实测：下载被 20s 掐断 + 误报“麦克风占用”）。
-            let isWhisper = SpeechEngineKind() == .whisper
+            // The stored preference can still say Whisper after this app bundle
+            // moves into a VM. Use the factory's resolved engine so an unsupported
+            // VM never enters Whisper model download/initialization.
+            let isWhisper = speechManager.effectiveEngineKind == .whisper
             if isWhisper {
                 let modelOK = await ensureWhisperModelReady(generation: currentGeneration)
                 guard modelOK, currentGeneration == self.generation else { return }

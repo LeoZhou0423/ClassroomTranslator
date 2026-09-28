@@ -2,6 +2,9 @@ import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
+#if canImport(Metal)
+import Metal
+#endif
 
 /// Whisper 模型档位：按机器配置推荐，用户可改。
 /// 同一 App 在 VM / 低配本上默认 tiny，避免 CoreML OOM 把进程打没。
@@ -62,6 +65,10 @@ enum WhisperModelTier: String, CaseIterable, Identifiable, Sendable {
         #if os(macOS)
         if sysctlInt("kern.hv_vmm_present") == 1 { return true }
         if sysctlInt("hw.optional.hypervisor") == 1 { return true }
+        if let features = sysctlString("machdep.cpu.features")?.lowercased(),
+           features.split(separator: " ").contains("vmm") {
+            return true
+        }
         if let model = sysctlString("hw.model")?.lowercased() {
             if model.contains("vmware") || model.contains("kvm")
                 || model.contains("qemu") || model.contains("virtual")
@@ -73,6 +80,25 @@ enum WhisperModelTier: String, CaseIterable, Identifiable, Sendable {
             return true
         }
         return false
+        #else
+        return false
+        #endif
+    }
+
+    /// WhisperKit ultimately creates CoreML tensors. QEMU guests used for local
+    /// testing do not expose a Metal device and CoreML aborts the process instead
+    /// of throwing an Error, so this capability must be checked before any model
+    /// download or WhisperKit construction.
+    static func supportsWhisperRuntime(
+        isVirtualMachine: Bool = detectVirtualMachine(),
+        hasMetalDevice: Bool = systemHasMetalDevice()
+    ) -> Bool {
+        !isVirtualMachine && hasMetalDevice
+    }
+
+    private static func systemHasMetalDevice() -> Bool {
+        #if canImport(Metal) && os(macOS)
+        return MTLCreateSystemDefaultDevice() != nil
         #else
         return false
         #endif
