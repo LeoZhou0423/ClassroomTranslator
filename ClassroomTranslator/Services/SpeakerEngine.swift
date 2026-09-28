@@ -65,6 +65,10 @@ final class SpeakerEngine {
     /// 模型可用且开关打开时才推理。
     var canInfer: Bool { active && config.isEnabled && model != nil }
 
+    /// 已经挂到 final 段落上的窗口即使紧接着 pause/end，也必须完成。
+    /// active 只控制是否接收新段落，不能作废已经排进来的段落。
+    private var canFinishAttached: Bool { config.isEnabled && model != nil }
+
     var resolvedSegmentIDs: Set<UUID> {
         Set(utterances.flatMap(\.segmentIDs))
     }
@@ -139,7 +143,7 @@ final class SpeakerEngine {
     }
 
     private func flushAttached() {
-        guard canInfer, !attached.isEmpty else { return }
+        guard canFinishAttached, !attached.isEmpty else { return }
 
         let end = ring.endIndex
         var start = windowEnd ?? ring.availableStart

@@ -421,7 +421,16 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     /// 48k/44.1k → 16k 带区间平均的降采样（Whisper 输入）。
     private func ingest(mono: [Float], sourceRate: Double) {
         guard !mono.isEmpty else { return }
-        let samples = WhisperAudioResampler.convert(mono, sourceRate: sourceRate)
+        let samples: [Float]
+        if abs(sourceRate - 16_000) < 1 {
+            samples = mono
+        } else {
+            samples = AccentClassifier.resample(
+                mono,
+                from: Int(sourceRate.rounded()),
+                to: 16_000
+            )
+        }
 
         let now = Date().timeIntervalSince1970
         let rms = samples.reduce(0) { $0 + $1 * $1 }

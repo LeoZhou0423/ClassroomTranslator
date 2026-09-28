@@ -181,19 +181,37 @@ final class AccentClassifier: @unchecked Sendable {
     static func resample(_ input: [Float], from srcRate: Int, to dstRate: Int) -> [Float] {
         guard srcRate > 0, dstRate > 0, srcRate != dstRate, !input.isEmpty else { return input }
         let ratio = Double(srcRate) / Double(dstRate)
-        let outCount = max(1, Int(Double(input.count) / ratio))
-        var out = [Float](repeating: 0, count: outCount)
-        for i in 0..<outCount {
-            let srcPos = Double(i) * ratio
-            let idx = Int(srcPos)
-            if idx + 1 < input.count {
-                let frac = Float(srcPos) - Float(idx)
-                out[i] = input[idx] * (1 - frac) + input[idx + 1] * frac
-            } else if idx < input.count {
-                out[i] = input[idx]
+        let outputCount = max(1, Int(Double(input.count) / ratio))
+        var output = [Float](repeating: 0, count: outputCount)
+        if ratio > 1 {
+            // Average every source interval instead of selecting one point.
+            // This cheap low-pass step avoids folding high-frequency energy
+            // into the 16 kHz speech band used by accent, speaker and Whisper.
+            for outputIndex in 0..<outputCount {
+                var position = Double(outputIndex) * ratio
+                let end = min(Double(input.count), Double(outputIndex + 1) * ratio)
+                var weightedSum: Double = 0
+                var totalWeight: Double = 0
+                while position < end {
+                    let inputIndex = min(Int(position), input.count - 1)
+                    let boundary = min(end, Double(inputIndex + 1))
+                    let weight = boundary - position
+                    weightedSum += Double(input[inputIndex]) * weight
+                    totalWeight += weight
+                    position = boundary
+                }
+                if totalWeight > 0 { output[outputIndex] = Float(weightedSum / totalWeight) }
+            }
+        } else {
+            for outputIndex in 0..<outputCount {
+                let position = Double(outputIndex) * ratio
+                let lower = min(Int(position), input.count - 1)
+                let upper = min(lower + 1, input.count - 1)
+                let fraction = Float(position - Double(lower))
+                output[outputIndex] = input[lower] * (1 - fraction) + input[upper] * fraction
             }
         }
-        return out
+        return output
     }
 
     static func monoSamples(from buffer: AVAudioPCMBuffer) -> [Float]? {

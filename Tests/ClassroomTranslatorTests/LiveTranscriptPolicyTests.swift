@@ -176,9 +176,9 @@ final class LiveTranscriptPolicyTests: XCTestCase {
         ))
     }
 
-    func testWhisperResamplerAveragesEach48kInterval() {
+    func testSpeechResamplerAveragesEach48kInterval() {
         XCTAssertEqual(
-            WhisperAudioResampler.convert([1, 1, 1, 3, 3, 3], sourceRate: 48_000),
+            AccentClassifier.resample([1, 1, 1, 3, 3, 3], from: 48_000, to: 16_000),
             [1, 3]
         )
     }
