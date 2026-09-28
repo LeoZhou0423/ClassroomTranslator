@@ -52,7 +52,7 @@ final class WhisperModelStore {
             if message.isEmpty {
                 message = String(localized: "Whisper model ready.")
             }
-        } else if !isDownloading && message.isEmpty {
+        } else if !isDownloading && lastError == nil {
             message = String(localized: "Whisper model not downloaded")
         }
     }

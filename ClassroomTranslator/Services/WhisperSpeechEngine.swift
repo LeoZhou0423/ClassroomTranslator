@@ -57,7 +57,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private let accentTee = AccentAudioTee(targetSeconds: 3.0)
     let speakerRing = SpeakerAudioRing(capacitySeconds: 30)
 
-    /// 16 kHz mono 滚动窗（最多 20s，Whisper 友好）。
+    /// 16 kHz mono 滚动窗（最多 8s，控制 VM 解码延迟和内存）。
     private var sampleBuffer: [Float] = []
     private var lastEmitText = ""
     private var accumulatedText = ""
