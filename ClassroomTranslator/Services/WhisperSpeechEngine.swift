@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import SherpaOnnx
 #if canImport(WhisperKit)
 import WhisperKit
 #endif
@@ -29,18 +30,9 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private static let availabilityLock = NSLock()
     private static var creationDisabled = false
 
-    /// VM 上 WhisperKit/CoreML 在 MLMMultiArray 分配处必崩（已两次 crash report）。
-    /// 虚拟机一律禁用 Whisper，工厂回退 Apple。
+    /// CoreML-capable Macs use WhisperKit; QEMU/no-Metal environments use the
+    /// CPU ONNX compatibility backend. Both are real Whisper decoders.
     static func isUsable() -> Bool {
-        if !WhisperModelTier.supportsWhisperRuntime() {
-            availabilityLock.withLock {
-                if !creationDisabled {
-                    creationDisabled = true
-                }
-            }
-            StartupLog.mark("whisper.disabled-unsupported-runtime")
-            return false
-        }
         return availabilityLock.withLock { !creationDisabled }
     }
 
@@ -220,6 +212,30 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             return true
         }
         kitLock.unlock()
+        if !WhisperModelTier.supportsWhisperRuntime() {
+            guard WhisperModelStore.onnxModelFilesPresent() else { return false }
+            let dir = WhisperModelStore.onnxModelDirectory
+            var config = sherpaOnnxOfflineRecognizerConfig(
+                featConfig: sherpaOnnxFeatureConfig(sampleRate: 16_000, featureDim: 80),
+                modelConfig: sherpaOnnxOfflineModelConfig(
+                    tokens: dir.appendingPathComponent("tiny-tokens.txt").path,
+                    whisper: sherpaOnnxOfflineWhisperModelConfig(
+                        encoder: dir.appendingPathComponent("tiny-encoder.int8.onnx").path,
+                        decoder: dir.appendingPathComponent("tiny-decoder.int8.onnx").path,
+                        language: "",
+                        task: "transcribe"
+                    ),
+                    numThreads: 2,
+                    provider: "cpu"
+                )
+            )
+            let recognizer = SherpaOnnxOfflineRecognizer(config: &config)
+            kitLock.lock()
+            kitCache = recognizer
+            kitLock.unlock()
+            StartupLog.mark("whisper.kit-ready model=tiny backend=onnx-cpu")
+            return true
+        }
         #if canImport(WhisperKit)
         do {
             // VM 无 ANE/GPU 时 CoreML 会不稳甚至把进程打没：强制 CPU 计算。
@@ -247,8 +263,14 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     #if canImport(WhisperKit)
     private func transcribeWindow(_ samples: [Float], locale: String) async -> String? {
         Self.kitLock.lock()
-        let kit = Self.kitCache as? WhisperKit
+        let cached = Self.kitCache
         Self.kitLock.unlock()
+        if let recognizer = cached as? SherpaOnnxOfflineRecognizer {
+            let result = recognizer.decode(samples: samples, sampleRate: 16_000)
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
+        let kit = cached as? WhisperKit
         guard let kit else { return nil }
         let lang = Self.whisperLanguage(from: locale)
         let options = DecodingOptions(

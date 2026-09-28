@@ -126,9 +126,7 @@ struct SettingsView: View {
                         if SherpaSpeechEngine.modelsPresent() {
                             Text("Sherpa-onnx · English streaming").tag(SpeechEngineKind.sherpa.rawValue)
                         }
-                        if WhisperModelTier.supportsWhisperRuntime() {
-                            Text("Whisper · better accuracy").tag(SpeechEngineKind.whisper.rawValue)
-                        }
+                        Text("Whisper · better accuracy").tag(SpeechEngineKind.whisper.rawValue)
                     }
                     Text("Applies the next time the recording page opens.")
                         .font(.caption)
@@ -140,7 +138,7 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                     }
                     if !WhisperModelTier.supportsWhisperRuntime() {
-                        Text("Whisper is unavailable in this virtual machine (CoreML crash). Use Apple SpeechAnalyzer or Sherpa-onnx.")
+                        Text("Whisper uses the CPU compatibility backend in this virtual machine. It is slower, but produces real Whisper results.")
                             .font(.caption)
                             .foregroundColor(.orange)
                     }

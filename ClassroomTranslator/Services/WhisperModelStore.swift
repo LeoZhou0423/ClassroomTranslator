@@ -28,6 +28,10 @@ final class WhisperModelStore {
 
     var variant: String { tier.variantName }
 
+    /// QEMU has no usable CoreML/Metal path. Its compatibility backend uses the
+    /// multilingual sherpa-onnx tiny model regardless of the physical-Mac tier.
+    var usesOnnxCompatibilityBackend: Bool { !WhisperModelTier.supportsWhisperRuntime() }
+
     func selectTier(_ tier: WhisperModelTier) {
         guard tier != self.tier else { return }
         self.tier = tier
@@ -40,7 +44,9 @@ final class WhisperModelStore {
     }
 
     func refreshReadyFlag() {
-        if Self.localModelFolderExists(variant: tier.variantName) {
+        if usesOnnxCompatibilityBackend
+            ? Self.onnxModelFilesPresent()
+            : Self.localModelFolderExists(variant: tier.variantName) {
             isReady = true
             if message.isEmpty {
                 message = String(localized: "Whisper model ready.")
@@ -74,6 +80,14 @@ final class WhisperModelStore {
         defer { isDownloading = false }
 
         do {
+            if usesOnnxCompatibilityBackend {
+                try await downloadOnnxTiny()
+                isReady = true
+                fraction = 1
+                message = String(localized: "Whisper model ready.")
+                StartupLog.mark("whisper.onnx-model-downloaded variant=tiny")
+                return
+            }
             #if canImport(WhisperKit)
             let variant = tier.variantName
             _ = try await WhisperKit.download(variant: variant) { [weak self] progress in
@@ -97,6 +111,51 @@ final class WhisperModelStore {
             lastError = error.localizedDescription
             message = String(localized: "Whisper model download failed. Check the network and try again.")
             StartupLog.mark("whisper.model-download-failed \(error.localizedDescription)")
+        }
+    }
+
+    nonisolated static var onnxModelDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("LingoClass/WhisperONNX/tiny", isDirectory: true)
+    }
+
+    nonisolated static let onnxFiles: [(name: String, minBytes: Int64, url: URL)] = [
+        ("tiny-encoder.int8.onnx", 12_000_000, URL(string: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/tiny-encoder.int8.onnx?download=true")!),
+        ("tiny-decoder.int8.onnx", 85_000_000, URL(string: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/tiny-decoder.int8.onnx?download=true")!),
+        ("tiny-tokens.txt", 100_000, URL(string: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/tiny-tokens.txt?download=true")!)
+    ]
+
+    nonisolated static func onnxModelFilesPresent() -> Bool {
+        onnxFiles.allSatisfy { item in
+            let path = onnxModelDirectory.appendingPathComponent(item.name).path
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let size = attrs[.size] as? Int64 else { return false }
+            return size >= item.minBytes
+        }
+    }
+
+    private func downloadOnnxTiny() async throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: Self.onnxModelDirectory, withIntermediateDirectories: true)
+        for (index, item) in Self.onnxFiles.enumerated() {
+            let destination = Self.onnxModelDirectory.appendingPathComponent(item.name)
+            if let attrs = try? fm.attributesOfItem(atPath: destination.path),
+               let size = attrs[.size] as? Int64, size >= item.minBytes {
+                continue
+            }
+            fraction = Double(index) / Double(Self.onnxFiles.count)
+            message = String(format: String(localized: "Downloading Whisper model… %lld%%"), Int(fraction! * 100))
+            let (temporary, response) = try await URLSession.shared.download(from: item.url)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            try? fm.removeItem(at: destination)
+            try fm.moveItem(at: temporary, to: destination)
+            let actual = (try fm.attributesOfItem(atPath: destination.path)[.size] as? Int64) ?? 0
+            guard actual >= item.minBytes else {
+                try? fm.removeItem(at: destination)
+                throw URLError(.cannotDecodeContentData)
+            }
         }
     }
 }
