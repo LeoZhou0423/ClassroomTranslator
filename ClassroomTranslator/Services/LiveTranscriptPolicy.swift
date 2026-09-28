@@ -94,6 +94,51 @@ enum RecognitionTextDelta {
     }
 }
 
+/// Whisper decodes overlapping rolling windows rather than a single growing
+/// recognizer snapshot. Preserve text that was already shown when a later
+/// window (especially the final silence window) contains only its shorter tail.
+enum WhisperTranscriptAccumulator {
+    static func merged(previous: String, current: String) -> String {
+        let old = clean(previous)
+        let new = clean(current)
+        guard !new.isEmpty else { return old }
+        guard !old.isEmpty else { return new }
+        guard old.caseInsensitiveCompare(new) != .orderedSame else { return new }
+
+        let oldWords = old.split(separator: " ")
+        let newWords = new.split(separator: " ")
+        let normalizedOld = oldWords.map { normalize(String($0)) }
+        let normalizedNew = newWords.map { normalize(String($0)) }
+
+        if normalizedNew.starts(with: normalizedOld) { return new }
+        if normalizedOld.starts(with: normalizedNew) { return old }
+
+        // A rolling window drops words from the front. Join its new tail onto
+        // the longest suffix/prefix overlap so earlier correct words survive.
+        let maximum = min(normalizedOld.count, normalizedNew.count)
+        if maximum >= 2 {
+            for length in stride(from: maximum, through: 2, by: -1) {
+                if Array(normalizedOld.suffix(length)) == Array(normalizedNew.prefix(length)) {
+                    return old + " " + newWords.dropFirst(length).joined(separator: " ")
+                }
+            }
+        }
+
+        // A shorter final is commonly Whisper revising only the tail. Losing
+        // the already displayed prefix is worse than keeping that hypothesis.
+        if normalizedNew.count < normalizedOld.count { return old }
+        return new
+    }
+
+    private static func clean(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private static func normalize(_ word: String) -> String {
+        word.lowercased().trimmingCharacters(in: .punctuationCharacters)
+    }
+}
+
 enum SubtitleCueBuilder {
     static func cue(from text: String, maximumWords: Int = 12, maximumCharacters: Int = 52) -> String {
         let clean = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")

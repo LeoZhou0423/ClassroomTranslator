@@ -84,4 +84,33 @@ final class LiveTranscriptPolicyTests: XCTestCase {
         let text = "这是一段很长的课堂字幕内容用于验证悬浮字幕只保留最后一小段方便学生快速阅读"
         XCTAssertEqual(SubtitleCueBuilder.cue(from: text, maximumWords: 12, maximumCharacters: 16), String(text.suffix(16)))
     }
+
+    func testWhisperFinalCannotEraseLongerCorrectPartial() {
+        let partial = "Good morning students today we will learn about photosynthesis"
+        let shorterFinal = "learn about photosynthesis"
+        XCTAssertEqual(
+            WhisperTranscriptAccumulator.merged(previous: partial, current: shorterFinal),
+            partial
+        )
+    }
+
+    func testWhisperRollingWindowsAppendOnlyUnseenTail() {
+        XCTAssertEqual(
+            WhisperTranscriptAccumulator.merged(
+                previous: "Plants use sunlight water and carbon dioxide",
+                current: "water and carbon dioxide to produce energy and oxygen"
+            ),
+            "Plants use sunlight water and carbon dioxide to produce energy and oxygen"
+        )
+    }
+
+    func testWhisperGrowingSnapshotKeepsCorrectedLongerVersion() {
+        XCTAssertEqual(
+            WhisperTranscriptAccumulator.merged(
+                previous: "Please write down",
+                current: "Please write down the three ingredients"
+            ),
+            "Please write down the three ingredients"
+        )
+    }
 }

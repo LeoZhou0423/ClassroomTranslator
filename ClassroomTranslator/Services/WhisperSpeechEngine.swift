@@ -59,6 +59,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     /// 16 kHz mono 滚动窗（最多 20s，Whisper 友好）。
     private var sampleBuffer: [Float] = []
     private var lastEmitText = ""
+    private var accumulatedText = ""
     private var lastSpeechTime: TimeInterval = 0
     private var decodeInFlight = false
     private var recognitionLocale = "en-US"
@@ -104,6 +105,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             self.recognitionHandler = onRecognition
             self.sampleBuffer = []
             self.lastEmitText = ""
+            self.accumulatedText = ""
             self.lastSpeechTime = 0
             self.decodeInFlight = false
             self.recognitionLocale = localeIdentifier
@@ -452,18 +454,24 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             decodeInFlight = false
             guard let text, !text.isEmpty else { return }
             let handler = recognitionHandler
+            let stableText = WhisperTranscriptAccumulator.merged(
+                previous: accumulatedText,
+                current: text
+            )
+            accumulatedText = stableText
             // 累计窗文本：partial 更新；停顿分句时发 final
             let silentFor = Date().timeIntervalSince1970 - lastSpeechTime
             let isFinal = silentFor > 1.0
-            if text != lastEmitText {
-                lastEmitText = text
-                handler?(text, isFinal)
+            if stableText != lastEmitText {
+                lastEmitText = stableText
+                handler?(stableText, isFinal)
             } else if isFinal {
-                handler?(text, true)
+                handler?(stableText, true)
             }
             if isFinal {
                 sampleBuffer = []
                 lastEmitText = ""
+                accumulatedText = ""
             }
         }
     }
