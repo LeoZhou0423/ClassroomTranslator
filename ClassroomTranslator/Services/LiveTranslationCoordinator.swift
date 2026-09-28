@@ -51,6 +51,7 @@ final class LiveTranslationCoordinator {
     /// 不能把新任务的引用也清掉，否则 waitUntilIdle() 会提前返回（译文没落库）
     /// 并且可能同时跑两个 worker。
     private var workerToken = 0
+    private var inFlightByWorker: [Int: Request] = [:]
     private let clock = ContinuousClock()
 
     init(partialInterval: Duration = .milliseconds(700), translator: @escaping Translator) {
@@ -77,6 +78,7 @@ final class LiveTranslationCoordinator {
         workerToken += 1
         worker?.cancel()
         worker = nil
+        inFlightByWorker.removeAll()
     }
 
     func activateGeneration(_ generation: Int) {
@@ -88,12 +90,16 @@ final class LiveTranslationCoordinator {
     }
 
     func waitUntilIdle() async {
-        await worker?.value
+        // A cancelled worker may overlap briefly with its successor. Re-read
+        // the current task after every await so finishing cannot outrun it.
+        while let current = worker {
+            await current.value
+        }
     }
 
     /// UX-04：收尾阶段给状态行用的"还剩几段"。
     var pendingCount: Int {
-        pendingFinals.count + (pendingPartial == nil ? 0 : 1)
+        pendingFinals.count + (pendingPartial == nil ? 0 : 1) + inFlightByWorker.count
     }
 
     private func startWorkerIfNeeded() {
@@ -103,6 +109,8 @@ final class LiveTranslationCoordinator {
         worker = Task { @MainActor [weak self] in
             guard let self else { return }
             while !Task.isCancelled, let request = self.takeNextRequest() {
+                self.inFlightByWorker[token] = request
+                defer { self.inFlightByWorker[token] = nil }
                 if request.kind == .partial, let last = self.lastPartialStartedAt {
                     let earliest = last.advanced(by: self.partialInterval)
                     if earliest > self.clock.now {
@@ -111,7 +119,17 @@ final class LiveTranslationCoordinator {
                     guard !Task.isCancelled else { break }
                 }
                 if request.kind == .partial { self.lastPartialStartedAt = self.clock.now }
-                let translated = await self.translator(request.text)
+                var translated = await self.translator(request.text)
+                // TranslationSession can transiently invalidate itself and the
+                // manager deliberately prepares it again on the next request.
+                // A final has no later update to repair it, so retry it once.
+                if request.kind == .final,
+                   translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   !Task.isCancelled {
+                    try? await self.clock.sleep(for: .milliseconds(250))
+                    guard !Task.isCancelled else { break }
+                    translated = await self.translator(request.text)
+                }
                 guard !Task.isCancelled else { break }
                 guard request.generation >= self.activeGeneration else { continue }
                 request.completion(Response(request: request, translatedText: translated))

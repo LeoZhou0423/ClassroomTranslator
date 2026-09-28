@@ -98,6 +98,16 @@ enum RecognitionTextDelta {
 /// recognizer snapshot. Preserve text that was already shown when a later
 /// window (especially the final silence window) contains only its shorter tail.
 enum WhisperTranscriptAccumulator {
+    /// A silence-boundary decode may legitimately return no text even though
+    /// an earlier rolling-window decode already produced a good partial. Keep
+    /// that accumulated text so the caller can commit and translate it.
+    static func finalCandidate(accumulated: String, decoded: String?) -> String {
+        guard let decoded else { return clean(accumulated) }
+        let decoded = clean(decoded)
+        guard !decoded.isEmpty else { return clean(accumulated) }
+        return merged(previous: accumulated, current: decoded)
+    }
+
     static func merged(previous: String, current: String) -> String {
         let old = clean(previous)
         let new = clean(current)
@@ -163,6 +173,65 @@ enum WhisperDecodePolicy {
         silentFor: TimeInterval
     ) -> Bool {
         silentFor > 1.0 && speechRevisionAtDecodeStart == currentSpeechRevision
+    }
+}
+
+enum WhisperAudioResampler {
+    /// Downsample with an interval average instead of picking one source point.
+    /// The microphone normally supplies 48 kHz audio, where point sampling
+    /// aliases high-frequency energy into Whisper's 16 kHz speech band.
+    static func convert(_ input: [Float], sourceRate: Double, targetRate: Double = 16_000) -> [Float] {
+        guard !input.isEmpty, sourceRate > 0, targetRate > 0 else { return [] }
+        if abs(sourceRate - targetRate) < 1 { return input }
+
+        let ratio = sourceRate / targetRate
+        let outputCount = max(0, Int(Double(input.count) / ratio))
+        guard outputCount > 0 else { return [] }
+        var output = [Float](repeating: 0, count: outputCount)
+
+        if ratio > 1 {
+            for outputIndex in 0..<outputCount {
+                var position = Double(outputIndex) * ratio
+                let end = min(Double(input.count), Double(outputIndex + 1) * ratio)
+                var weightedSum: Double = 0
+                var totalWeight: Double = 0
+                while position < end {
+                    let inputIndex = min(Int(position), input.count - 1)
+                    let boundary = min(end, Double(inputIndex + 1))
+                    let weight = boundary - position
+                    weightedSum += Double(input[inputIndex]) * weight
+                    totalWeight += weight
+                    position = boundary
+                }
+                if totalWeight > 0 { output[outputIndex] = Float(weightedSum / totalWeight) }
+            }
+        } else {
+            // This path is rare for microphone input, but linear interpolation
+            // keeps the helper correct if a lower-rate source is supplied.
+            for outputIndex in 0..<outputCount {
+                let position = Double(outputIndex) * ratio
+                let lower = min(Int(position), input.count - 1)
+                let upper = min(lower + 1, input.count - 1)
+                let fraction = Float(position - Double(lower))
+                output[outputIndex] = input[lower] * (1 - fraction) + input[upper] * fraction
+            }
+        }
+        return output
+    }
+}
+
+enum WhisperTranscriptQuality {
+    /// Reject obvious decoder loops such as "i n i n i n". These are produced
+    /// by silence/noise and should never become persisted classroom content.
+    static func accepted(_ text: String) -> String? {
+        let clean = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !clean.isEmpty else { return nil }
+        let tokens = clean.split(separator: " ").map {
+            $0.lowercased().trimmingCharacters(in: .punctuationCharacters)
+        }.filter { !$0.isEmpty }
+        guard tokens.count >= 8 else { return clean }
+        let uniqueRatio = Double(Set(tokens).count) / Double(tokens.count)
+        return uniqueRatio <= 0.25 ? nil : clean
     }
 }
 

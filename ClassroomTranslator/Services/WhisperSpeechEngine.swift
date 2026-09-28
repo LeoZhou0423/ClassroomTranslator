@@ -48,6 +48,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     private var engine: AVAudioEngine?
     private var tapInstalled = false
+    private var configurationObserver: NSObjectProtocol?
     private var isRunning = false
     private var stopEpoch = 0
 
@@ -68,6 +69,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private var speechRevision = 0
 
     private nonisolated(unsafe) static var kitCache: AnyObject?
+    private nonisolated(unsafe) static var kitCacheKey: String?
     private static let kitLock = NSLock()
 
     var running: Bool {
@@ -216,13 +218,10 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     // MARK: - WhisperKit
 
     private static func loadKit() async -> Bool {
-        kitLock.lock()
-        if kitCache != nil {
-            kitLock.unlock()
-            return true
-        }
-        kitLock.unlock()
-        if !WhisperModelTier.supportsWhisperRuntime() {
+        let usesCoreML = WhisperModelTier.supportsWhisperRuntime()
+        let desiredKey = usesCoreML ? "coreml:\(modelName)" : "onnx:tiny"
+        if kitLock.withLock({ kitCache != nil && kitCacheKey == desiredKey }) { return true }
+        if !usesCoreML {
             guard WhisperModelStore.onnxModelFilesPresent() else { return false }
             let dir = WhisperModelStore.onnxModelDirectory
             var config = sherpaOnnxOfflineRecognizerConfig(
@@ -240,9 +239,10 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 )
             )
             let recognizer = SherpaOnnxOfflineRecognizer(config: &config)
-            kitLock.lock()
-            kitCache = recognizer
-            kitLock.unlock()
+            kitLock.withLock {
+                kitCache = recognizer
+                kitCacheKey = desiredKey
+            }
             StartupLog.mark("whisper.kit-ready model=tiny backend=onnx-cpu")
             return true
         }
@@ -255,9 +255,10 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 textDecoderCompute: .cpuOnly
             )
             let kit = try await WhisperKit(model: modelName, computeOptions: compute, verbose: false, logLevel: .error)
-            kitLock.lock()
-            kitCache = kit
-            kitLock.unlock()
+            kitLock.withLock {
+                kitCache = kit
+                kitCacheKey = desiredKey
+            }
             StartupLog.mark("whisper.kit-ready model=\(modelName) compute=cpuOnly")
             return true
         } catch {
@@ -272,13 +273,11 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     #if canImport(WhisperKit)
     private func transcribeWindow(_ samples: [Float], locale: String) async -> String? {
-        Self.kitLock.lock()
-        let cached = Self.kitCache
-        Self.kitLock.unlock()
+        let cached = Self.kitLock.withLock { Self.kitCache }
         if let recognizer = cached as? SherpaOnnxOfflineRecognizer {
             let result = recognizer.decode(samples: samples, sampleRate: 16_000)
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? nil : text
+            return WhisperTranscriptQuality.accepted(text)
         }
         let kit = cached as? WhisperKit
         guard let kit else { return nil }
@@ -293,7 +292,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
             let text = results.map(\.text).joined()
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? nil : text
+            return WhisperTranscriptQuality.accepted(text)
         } catch {
             StartupLog.mark("whisper.transcribe-error \(error.localizedDescription)")
             return nil
@@ -352,6 +351,19 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
                     engine.prepare()
                     try engine.start()
+                    self.configurationObserver = NotificationCenter.default.addObserver(
+                        forName: .AVAudioEngineConfigurationChange,
+                        object: engine,
+                        queue: nil
+                    ) { [weak self, weak engine] _ in
+                        guard let self else { return }
+                        self.queue.async {
+                            guard let engine, self.engine === engine, !engine.isRunning else { return }
+                            let wasRunning = self.running
+                            self.stateLock.withLock { self.isRunning = false }
+                            if wasRunning { onInterruption() }
+                        }
+                    }
                     continuationStart.resume()
                 } catch {
                     self.teardownEngineOnQueue()
@@ -359,10 +371,13 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 }
             }
         }
-        _ = onInterruption
     }
 
     private func teardownEngineOnQueue() {
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
+        }
         if let engine, tapInstalled {
             engine.inputNode.removeTap(onBus: 0)
         }
@@ -403,22 +418,10 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         return sqrt(sum / Float(frames * max(ch, 1)))
     }
 
-    /// 48k/44.1k → 16k 线性抽取（Whisper 输入）。
+    /// 48k/44.1k → 16k 带区间平均的降采样（Whisper 输入）。
     private func ingest(mono: [Float], sourceRate: Double) {
         guard !mono.isEmpty else { return }
-        let targetRate: Double = 16_000
-        var samples: [Float]
-        if abs(sourceRate - targetRate) < 1 {
-            samples = mono
-        } else {
-            let ratio = sourceRate / targetRate
-            let n = Int(Double(mono.count) / ratio)
-            samples = [Float](repeating: 0, count: max(n, 0))
-            for i in 0..<samples.count {
-                let src = Int(Double(i) * ratio)
-                if src < mono.count { samples[i] = mono[src] }
-            }
-        }
+        let samples = WhisperAudioResampler.convert(mono, sourceRate: sourceRate)
 
         let now = Date().timeIntervalSince1970
         let rms = samples.reduce(0) { $0 + $1 * $1 }
@@ -449,28 +452,32 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             )
         }
         guard shouldDecode else { return }
-        let (window, locale, revision): ([Float], String, Int) = stateLock.withLock {
+        let (window, locale, revision, epoch): ([Float], String, Int, Int) = stateLock.withLock {
             decodeInFlight = true
             newSamplesSinceDecode = 0
-            return (sampleBuffer, recognitionLocale, speechRevision)
+            return (sampleBuffer, recognitionLocale, speechRevision, stopEpoch)
         }
         Task { [weak self] in
             guard let self else { return }
             let decoded = await self.transcribeWindow(window, locale: locale)
-            self.finishDecode(text: decoded, speechRevisionAtDecodeStart: revision)
+            self.finishDecode(
+                text: decoded,
+                speechRevisionAtDecodeStart: revision,
+                epoch: epoch
+            )
         }
     }
 
-    private func finishDecode(text: String?, speechRevisionAtDecodeStart: Int) {
-        stateLock.withLock {
+    private func finishDecode(
+        text: String?,
+        speechRevisionAtDecodeStart: Int,
+        epoch: Int
+    ) {
+        let emission: ((@Sendable (String, Bool) -> Void), String, Bool)? = stateLock.withLock {
+            // A decoder can finish after stop(), or even after a new recording
+            // has started. It must not clear or append to the new session.
+            guard stopEpoch == epoch else { return nil }
             decodeInFlight = false
-            guard let text, !text.isEmpty else { return }
-            let handler = recognitionHandler
-            let stableText = WhisperTranscriptAccumulator.merged(
-                previous: accumulatedText,
-                current: text
-            )
-            accumulatedText = stableText
             // 累计窗文本：partial 更新；停顿分句时发 final
             let silentFor = Date().timeIntervalSince1970 - lastSpeechTime
             let isFinal = WhisperDecodePolicy.shouldFinalize(
@@ -478,12 +485,20 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 currentSpeechRevision: speechRevision,
                 silentFor: silentFor
             )
-            if stableText != lastEmitText {
+
+            let stableText = WhisperTranscriptAccumulator.finalCandidate(
+                accumulated: accumulatedText,
+                decoded: text
+            )
+            if !stableText.isEmpty { accumulatedText = stableText }
+
+            var result: ((@Sendable (String, Bool) -> Void), String, Bool)?
+            if let handler = recognitionHandler, !stableText.isEmpty,
+               stableText != lastEmitText || isFinal {
                 lastEmitText = stableText
-                handler?(stableText, isFinal)
-            } else if isFinal {
-                handler?(stableText, true)
+                result = (handler, stableText, isFinal)
             }
+
             if isFinal {
                 sampleBuffer = []
                 lastEmitText = ""
@@ -492,6 +507,11 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 newSamplesSinceDecode = 0
                 speechRevision = 0
             }
+            return result
+        }
+        // Never invoke app callbacks while holding the engine state lock.
+        if let (handler, text, isFinal) = emission {
+            handler(text, isFinal)
         }
     }
 }

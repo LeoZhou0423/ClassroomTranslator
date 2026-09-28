@@ -94,6 +94,18 @@ final class LiveTranscriptPolicyTests: XCTestCase {
         )
     }
 
+    func testWhisperEmptyFinalCommitsExistingPartial() {
+        let partial = "The mitochondria produces energy for the cell"
+        XCTAssertEqual(
+            WhisperTranscriptAccumulator.finalCandidate(accumulated: partial, decoded: nil),
+            partial
+        )
+        XCTAssertEqual(
+            WhisperTranscriptAccumulator.finalCandidate(accumulated: partial, decoded: "   "),
+            partial
+        )
+    }
+
     func testWhisperRollingWindowsAppendOnlyUnseenTail() {
         XCTAssertEqual(
             WhisperTranscriptAccumulator.merged(
@@ -162,5 +174,20 @@ final class LiveTranscriptPolicyTests: XCTestCase {
             currentSpeechRevision: 9,
             silentFor: 0.5
         ))
+    }
+
+    func testWhisperResamplerAveragesEach48kInterval() {
+        XCTAssertEqual(
+            WhisperAudioResampler.convert([1, 1, 1, 3, 3, 3], sourceRate: 48_000),
+            [1, 3]
+        )
+    }
+
+    func testWhisperRejectsDegenerateDecoderLoop() {
+        XCTAssertNil(WhisperTranscriptQuality.accepted("i n i n i n i n i n i n"))
+        XCTAssertEqual(
+            WhisperTranscriptQuality.accepted("Today we will compare plants and animals in class"),
+            "Today we will compare plants and animals in class"
+        )
     }
 }

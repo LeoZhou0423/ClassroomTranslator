@@ -35,6 +35,36 @@ final class LiveTranslationCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingCountIncludesTranslationAlreadyInFlight() async {
+        var continuation: CheckedContinuation<String, Never>?
+        let coordinator = LiveTranslationCoordinator(partialInterval: .zero) { _ in
+            await withCheckedContinuation { continuation = $0 }
+        }
+        coordinator.submit(.init(kind: .final, text: "lesson", cue: "lesson", revision: 1, generation: 1) { _ in })
+        for _ in 0..<200 where continuation == nil { await Task.yield() }
+        XCTAssertEqual(coordinator.pendingCount, 1)
+        continuation?.resume(returning: "课程")
+        await coordinator.waitUntilIdle()
+        XCTAssertEqual(coordinator.pendingCount, 0)
+    }
+
+    @MainActor
+    func testFinalTranslationRetriesOneTransientEmptyResult() async {
+        var attempts = 0
+        var output = ""
+        let coordinator = LiveTranslationCoordinator(partialInterval: .zero) { _ in
+            attempts += 1
+            return attempts == 1 ? "" : "课程内容"
+        }
+        coordinator.submit(.init(kind: .final, text: "lesson content", cue: "lesson content", revision: 1, generation: 1) {
+            output = $0.translatedText
+        })
+        await coordinator.waitUntilIdle()
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(output, "课程内容")
+    }
+
+    @MainActor
     func testOldGenerationResultCannotOverwriteNewSession() async {
         var continuation: CheckedContinuation<String, Never>?
         var outputs: [String] = []
