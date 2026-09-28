@@ -100,22 +100,28 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
         // 首次必须先下完权重（数十秒～数分钟）。进度走 onModelStatus，
         // 不在此处抛错打断下载 —— 否则和录音启动超时互相掐（用户实测）。
-        let store = await MainActor.run { WhisperModelStore.shared }
-        if !store.isReady {
-            // 轮询进度推到状态栏，让用户看到不是“卡死”
+        let readyBefore = await MainActor.run { WhisperModelStore.shared.isReady }
+        if !readyBefore {
             let poll = Task { @MainActor in
+                let store = WhisperModelStore.shared
                 while !store.isReady && store.isDownloading {
                     onModelStatus(store.message)
                     try? await Task.sleep(nanoseconds: 500_000_000)
                 }
             }
-            await store.download()
+            await MainActor.run {
+                await WhisperModelStore.shared.download()
+            }
             poll.cancel()
-            onModelStatus(store.message)
+            await MainActor.run {
+                onModelStatus(WhisperModelStore.shared.message)
+            }
         }
-        let downloadFailed = await MainActor.run { store.lastError != nil && !store.isReady }
+        let downloadFailed = await MainActor.run {
+            WhisperModelStore.shared.lastError != nil && !WhisperModelStore.shared.isReady
+        }
         if downloadFailed {
-            let msg = await MainActor.run { store.message }
+            let msg = await MainActor.run { WhisperModelStore.shared.message }
             onModelStatus(msg)
             Self.markCreationFailed("model-download")
             stateLock.withLock { self.recognitionHandler = nil }
@@ -275,7 +281,6 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                         throw AudioEngineError.noInputDevice
                     }
                     let sampleRate = format.sampleRate
-                    let channels = Int(format.channelCount)
 
                     input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
                         guard let self else { return }
