@@ -148,24 +148,56 @@ struct SessionDetailView: View {
                                 if !segment.speaker.isEmpty {
                                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                                         roleTag("Speaker")
-                                        // 昵称/自动名（老师1、学生1）与人员区即时联动
-                                        Text(SpeakerAliases.resolve(segment.speaker, in: peopleAliases))
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundColor(.secondary)
-                                        if let alias = peopleAliases[segment.speaker], alias.role != .other {
-                                            Text(LocalizedStringKey(alias.role.title))
-                                                .font(.system(size: 11, weight: .medium))
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(roleBadgeColor(alias.role).opacity(0.18))
-                                                .foregroundColor(roleBadgeColor(alias.role))
-                                                .clipShape(Capsule())
-                                            if alias.roleConfidence == RoleConfidence.low.rawValue {
-                                                Text(String(localized: "Low confidence"))
-                                                    .font(.system(size: 10))
-                                                    .foregroundColor(.orange)
-                                            }
+                                        let display = SpeakerAliases.resolve(segment.speaker, in: peopleAliases)
+                                        let alias = peopleAliases[segment.speaker]
+                                        // 名称已含「老师/学生」时不再重复角色徽章
+                                        let nameLooksLikeRole = display == String(localized: "Teacher")
+                                            || display == String(localized: "Student")
+                                            || display.hasPrefix(String(localized: "Teacher"))
+                                            || display.hasPrefix(String(localized: "Student"))
+                                        if !nameLooksLikeRole {
+                                            Text(display)
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundColor(.secondary)
                                         }
+                                        // 角色可点选修改（非固定标签）
+                                        Menu {
+                                            ForEach(SpeakerRole.allCases) { role in
+                                                Button {
+                                                    setRole(role, for: segment.speaker ?? "")
+                                                } label: {
+                                                    if alias?.role == role {
+                                                        Label(LocalizedStringKey(role.title), systemImage: "checkmark")
+                                                    } else {
+                                                        Text(LocalizedStringKey(role.title))
+                                                    }
+                                                }
+                                            }
+                                            if alias?.roleConfidence != nil {
+                                                Button(String(localized: "Clear auto role")) {
+                                                    clearAutoRole(for: segment.speaker ?? "")
+                                                }
+                                            }
+                                        } label: {
+                                            HStack(spacing: 4) {
+                                                Text(LocalizedStringKey((alias?.role ?? .other).title))
+                                                    .font(.system(size: 11, weight: .medium))
+                                                Image(systemName: "chevron.down")
+                                                    .font(.system(size: 8, weight: .bold))
+                                                if alias?.roleConfidence == RoleConfidence.low.rawValue {
+                                                    Text(String(localized: "Low confidence"))
+                                                        .font(.system(size: 10))
+                                                        .foregroundColor(.orange)
+                                                }
+                                            }
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(roleBadgeColor(alias?.role ?? .other).opacity(0.18))
+                                            .foregroundColor(roleBadgeColor(alias?.role ?? .other))
+                                            .clipShape(Capsule())
+                                        }
+                                        .menuStyle(.borderlessButton)
+                                        .fixedSize()
                                     }
                                 }
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -308,12 +340,40 @@ struct SessionDetailView: View {
         Binding(
             get: { peopleAliases[label]?.role ?? .other },
             set: { newValue in
-                var alias = peopleAliases[label] ?? .empty
-                alias.role = newValue
-                peopleAliases[label] = alias
-                persistPeople()
+                setRole(newValue, for: label)
             }
         )
+    }
+
+    /// 手动改角色：立即落库；自动置信标作废，自动昵称跟着改/清空。
+    private func setRole(_ role: SpeakerRole, for label: String) {
+        guard !label.isEmpty else { return }
+        var alias = peopleAliases[label] ?? .empty
+        alias.role = role
+        // 人工修改 → 不再是自动判定
+        alias.roleConfidence = nil
+        if RoleDisplayNames.isAutomaticName(alias.nickname) {
+            switch role {
+            case .teacher: alias.nickname = String(localized: "Teacher")
+            case .student: alias.nickname = String(localized: "Student")
+            case .professor, .ta: alias.nickname = String(localized: "Teacher")
+            case .other: alias.nickname = ""
+            }
+        }
+        peopleAliases[label] = alias
+        persistPeople()
+    }
+
+    private func clearAutoRole(for label: String) {
+        guard !label.isEmpty else { return }
+        var alias = peopleAliases[label] ?? .empty
+        alias.role = .other
+        alias.roleConfidence = nil
+        if RoleDisplayNames.isAutomaticName(alias.nickname) {
+            alias.nickname = ""
+        }
+        peopleAliases[label] = alias
+        persistPeople()
     }
 
     /// 改动即时存：写回 record.speakerNames（encode 修剪空条目，全空 → nil 清除）。

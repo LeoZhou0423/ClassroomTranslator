@@ -273,6 +273,7 @@
 "Speaker %lld" = "说话人%lld";
 "Teacher %lld" = "老师%lld";
 "Low confidence" = "低置信";
+"Clear auto role" = "清除自动角色";
 
 /* task-6：语音引擎选择（Step 1 暴露 Apple；Step 2 增加 sherpa 选项） */
 "Engine" = "引擎";
