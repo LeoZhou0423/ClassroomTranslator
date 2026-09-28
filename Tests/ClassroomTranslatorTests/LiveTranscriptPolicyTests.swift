@@ -142,4 +142,25 @@ final class LiveTranscriptPolicyTests: XCTestCase {
             silentFor: 1.1
         ))
     }
+
+    func testWhisperDecodeCannotFinalizeIfSpeechArrivedWhileDecoding() {
+        XCTAssertFalse(WhisperDecodePolicy.shouldFinalize(
+            speechRevisionAtDecodeStart: 4,
+            currentSpeechRevision: 9,
+            silentFor: 2
+        ))
+    }
+
+    func testWhisperDecodeFinalizesOnlyStablePausedSnapshot() {
+        XCTAssertTrue(WhisperDecodePolicy.shouldFinalize(
+            speechRevisionAtDecodeStart: 9,
+            currentSpeechRevision: 9,
+            silentFor: 1.1
+        ))
+        XCTAssertFalse(WhisperDecodePolicy.shouldFinalize(
+            speechRevisionAtDecodeStart: 9,
+            currentSpeechRevision: 9,
+            silentFor: 0.5
+        ))
+    }
 }

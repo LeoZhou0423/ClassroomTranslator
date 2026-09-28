@@ -156,6 +156,14 @@ enum WhisperDecodePolicy {
         // a 3-second rolling buffer must not trigger an endless decode loop.
         return newSamplesSinceDecode >= sampleRate * 5 / 2
     }
+
+    static func shouldFinalize(
+        speechRevisionAtDecodeStart: Int,
+        currentSpeechRevision: Int,
+        silentFor: TimeInterval
+    ) -> Bool {
+        silentFor > 1.0 && speechRevisionAtDecodeStart == currentSpeechRevision
+    }
 }
 
 enum SubtitleCueBuilder {

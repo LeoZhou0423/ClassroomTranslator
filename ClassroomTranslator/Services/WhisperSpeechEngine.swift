@@ -65,6 +65,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private var recognitionLocale = "en-US"
     private var hasSpeechInSegment = false
     private var newSamplesSinceDecode = 0
+    private var speechRevision = 0
 
     private nonisolated(unsafe) static var kitCache: AnyObject?
     private static let kitLock = NSLock()
@@ -113,6 +114,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             self.recognitionLocale = localeIdentifier
             self.hasSpeechInSegment = false
             self.newSamplesSinceDecode = 0
+            self.speechRevision = 0
         }
 
         onModelStatus(String(format: String(localized: "Loading %@ speech model…"), Self.displayName))
@@ -433,6 +435,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             if speech {
                 lastSpeechTime = now
                 hasSpeechInSegment = true
+                speechRevision += 1
             }
         }
 
@@ -446,19 +449,19 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             )
         }
         guard shouldDecode else { return }
-        let (window, locale): ([Float], String) = stateLock.withLock {
+        let (window, locale, revision): ([Float], String, Int) = stateLock.withLock {
             decodeInFlight = true
             newSamplesSinceDecode = 0
-            return (sampleBuffer, recognitionLocale)
+            return (sampleBuffer, recognitionLocale, speechRevision)
         }
         Task { [weak self] in
             guard let self else { return }
             let decoded = await self.transcribeWindow(window, locale: locale)
-            self.finishDecode(text: decoded)
+            self.finishDecode(text: decoded, speechRevisionAtDecodeStart: revision)
         }
     }
 
-    private func finishDecode(text: String?) {
+    private func finishDecode(text: String?, speechRevisionAtDecodeStart: Int) {
         stateLock.withLock {
             decodeInFlight = false
             guard let text, !text.isEmpty else { return }
@@ -470,7 +473,11 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             accumulatedText = stableText
             // 累计窗文本：partial 更新；停顿分句时发 final
             let silentFor = Date().timeIntervalSince1970 - lastSpeechTime
-            let isFinal = silentFor > 1.0
+            let isFinal = WhisperDecodePolicy.shouldFinalize(
+                speechRevisionAtDecodeStart: speechRevisionAtDecodeStart,
+                currentSpeechRevision: speechRevision,
+                silentFor: silentFor
+            )
             if stableText != lastEmitText {
                 lastEmitText = stableText
                 handler?(stableText, isFinal)
@@ -483,6 +490,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 accumulatedText = ""
                 hasSpeechInSegment = false
                 newSamplesSinceDecode = 0
+                speechRevision = 0
             }
         }
     }
