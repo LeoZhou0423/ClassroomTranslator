@@ -1,5 +1,8 @@
 import Foundation
 import AVFoundation
+#if canImport(WhisperKit)
+import WhisperKit
+#endif
 
 /// Whisper（WhisperKit / CoreML）语音引擎 —— 课堂嘈杂、TTS、口音下比
 /// Apple Dictation / 小 zipformer 更稳的端侧 ASR。
@@ -253,9 +256,10 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                     input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
                         guard let self else { return }
                         onAudioLevel(Self.rmsLevel(buffer))
+                        // 与 Apple/Sherpa 引擎一致：tee/ring 吃 AVAudioPCMBuffer
+                        self.accentTee.append(buffer)
+                        self.speakerRing.append(buffer)
                         let mono = Self.monoFloats(buffer)
-                        self.accentTee.append(samples: mono, sampleRate: Int(sampleRate))
-                        self.speakerRing.append(samples: mono, sampleRate: Int(sampleRate))
                         self.queue.async {
                             self.ingest(mono: mono, sourceRate: sampleRate)
                         }

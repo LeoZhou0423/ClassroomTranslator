@@ -164,7 +164,7 @@ struct SessionDetailView: View {
                                         Menu {
                                             ForEach(SpeakerRole.allCases) { role in
                                                 Button {
-                                                    setRole(role, for: segment.speaker ?? "")
+                                                    setRole(role, for: segment.speaker)
                                                 } label: {
                                                     if alias?.role == role {
                                                         Label(LocalizedStringKey(role.title), systemImage: "checkmark")
@@ -175,7 +175,7 @@ struct SessionDetailView: View {
                                             }
                                             if alias?.roleConfidence != nil {
                                                 Button(String(localized: "Clear auto role")) {
-                                                    clearAutoRole(for: segment.speaker ?? "")
+                                                    clearAutoRole(for: segment.speaker)
                                                 }
                                             }
                                         } label: {
