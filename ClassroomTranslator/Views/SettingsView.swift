@@ -141,6 +141,7 @@ struct SettingsView: View {
                         Text("Whisper: higher accuracy on classroom and TTS audio; first run downloads the model. Text updates every few seconds (batch decoding).")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        whisperTierPicker
                         whisperDownloadSection
                     }
                 }
@@ -292,6 +293,37 @@ struct SettingsView: View {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             isDownloadingAll = false
             downloadProgress = ""
+        }
+    }
+
+    /// Whisper 档位：按内存/VM 推荐默认值，用户可改。
+    private var whisperTierPicker: some View {
+        let store = WhisperModelStore.shared
+        let recommended = WhisperModelTier.recommended()
+        return VStack(alignment: .leading, spacing: 6) {
+            Picker("Model size", selection: Binding(
+                get: { store.tier },
+                set: { store.selectTier($0) }
+            )) {
+                ForEach(WhisperModelTier.allCases) { tier in
+                    Text(tier.title).tag(tier)
+                }
+            }
+            Text(store.tier.detail)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if store.tier != recommended {
+                Text(String(
+                    format: String(localized: "Recommended for this Mac: %@"),
+                    recommended.title
+                ))
+                .font(.caption2)
+                .foregroundColor(.orange)
+            } else {
+                Text(String(localized: "Recommended for this Mac"))
+                    .font(.caption2)
+                    .foregroundColor(.green)
+            }
         }
     }
 

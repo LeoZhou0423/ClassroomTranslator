@@ -285,6 +285,15 @@
 "Whisper weights are large. Download here first, then start recording." = "Whisper 权重较大，请先在此下载完成再开始录音。";
 "The speech model is not ready. Download it in Settings, then try again." = "语音模型尚未就绪。请先在设置中下载后再试。";
 "The speech model is not ready. Download it in Settings → Speech Engine, then try again." = "语音模型尚未就绪。请先在 设置 → 语音引擎 中下载后再试。";
+"Whisper tiny · fastest, lowest RAM" = "Whisper tiny · 最快、最省内存";
+"Whisper base · balanced" = "Whisper base · 均衡";
+"Whisper small · best accuracy" = "Whisper small · 最准";
+"About 75 MB. Safer on virtual machines and 8 GB Macs." = "约 75MB。虚拟机与 8GB 内存更稳妥。";
+"About 140 MB. Good default for 8–16 GB Macs." = "约 140MB。适合 8–16GB 内存。";
+"About 500 MB. Prefer 16 GB+ or when accuracy matters most." = "约 500MB。建议 16GB+ 或对准度要求高时使用。";
+"Model size" = "模型大小";
+"Recommended for this Mac" = "已匹配本机推荐";
+"Recommended for this Mac: %@" = "本机推荐：%@";
 
 /* task-6：语音引擎选择（Step 1 暴露 Apple；Step 2 增加 sherpa 选项） */
 "Engine" = "引擎";

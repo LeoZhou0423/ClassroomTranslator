@@ -14,10 +14,17 @@ import WhisperKit
 ///  · 实时策略：滚动窗 + 静音分句（Whisper 批量解码，非真流式 token）
 final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     static let displayName = "Whisper"
-    /// tiny：优先稳定性（VM/低配不 OOM）。要更高准度可在后续改成 base/small。
-    static let modelName = "tiny"
     /// 滚动窗上限（秒）。过长会让 Whisper 反复整窗解码，吃内存且易拖垮 VM。
     static let maxWindowSeconds = 8
+
+    /// 当前档位变体名（设置覆盖优先，否则按硬件推荐）。
+    static var modelName: String {
+        if let raw = UserDefaults.standard.string(forKey: WhisperModelTier.defaultsKey),
+           let tier = WhisperModelTier(rawValue: raw) {
+            return tier.variantName
+        }
+        return WhisperModelTier.recommended().variantName
+    }
 
     private static let availabilityLock = NSLock()
     private static var creationDisabled = false
