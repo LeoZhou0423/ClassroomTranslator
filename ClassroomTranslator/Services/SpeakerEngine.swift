@@ -42,6 +42,10 @@ final class SpeakerEngine {
     private var flushScheduled = false
     private var batches: [Batch] = []
     private var pumping = false
+    /// Utterance provisionally assigned to an established speaker while a
+    /// second sample is awaited. It may not be the immediately previous turn
+    /// because classroom dialogue normally alternates speakers.
+    private var pendingNovelUtteranceIndex: Int?
     private var generation = 0
     private static let maximumPendingBatches = 6
 
@@ -76,6 +80,7 @@ final class SpeakerEngine {
             attached = []
             batches = []
             pumping = false
+            pendingNovelUtteranceIndex = nil
             clusterer = SpeakerClusterer(config: config.clusterConfig)
             // 有模型时新段落先挂"说话人"占位（开头几句不再无前缀），
             // 解析/回填后被精确标签覆盖；无模型保持 nil（纯手动标注）。
@@ -102,6 +107,7 @@ final class SpeakerEngine {
         generation += 1
         attached = []
         batches = []
+        pendingNovelUtteranceIndex = nil
         flushScheduled = false
     }
 
@@ -198,11 +204,16 @@ final class SpeakerEngine {
         guard let embedding else { return }
 
         let group = clusterer.assign(embedding) ?? 0
-        if clusterer.confirmedPreviousNovel, !utterances.isEmpty {
-            // The first novel window was provisionally attached to the old
-            // speaker. Confirmation must move its transcript segments too.
-            utterances[utterances.count - 1].group = group
+        if clusterer.confirmedPreviousNovel,
+           let pendingIndex = pendingNovelUtteranceIndex,
+           utterances.indices.contains(pendingIndex) {
+            // The first novel window was provisionally attached to an old
+            // speaker. It can be separated by an intervening turn, so backfill
+            // the remembered utterance rather than blindly moving the last.
+            utterances[pendingIndex].group = group
+            pendingNovelUtteranceIndex = nil
         }
+        let newUtteranceIndex = utterances.count
         utterances.append(Utterance(
             embedding: embedding,
             duration: batch.duration,
@@ -210,6 +221,9 @@ final class SpeakerEngine {
             label: nil,
             segmentIDs: batch.ids
         ))
+        if clusterer.stagedNovel {
+            pendingNovelUtteranceIndex = newUtteranceIndex
+        }
 
         let updates = publishLabels()
         if !updates.isEmpty {
@@ -230,6 +244,7 @@ final class SpeakerEngine {
             utterances[index].group = groups[index]
         }
         clusterer.rebuild(embeddings: embeddings, groups: groups)
+        pendingNovelUtteranceIndex = nil
         let updates = publishLabels()
         if !updates.isEmpty {
             onLabelsResolved?(updates, currentLabel)

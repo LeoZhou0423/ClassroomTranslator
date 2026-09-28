@@ -103,6 +103,21 @@ final class SpeakerDiarizationTests: XCTestCase {
         XCTAssertEqual(clusterer.centroids.count, 2)
     }
 
+    func testClustererConfirmsAlternatingSecondSpeakerAcrossInterveningTurn() {
+        var clusterer = SpeakerClusterer(config: .init(
+            threshold: 0.6,
+            maximumSpeakers: 4,
+            newClusterMargin: 0.12
+        ))
+        XCTAssertEqual(clusterer.assign([1, 0, 0]), 0)       // A
+        XCTAssertEqual(clusterer.assign([0, 1, 0]), 0)       // B staged
+        XCTAssertTrue(clusterer.stagedNovel)
+        XCTAssertEqual(clusterer.assign([0.99, 0.1, 0]), 0)  // A again
+        XCTAssertEqual(clusterer.assign([0.05, 0.99, 0]), 1) // B confirmed
+        XCTAssertTrue(clusterer.confirmedPreviousNovel)
+        XCTAssertEqual(clusterer.centroids.count, 2)
+    }
+
     func testClustererCapsAtMaxSpeakers() {
         // K = 2：第三个不同声音不再开新簇，归入最相似的既有簇。
         var clusterer = SpeakerClusterer(config: .init(threshold: 0.6, maximumSpeakers: 2))

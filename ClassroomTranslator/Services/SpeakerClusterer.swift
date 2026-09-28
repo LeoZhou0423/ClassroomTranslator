@@ -29,6 +29,12 @@ struct SpeakerClusterer: Equatable {
     // A single noisy/far-field window must not immediately invent a speaker.
     // Keep one candidate and require the next novel window to agree with it.
     private var pendingNovel: [Float]?
+    private var pendingNovelAge = 0
+    private static let maximumPendingNovelAge = 6
+    /// This assignment staged/replaced the provisional novel-speaker sample.
+    /// The caller uses it to remember which utterance must be backfilled when
+    /// a later (not necessarily adjacent) sample confirms the speaker.
+    private(set) var stagedNovel = false
     /// The previous window was provisionally assigned to an existing speaker.
     /// When this window confirms the candidate, the caller must relabel it.
     private(set) var confirmedPreviousNovel = false
@@ -40,6 +46,7 @@ struct SpeakerClusterer: Equatable {
     /// 归属簇下标（0..<centroids.count 或新簇）。embedding 为空返回 nil。
     mutating func assign(_ embedding: [Float]) -> Int? {
         confirmedPreviousNovel = false
+        stagedNovel = false
         guard let unit = Self.normalize(embedding) else { return nil }
         var best = -1
         var bestSimilarity = -Double.greatestFiniteMagnitude
@@ -55,7 +62,17 @@ struct SpeakerClusterer: Equatable {
         // 咳嗽、噪声或短句立刻裂成“说话人 2/3”。
         let mergeFloor = config.threshold - config.newClusterMargin
         if best >= 0, bestSimilarity >= mergeFloor {
-            pendingNovel = nil
+            // Do not discard a candidate merely because the established
+            // speaker talks between two turns from the new speaker. Classroom
+            // dialogue commonly alternates A-B-A-B; clearing here meant B
+            // could never receive the two confirmations it needs.
+            if pendingNovel != nil {
+                pendingNovelAge += 1
+                if pendingNovelAge > Self.maximumPendingNovelAge {
+                    pendingNovel = nil
+                    pendingNovelAge = 0
+                }
+            }
             // EMA 更新质心后重新归一化。
             // 阈值以下属于弱匹配，只做很小的质心更新，避免离群窗口拖偏簇。
             let alpha = Float(bestSimilarity >= config.threshold ? config.emaAlpha : min(config.emaAlpha, 0.08))
@@ -77,15 +94,19 @@ struct SpeakerClusterer: Equatable {
                 let combined = zip(candidate, unit).map { pair in (pair.0 + pair.1) * 0.5 }
                 centroids.append(Self.normalize(combined) ?? unit)
                 pendingNovel = nil
+                pendingNovelAge = 0
                 confirmedPreviousNovel = true
                 return centroids.count - 1
             }
             pendingNovel = unit
+            pendingNovelAge = 0
+            stagedNovel = true
             // Conservatively inherit the closest established speaker until a
             // second consistent novel window confirms that this is a person.
             return best
         }
         pendingNovel = nil
+        pendingNovelAge = 0
         confirmedPreviousNovel = false
         return best
     }
@@ -94,6 +115,8 @@ struct SpeakerClusterer: Equatable {
     mutating func rebuild(embeddings: [[Float]], groups: [Int]) {
         centroids = Self.centroids(for: embeddings, groups: groups)
         pendingNovel = nil
+        pendingNovelAge = 0
+        stagedNovel = false
     }
 
     /// 全量重聚类（每 10 句触发）：平均链接层次聚类，先按余弦 ≥ τ 合并，
