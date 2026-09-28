@@ -46,7 +46,7 @@ enum WhisperModelTier: String, CaseIterable, Identifiable, Sendable {
 
     /// 按物理内存 + 是否虚拟机推荐。
     static func recommended(
-        physicalMemoryGB: Double = ProcessInfo.processInfo.physicalMemory / 1_073_741_824.0,
+        physicalMemoryGB: Double = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824.0,
         isVirtualMachine: Bool = detectVirtualMachine()
     ) -> WhisperModelTier {
         // VM / 模拟器：一律 tiny（QEMU 上 CoreML 分配容易崩）
