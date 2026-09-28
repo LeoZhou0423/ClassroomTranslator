@@ -61,6 +61,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private var lastEmitText = ""
     private var lastSpeechTime: TimeInterval = 0
     private var decodeInFlight = false
+    private var recognitionLocale = "en-US"
 
     private nonisolated(unsafe) static var kitCache: AnyObject?
     private static let kitLock = NSLock()
@@ -105,6 +106,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             self.lastEmitText = ""
             self.lastSpeechTime = 0
             self.decodeInFlight = false
+            self.recognitionLocale = localeIdentifier
         }
 
         onModelStatus(String(format: String(localized: "Loading %@ speech model…"), Self.displayName))
@@ -437,7 +439,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         decodeInFlight = true
 
         let window: [Float] = stateLock.withLock { sampleBuffer }
-        let locale = UserDefaults.standard.string(forKey: "detectedRecognitionLanguage") ?? "en-US"
+        let locale = stateLock.withLock { recognitionLocale }
         Task { [weak self] in
             guard let self else { return }
             let decoded = await self.transcribeWindow(window, locale: locale)

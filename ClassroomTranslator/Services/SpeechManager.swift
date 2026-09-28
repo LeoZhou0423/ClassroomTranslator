@@ -344,6 +344,15 @@ final class SpeechManager {
     /// 只在长时间无新结果时才提交（fallback），正常情况靠 isFinal 提交
     private func scheduleFallbackCommit(fullText: String, visibleText: String) {
         debounceWorkItem?.cancel()
+        // Whisper decodes a rolling window in batches. On the CPU compatibility
+        // backend one decode can take longer than this debounce interval; treating
+        // the last partial as a final then makes the next overlapping window look
+        // like a new passage and duplicates text. Whisper emits its own final when
+        // the audio window observes a pause, so it must not use the Apple fallback.
+        guard effectiveEngineKind != .whisper else {
+            debounceWorkItem = nil
+            return
+        }
         let delay: TimeInterval = {
             if SentenceSplitter.hasSentenceEnding(visibleText) { return 1.2 }
             if visibleText.count >= 100 { return 2.0 }
