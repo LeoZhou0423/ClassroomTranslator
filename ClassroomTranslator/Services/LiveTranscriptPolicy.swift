@@ -140,6 +140,24 @@ enum WhisperTranscriptAccumulator {
     }
 }
 
+enum WhisperDecodePolicy {
+    static func shouldDecode(
+        hasSpeech: Bool,
+        decodeInFlight: Bool,
+        bufferedSamples: Int,
+        newSamplesSinceDecode: Int,
+        silentFor: TimeInterval,
+        sampleRate: Int = 16_000
+    ) -> Bool {
+        guard hasSpeech, !decodeInFlight else { return false }
+        // Finalize even a short utterance after a real pause.
+        if silentFor > 1.0, bufferedSamples >= sampleRate / 2 { return true }
+        // A partial requires 2.5 seconds of genuinely new audio. Merely having
+        // a 3-second rolling buffer must not trigger an endless decode loop.
+        return newSamplesSinceDecode >= sampleRate * 5 / 2
+    }
+}
+
 enum SubtitleCueBuilder {
     static func cue(from text: String, maximumWords: Int = 12, maximumCharacters: Int = 52) -> String {
         let clean = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")

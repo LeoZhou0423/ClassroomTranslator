@@ -113,4 +113,33 @@ final class LiveTranscriptPolicyTests: XCTestCase {
             "Please write down the three ingredients"
         )
     }
+
+    func testWhisperNeverDecodesPureSilence() {
+        XCTAssertFalse(WhisperDecodePolicy.shouldDecode(
+            hasSpeech: false, decodeInFlight: false,
+            bufferedSamples: 160_000, newSamplesSinceDecode: 160_000,
+            silentFor: 10
+        ))
+    }
+
+    func testWhisperPartialRequiresNewAudioSincePreviousDecode() {
+        XCTAssertFalse(WhisperDecodePolicy.shouldDecode(
+            hasSpeech: true, decodeInFlight: false,
+            bufferedSamples: 128_000, newSamplesSinceDecode: 1_024,
+            silentFor: 0
+        ))
+        XCTAssertTrue(WhisperDecodePolicy.shouldDecode(
+            hasSpeech: true, decodeInFlight: false,
+            bufferedSamples: 128_000, newSamplesSinceDecode: 40_000,
+            silentFor: 0
+        ))
+    }
+
+    func testWhisperPauseFinalizesShortUtterance() {
+        XCTAssertTrue(WhisperDecodePolicy.shouldDecode(
+            hasSpeech: true, decodeInFlight: false,
+            bufferedSamples: 12_000, newSamplesSinceDecode: 12_000,
+            silentFor: 1.1
+        ))
+    }
 }

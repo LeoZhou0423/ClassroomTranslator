@@ -63,6 +63,8 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private var lastSpeechTime: TimeInterval = 0
     private var decodeInFlight = false
     private var recognitionLocale = "en-US"
+    private var hasSpeechInSegment = false
+    private var newSamplesSinceDecode = 0
 
     private nonisolated(unsafe) static var kitCache: AnyObject?
     private static let kitLock = NSLock()
@@ -109,6 +111,8 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             self.lastSpeechTime = 0
             self.decodeInFlight = false
             self.recognitionLocale = localeIdentifier
+            self.hasSpeechInSegment = false
+            self.newSamplesSinceDecode = 0
         }
 
         onModelStatus(String(format: String(localized: "Loading %@ speech model…"), Self.displayName))
@@ -420,28 +424,33 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
         stateLock.withLock {
             sampleBuffer.append(contentsOf: samples)
+            newSamplesSinceDecode += samples.count
             // 滚动窗上限：避免内存和解码成本无限涨（VM 上易 OOM/卡死）
             let maxSamples = Self.maxWindowSeconds * 16_000
             if sampleBuffer.count > maxSamples {
                 sampleBuffer.removeFirst(sampleBuffer.count - maxSamples)
             }
-            if speech { lastSpeechTime = now }
+            if speech {
+                lastSpeechTime = now
+                hasSpeechInSegment = true
+            }
         }
 
         let shouldDecode: Bool = stateLock.withLock {
-            if decodeInFlight { return false }
-            let bufCount = sampleBuffer.count
-            let silentFor = now - lastSpeechTime
-            // 每积累约 2.5s 有效音频，或停顿 >1.0s 且有未发出文本
-            if bufCount >= 2 * 16_000, silentFor > 1.0, !lastEmitText.isEmpty { return true }
-            if bufCount >= 3 * 16_000 { return true }
-            return false
+            WhisperDecodePolicy.shouldDecode(
+                hasSpeech: hasSpeechInSegment,
+                decodeInFlight: decodeInFlight,
+                bufferedSamples: sampleBuffer.count,
+                newSamplesSinceDecode: newSamplesSinceDecode,
+                silentFor: now - lastSpeechTime
+            )
         }
         guard shouldDecode else { return }
-        decodeInFlight = true
-
-        let window: [Float] = stateLock.withLock { sampleBuffer }
-        let locale = stateLock.withLock { recognitionLocale }
+        let (window, locale): ([Float], String) = stateLock.withLock {
+            decodeInFlight = true
+            newSamplesSinceDecode = 0
+            return (sampleBuffer, recognitionLocale)
+        }
         Task { [weak self] in
             guard let self else { return }
             let decoded = await self.transcribeWindow(window, locale: locale)
@@ -472,6 +481,8 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 sampleBuffer = []
                 lastEmitText = ""
                 accumulatedText = ""
+                hasSpeechInSegment = false
+                newSamplesSinceDecode = 0
             }
         }
     }
