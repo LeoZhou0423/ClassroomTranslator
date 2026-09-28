@@ -110,9 +110,9 @@ enum WhisperTranscriptAccumulator {
     /// that accumulated text so the caller can commit and translate it.
     static func finalCandidate(accumulated: String, decoded: String?) -> String {
         guard let decoded else { return clean(accumulated) }
-        let decoded = clean(decoded)
-        guard !decoded.isEmpty else { return clean(accumulated) }
-        return merged(previous: accumulated, current: decoded)
+        let cleanedDecoded = clean(decoded)
+        guard !cleanedDecoded.isEmpty else { return clean(accumulated) }
+        return merged(previous: accumulated, current: cleanedDecoded)
     }
 
     static func merged(previous: String, current: String) -> String {
