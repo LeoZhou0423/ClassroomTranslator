@@ -380,8 +380,9 @@ final class SpeechManager {
 
     func startAutoDetectRecording() async throws {
         StartupLog.mark("sm.auto-enter")
-        // Reuse the previous confident result. A new result is saved for the
-        // next recording rather than restarting SpeechAnalyzer mid-sentence.
+        // Reuse the previous confident result so the first few seconds do not
+        // always fall back to the same locale. A newly detected different
+        // locale is applied to this recording below.
         let previousDetected = UserDefaults.standard.string(forKey: "detectedRecognitionLanguage")
         currentLanguageCode = previousDetected.flatMap {
             Self.allEnglishLocales.contains($0) ? $0 : nil
@@ -456,6 +457,53 @@ final class SpeechManager {
         ))
         driver.onAccentSamples = nil
         StartupLog.mark("sm.accent-detected accent=\(result.accent) locale=\(locale) confidence=\(result.confidence)")
+
+        // Previously Auto only changed the badge and saved the locale for the
+        // next recording. The current session kept using (often) en-GB, which
+        // made the visible detection misleading and reduced recognition
+        // accuracy for the rest of a US/AU/IN lecture. Restart the analyzer
+        // once with the detected model. Commit the current partial first so
+        // the four-second detection sample is not silently lost.
+        if locale != currentLanguageCode {
+            await restartRecognitionForDetectedAccent(locale, generation: generation)
+        }
+    }
+
+    private func restartRecognitionForDetectedAccent(_ locale: String, generation: Int) async {
+        guard isRecording, recordingGeneration == generation else { return }
+
+        let pending = lastPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !pending.isEmpty {
+            commitFinal(lastPartialText)
+        }
+
+        currentLanguageCode = locale
+        onLanguageModelStatusChanged?(String(
+            format: String(localized: "Switching recognition to %@…"),
+            locale
+        ))
+        StartupLog.mark("sm.accent-restart locale=\(locale)")
+
+        // Invalidate callbacks from the old analyzer without clearing the
+        // committed transcript/context accumulated in this recording.
+        recordingGeneration += 1
+        isRecording = false
+        driver.setAccentCapture(enabled: false)
+        driver.onAccentSamples = nil
+        driver.stop()
+
+        do {
+            try await startRecording()
+            onLanguageModelStatusChanged?(String(
+                format: String(localized: "%@ model active."),
+                locale
+            ))
+            StartupLog.mark("sm.accent-restart-complete locale=\(locale)")
+        } catch {
+            StartupLog.mark("sm.accent-restart-failed locale=\(locale): \(error.localizedDescription)")
+            isRecording = false
+            onRecordingInterrupted?()
+        }
     }
 
     private func retryAccentDetectionIfPossible(reason: String) {

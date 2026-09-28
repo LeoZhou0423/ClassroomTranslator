@@ -10,7 +10,10 @@ final class AccentClassifier: @unchecked Sendable {
     }
 
     static let defaultLocale = "en-GB"
-    static let confidenceThreshold: Float = 0.25
+    // The classifier reports a normalized top-two margin. Values below 0.40
+    // were observed to flip the recognizer to a wrong locale on clean speech;
+    // retry instead of degrading all subsequent transcription in the session.
+    static let confidenceThreshold: Float = 0.40
 
     let labels: [String]
     let sampleRate: Int

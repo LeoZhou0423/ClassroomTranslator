@@ -253,6 +253,8 @@
 "%lld/%lld English models ready." = "%lld/%lld 个英语模型已就绪。";
 "Detected %@ (%@)…" = "已识别为 %@（%@）…";
 "Detected %@." = "已识别为 %@。";
+"Switching recognition to %@…" = "正在切换到 %@ 识别模型…";
+"%@ model active." = "%@ 识别模型已启用。";
 "Downloading %@ speech model…" = "正在下载 %@ 语音模型…";
 "Downloading %@ speech model… (%lld%%)" = "正在下载 %@ 语音模型…（%lld%%）";
 "%@ model ready." = "%@ 模型已就绪。";
