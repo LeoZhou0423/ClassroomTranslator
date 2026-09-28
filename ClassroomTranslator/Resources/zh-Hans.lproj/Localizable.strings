@@ -274,6 +274,17 @@
 "Teacher %lld" = "老师%lld";
 "Low confidence" = "低置信";
 "Clear auto role" = "清除自动角色";
+"Downloading Whisper model…" = "正在下载 Whisper 模型…";
+"Downloading Whisper model… %lld%%" = "正在下载 Whisper 模型… %lld%%";
+"Whisper model ready." = "Whisper 模型已就绪。";
+"Whisper model not downloaded" = "Whisper 模型未下载";
+"Whisper model download failed. Check the network and try again." = "Whisper 模型下载失败，请检查网络后重试。";
+"Whisper is not available in this build." = "当前构建不包含 Whisper。";
+"Download Whisper Model" = "下载 Whisper 模型";
+"Re-download Whisper Model" = "重新下载 Whisper 模型";
+"Whisper weights are large. Download here first, then start recording." = "Whisper 权重较大，请先在此下载完成再开始录音。";
+"The speech model is not ready. Download it in Settings, then try again." = "语音模型尚未就绪。请先在设置中下载后再试。";
+"The speech model is not ready. Download it in Settings → Speech Engine, then try again." = "语音模型尚未就绪。请先在 设置 → 语音引擎 中下载后再试。";
 
 /* task-6：语音引擎选择（Step 1 暴露 Apple；Step 2 增加 sherpa 选项） */
 "Engine" = "引擎";

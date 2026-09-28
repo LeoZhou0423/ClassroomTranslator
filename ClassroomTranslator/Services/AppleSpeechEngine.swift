@@ -415,6 +415,8 @@ enum AudioEngineError: LocalizedError {
     case startFailed
     case recognizerUnavailable
     case noInputDevice
+    /// 引擎模型未下载/下载失败（Whisper 等），与设备不支持区分。
+    case modelUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -426,6 +428,8 @@ enum AudioEngineError: LocalizedError {
             return String(localized: "Speech recognition is unavailable on this device.")
         case .noInputDevice:
             return String(localized: "No microphone or audio input device was found.")
+        case .modelUnavailable:
+            return String(localized: "The speech model is not ready. Download it in Settings, then try again.")
         }
     }
 }

@@ -141,6 +141,7 @@ struct SettingsView: View {
                         Text("Whisper: higher accuracy on classroom and TTS audio; first run downloads the model. Text updates every few seconds (batch decoding).")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        whisperDownloadSection
                     }
                 }
 
@@ -280,7 +281,7 @@ struct SettingsView: View {
             let sm = SpeechManager()
             _ = await sm.requestSpeechPermission()
             _ = await sm.requestMicPermission()
-            
+
             downloadProgress = String(localized: "Downloading models…")
             let result = await sm.downloadAllEnglishModels()
             downloadProgress = String(
@@ -291,6 +292,34 @@ struct SettingsView: View {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             isDownloadingAll = false
             downloadProgress = ""
+        }
+    }
+
+    /// Whisper 大模型：必须预下载并显示进度，禁止只在点开始时默默下。
+    private var whisperDownloadSection: some View {
+        let store = WhisperModelStore.shared
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if store.isDownloading {
+                    ProgressView(value: store.fraction)
+                        .frame(maxWidth: 180)
+                }
+                Text(store.message.isEmpty
+                     ? (store.isReady ? String(localized: "Whisper model ready.")
+                                      : String(localized: "Whisper model not downloaded"))
+                     : store.message)
+                    .font(.caption)
+                    .foregroundColor(store.lastError == nil ? .secondary : .red)
+            }
+            Button(store.isReady ? String(localized: "Re-download Whisper Model")
+                                 : String(localized: "Download Whisper Model")) {
+                Task { await store.download() }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(store.isDownloading)
+            Text("Whisper weights are large. Download here first, then start recording.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
         }
     }
 

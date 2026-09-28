@@ -298,7 +298,11 @@ final class StableRecordingViewController: NSViewController {
             }
             setStatus(String(localized: "Connecting microphone…"))
             StartupLog.mark("ui.start-operation accent=\(accentCode)")
-            let startupStep = RecordingStartupStep(timeoutNanoseconds: 20_000_000_000)
+            // Whisper 首次可能要下数十 MB～百 MB 模型：给足时间，避免 20s 超时
+            // 把下载掐断（用户实测问题）。下载进度经 onModelStatus 显示。
+            let isWhisper = SpeechEngineKind() == .whisper
+            let startupTimeout: UInt64 = isWhisper ? 180_000_000_000 : 20_000_000_000
+            let startupStep = RecordingStartupStep(timeoutNanoseconds: startupTimeout)
             self.startupStep = startupStep
             do {
                 let startError = await startupStep.run(

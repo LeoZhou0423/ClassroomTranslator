@@ -40,6 +40,8 @@ enum RecordingErrorPhraser {
                 return String(localized: "No microphone or audio input device was found.")
             case .recognizerUnavailable:
                 return String(localized: "Speech recognition is unavailable on this device.")
+            case .modelUnavailable:
+                return String(localized: "The speech model is not ready. Download it in Settings → Speech Engine, then try again.")
             case .startFailed, .formatUnavailable:
                 return String(localized: "Failed to start recording. Please check the microphone and try again.")
             }
