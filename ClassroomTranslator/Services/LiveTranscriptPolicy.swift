@@ -119,7 +119,8 @@ enum WhisperTranscriptAccumulator {
         if maximum >= 2 {
             for length in stride(from: maximum, through: 2, by: -1) {
                 if Array(normalizedOld.suffix(length)) == Array(normalizedNew.prefix(length)) {
-                    return old + " " + newWords.dropFirst(length).joined(separator: " ")
+                    let unseenTail = newWords.dropFirst(length).joined(separator: " ")
+                    return unseenTail.isEmpty ? old : old + " " + unseenTail
                 }
             }
         }
