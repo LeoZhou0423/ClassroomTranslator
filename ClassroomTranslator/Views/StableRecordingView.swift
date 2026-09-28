@@ -298,10 +298,18 @@ final class StableRecordingViewController: NSViewController {
             }
             setStatus(String(localized: "Connecting microphone…"))
             StartupLog.mark("ui.start-operation accent=\(accentCode)")
-            // Whisper 首次可能要下数十 MB～百 MB 模型：给足时间，避免 20s 超时
-            // 把下载掐断（用户实测问题）。下载进度经 onModelStatus 显示。
+
+            // 用户不会先去设置下载模型 —— 没下载就识别时，这里主动下载并显示进度，
+            // 不要进麦克风启动超时（实测：下载被 20s 掐断 + 误报“麦克风占用”）。
             let isWhisper = SpeechEngineKind() == .whisper
-            let startupTimeout: UInt64 = isWhisper ? 180_000_000_000 : 20_000_000_000
+            if isWhisper {
+                let modelOK = await ensureWhisperModelReady(generation: currentGeneration)
+                guard modelOK, currentGeneration == self.generation else { return }
+            }
+
+            setStatus(String(localized: "Connecting microphone…"))
+            // Whisper 模型已就绪后仍可能首次加载：给加载时间，但不再含下载。
+            let startupTimeout: UInt64 = isWhisper ? 60_000_000_000 : 20_000_000_000
             let startupStep = RecordingStartupStep(timeoutNanoseconds: startupTimeout)
             self.startupStep = startupStep
             do {
@@ -353,6 +361,44 @@ final class StableRecordingViewController: NSViewController {
                 failStart(humanMessage, generation: currentGeneration)
             }
         }
+    }
+
+    /// 确保 Whisper 权重已下载。未就绪 → 进度条式下载；失败/取消 → 明确文案，绝不静默超时。
+    private func ensureWhisperModelReady(generation: Int) async -> Bool {
+        let store = WhisperModelStore.shared
+        if store.isReady {
+            return true
+        }
+        StartupLog.mark("ui.whisper-download-begin")
+        setStatus(String(localized: "Downloading Whisper model… This may take a few minutes. Do not close the app."))
+        renderState()
+
+        // 进度轮询（后台下载 + 状态栏更新）
+        let poll = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                let ready = WhisperModelStore.shared.isReady
+                if ready { break }
+                let msg = WhisperModelStore.shared.isDownloading
+                    ? WhisperModelStore.shared.message
+                    : String(localized: "Downloading Whisper model… This may take a few minutes. Do not close the app.")
+                self?.setStatus(msg)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+        }
+        defer { poll.cancel() }
+
+        await store.download()
+        if store.isReady {
+            setStatus(String(localized: "Whisper model ready."))
+            StartupLog.mark("ui.whisper-download-done")
+            return true
+        }
+        let message = store.lastError != nil
+            ? String(localized: "Whisper model download failed. Check your network, then tap Start to retry. You can also pick Apple or Sherpa-onnx in Settings → Speech Engine.")
+            : String(localized: "The speech model is not ready. Download it in Settings → Speech Engine, then try again.")
+        StartupLog.mark("ui.whisper-download-fail")
+        failStart(message, generation: generation)
+        return false
     }
 
     private func failStart(_ message: String, generation: Int, permissionURL: URL? = nil) {

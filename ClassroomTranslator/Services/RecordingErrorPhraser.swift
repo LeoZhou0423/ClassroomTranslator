@@ -13,6 +13,10 @@ enum RecordingErrorPhraser {
         if let startupError = error as? RecordingStartupStep.StartupError {
             switch startupError {
             case .timedOut:
+                // Whisper 启动阶段超时多半是模型还在加载，不是麦克风被占。
+                if SpeechEngineKind() == .whisper {
+                    return String(localized: "The speech model took too long to load. Tap Start to download it again, or switch to Apple/Sherpa-onnx in Settings → Speech Engine.")
+                }
                 return String(localized: "Recording took too long to start. Another app may be using the microphone. Stop it and try again.")
             }
         }
