@@ -134,6 +134,11 @@ final class LiveTranscriptPolicyTests: XCTestCase {
         ))
     }
 
+    func testWhisperAcceptsQuietVirtualMachineSpeech() {
+        XCTAssertTrue(WhisperDecodePolicy.containsSpeech(rms: 0.002))
+        XCTAssertFalse(WhisperDecodePolicy.containsSpeech(rms: 0.001))
+    }
+
     func testWhisperPartialRequiresNewAudioSincePreviousDecode() {
         XCTAssertFalse(WhisperDecodePolicy.shouldDecode(
             hasSpeech: true, decodeInFlight: false,

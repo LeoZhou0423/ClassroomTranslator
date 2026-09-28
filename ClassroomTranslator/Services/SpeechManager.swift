@@ -482,7 +482,15 @@ final class SpeechManager {
         // once with the detected model. Commit the current partial first so
         // the four-second detection sample is not silently lost.
         if locale != currentLanguageCode {
-            await restartRecognitionForDetectedAccent(locale, generation: generation)
+            // Whisper uses one multilingual/English model for all English
+            // accents. Restarting it cannot improve the decoder and discards
+            // the live rolling window, so update the detected locale in place.
+            if effectiveEngineKind == .whisper {
+                currentLanguageCode = locale
+                StartupLog.mark("sm.accent-applied-without-whisper-restart locale=\(locale)")
+            } else {
+                await restartRecognitionForDetectedAccent(locale, generation: generation)
+            }
         }
     }
 

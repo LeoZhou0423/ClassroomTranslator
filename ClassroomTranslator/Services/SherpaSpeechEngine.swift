@@ -86,7 +86,7 @@ final class SherpaSpeechEngine: @unchecked Sendable, SpeechEngine {
     /// 只在 queue 上读写（decode 串行）。
     private var lastEmittedText = ""
 
-    private let accentTee = AccentAudioTee(targetSeconds: 2.5)
+    private let accentTee = AccentAudioTee(targetSeconds: 3.0)
     let speakerRing = SpeakerAudioRing(capacitySeconds: 30)
 
     var running: Bool {

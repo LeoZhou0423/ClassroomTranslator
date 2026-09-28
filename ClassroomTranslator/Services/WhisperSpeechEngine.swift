@@ -54,7 +54,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     private var recognitionHandler: (@Sendable (String, Bool) -> Void)?
 
-    private let accentTee = AccentAudioTee(targetSeconds: 2.5)
+    private let accentTee = AccentAudioTee(targetSeconds: 3.0)
     let speakerRing = SpeakerAudioRing(capacitySeconds: 30)
 
     /// 16 kHz mono 滚动窗（最多 20s，Whisper 友好）。
@@ -434,7 +434,9 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
         let now = Date().timeIntervalSince1970
         let rms = samples.reduce(0) { $0 + $1 * $1 }
-        let speech = sqrt(rms / Float(max(samples.count, 1))) > 0.01
+        let speech = WhisperDecodePolicy.containsSpeech(
+            rms: sqrt(rms / Float(max(samples.count, 1)))
+        )
 
         stateLock.withLock {
             sampleBuffer.append(contentsOf: samples)

@@ -151,6 +151,14 @@ enum WhisperTranscriptAccumulator {
 }
 
 enum WhisperDecodePolicy {
+    /// The VM audio bridge commonly delivers speech around 0.002 RMS. Using a
+    /// desktop-microphone threshold of 0.01 drops quiet words and sentence ends.
+    static let minimumSpeechRMS: Float = 0.0015
+
+    static func containsSpeech(rms: Float) -> Bool {
+        rms >= minimumSpeechRMS
+    }
+
     static func shouldDecode(
         hasSpeech: Bool,
         decodeInFlight: Bool,
