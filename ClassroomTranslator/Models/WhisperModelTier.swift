@@ -56,9 +56,12 @@ enum WhisperModelTier: String, CaseIterable, Identifiable, Sendable {
         return .small
     }
 
-    /// 常见虚拟化痕迹：sysctl / 进程名 / 硬件名。失败则当真机。
+    /// 常见虚拟化痕迹。QEMU 的 hw.model 常是 iMacPro1,1（不含 qemu 字样），
+    /// 必须看 hypervisor 标志，否则 VM 上仍会误判真机并启用 Whisper CoreML。
     static func detectVirtualMachine() -> Bool {
         #if os(macOS)
+        if sysctlInt("kern.hv_vmm_present") == 1 { return true }
+        if sysctlInt("hw.optional.hypervisor") == 1 { return true }
         if let model = sysctlString("hw.model")?.lowercased() {
             if model.contains("vmware") || model.contains("kvm")
                 || model.contains("qemu") || model.contains("virtual")
@@ -73,6 +76,13 @@ enum WhisperModelTier: String, CaseIterable, Identifiable, Sendable {
         #else
         return false
         #endif
+    }
+
+    private static func sysctlInt(_ key: String) -> Int32? {
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname(key, &value, &size, nil, 0) == 0 else { return nil }
+        return value
     }
 
     private static func sysctlString(_ key: String) -> String? {

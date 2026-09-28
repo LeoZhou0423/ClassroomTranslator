@@ -126,7 +126,9 @@ struct SettingsView: View {
                         if SherpaSpeechEngine.modelsPresent() {
                             Text("Sherpa-onnx · English streaming").tag(SpeechEngineKind.sherpa.rawValue)
                         }
-                        Text("Whisper · better accuracy").tag(SpeechEngineKind.whisper.rawValue)
+                        if !WhisperModelTier.detectVirtualMachine() {
+                            Text("Whisper · better accuracy").tag(SpeechEngineKind.whisper.rawValue)
+                        }
                     }
                     Text("Applies the next time the recording page opens.")
                         .font(.caption)
@@ -136,6 +138,11 @@ struct SettingsView: View {
                         Text("Sherpa-onnx: first text appears after about 1–1.3 seconds of speech; this is model context, not a fault.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    }
+                    if WhisperModelTier.detectVirtualMachine() {
+                        Text("Whisper is unavailable in this virtual machine (CoreML crash). Use Apple SpeechAnalyzer or Sherpa-onnx.")
+                            .font(.caption)
+                            .foregroundColor(.orange)
                     }
                     if speechEngineChoice == SpeechEngineKind.whisper.rawValue {
                         Text("Whisper: higher accuracy on classroom and TTS audio; first run downloads the model. Text updates every few seconds (batch decoding).")

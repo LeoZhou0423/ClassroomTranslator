@@ -103,11 +103,19 @@ final class SpeechEngineSelectionTests: XCTestCase {
         defaults.set("whisper", forKey: SpeechEngineKind.defaultsKey)
         let kind = SpeechEngineKind(userDefaults: defaults)
         XCTAssertEqual(kind, .whisper)
-        XCTAssertTrue(kind.isAvailable, "Whisper 默认可用（模型在 start 时下载）")
-        XCTAssertEqual(kind.resolved, .whisper)
-        let engine = SpeechEngineFactory.make(userDefaults: defaults)
-        XCTAssertTrue(engine is WhisperSpeechEngine)
-        XCTAssertFalse(engine.running)
+        if WhisperModelTier.detectVirtualMachine() {
+            // CI/VM：Whisper CoreML 禁用，必须回退 Apple 防崩溃
+            XCTAssertFalse(kind.isAvailable, "虚拟机上 Whisper 必须不可用")
+            XCTAssertEqual(kind.resolved, .apple)
+            let engine = SpeechEngineFactory.make(userDefaults: defaults)
+            XCTAssertTrue(engine is AppleSpeechEngine)
+        } else {
+            XCTAssertTrue(kind.isAvailable, "真机 Whisper 默认可用（模型在 start 时下载）")
+            XCTAssertEqual(kind.resolved, .whisper)
+            let engine = SpeechEngineFactory.make(userDefaults: defaults)
+            XCTAssertTrue(engine is WhisperSpeechEngine)
+            XCTAssertFalse(engine.running)
+        }
     }
 
     func testSherpaModelFilesRejectMissingAndTruncated() throws {

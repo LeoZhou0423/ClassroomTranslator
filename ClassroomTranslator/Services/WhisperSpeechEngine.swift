@@ -29,8 +29,19 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private static let availabilityLock = NSLock()
     private static var creationDisabled = false
 
+    /// VM 上 WhisperKit/CoreML 在 MLMMultiArray 分配处必崩（已两次 crash report）。
+    /// 虚拟机一律禁用 Whisper，工厂回退 Apple。
     static func isUsable() -> Bool {
-        availabilityLock.withLock { !creationDisabled }
+        if WhisperModelTier.detectVirtualMachine() {
+            availabilityLock.withLock {
+                if !creationDisabled {
+                    creationDisabled = true
+                }
+            }
+            StartupLog.mark("whisper.disabled-on-vm")
+            return false
+        }
+        return availabilityLock.withLock { !creationDisabled }
     }
 
     private static func markCreationFailed(_ reason: String) {

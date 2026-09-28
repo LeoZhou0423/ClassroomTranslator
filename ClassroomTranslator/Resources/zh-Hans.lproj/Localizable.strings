@@ -294,6 +294,7 @@
 "Model size" = "模型大小";
 "Recommended for this Mac" = "已匹配本机推荐";
 "Recommended for this Mac: %@" = "本机推荐：%@";
+"Whisper is unavailable in this virtual machine (CoreML crash). Use Apple SpeechAnalyzer or Sherpa-onnx." = "虚拟机中无法使用 Whisper（CoreML 会崩溃）。请改用 Apple SpeechAnalyzer 或 Sherpa-onnx。";
 
 /* task-6：语音引擎选择（Step 1 暴露 Apple；Step 2 增加 sherpa 选项） */
 "Engine" = "引擎";
