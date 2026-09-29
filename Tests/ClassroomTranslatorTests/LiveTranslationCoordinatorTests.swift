@@ -3,6 +3,24 @@ import XCTest
 
 final class LiveTranslationCoordinatorTests: XCTestCase {
     @MainActor
+    func testIdenticalFinalTextIsTranslatedOnlyOnce() async {
+        var calls = 0
+        var outputs: [String] = []
+        let coordinator = LiveTranslationCoordinator(partialInterval: .zero) { text in
+            calls += 1
+            return "T:\(text)"
+        }
+        for revision in 1...2 {
+            coordinator.submit(.init(kind: .final, text: "Same sentence.", cue: "Same sentence.", revision: revision, generation: 1) {
+                outputs.append($0.translatedText)
+            })
+        }
+        await coordinator.waitUntilIdle()
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(outputs, ["T:Same sentence.", "T:Same sentence."])
+    }
+
+    @MainActor
     func testPendingPartialsCoalesceToLatest() async {
         var translatedInputs: [String] = []
         var outputs: [String] = []

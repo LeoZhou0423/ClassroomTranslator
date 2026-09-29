@@ -94,6 +94,45 @@ enum RecognitionTextDelta {
     }
 }
 
+/// Turns a recognizer snapshot into appendable sentence units. Translation
+/// consumes these units independently so a growing classroom transcript never
+/// sends its complete history back through TranslationSession.
+enum StableSentenceUnits {
+    static func split(_ text: String, includeTrailingFragment: Bool = true) -> [String] {
+        let clean = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !clean.isEmpty else { return [] }
+        var result: [String] = []
+        var start = clean.startIndex
+        var index = clean.startIndex
+        while index < clean.endIndex {
+            let character = clean[index]
+            let next = clean.index(after: index)
+            var isBoundary = "!?。！？…".contains(character)
+            if character == "." {
+                let previous = index > clean.startIndex ? clean[clean.index(before: index)] : nil
+                let following = next < clean.endIndex ? clean[next] : nil
+                isBoundary = !(previous?.isNumber == true && following?.isNumber == true)
+            }
+            if isBoundary {
+                let unit = String(clean[start..<next]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !unit.isEmpty { result.append(unit) }
+                start = next
+                while start < clean.endIndex, clean[start].isWhitespace {
+                    start = clean.index(after: start)
+                }
+                index = start
+            } else {
+                index = next
+            }
+        }
+        if includeTrailingFragment, start < clean.endIndex {
+            let tail = String(clean[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tail.isEmpty { result.append(tail) }
+        }
+        return result
+    }
+}
+
 /// Whisper decodes overlapping rolling windows rather than a single growing
 /// recognizer snapshot. Preserve text that was already shown when a later
 /// window (especially the final silence window) contains only its shorter tail.

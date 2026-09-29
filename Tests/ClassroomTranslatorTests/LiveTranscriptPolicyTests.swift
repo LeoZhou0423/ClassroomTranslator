@@ -2,6 +2,20 @@ import XCTest
 @testable import ClassroomTranslator
 
 final class LiveTranscriptPolicyTests: XCTestCase {
+    func testFinalTextSplitsIntoIndependentTranslationUnits() {
+        XCTAssertEqual(
+            StableSentenceUnits.split("First sentence. Is this second? Yes! trailing fragment"),
+            ["First sentence.", "Is this second?", "Yes!", "trailing fragment"]
+        )
+    }
+
+    func testDecimalPointDoesNotSplitTranslationUnit() {
+        XCTAssertEqual(
+            StableSentenceUnits.split("Version 3.14 works. Next"),
+            ["Version 3.14 works.", "Next"]
+        )
+    }
+
     func testCumulativeRecognitionOnlyEmitsNewSuffix() {
         XCTAssertEqual(
             RecognitionTextDelta.unseenText(

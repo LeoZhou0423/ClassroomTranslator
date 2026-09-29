@@ -74,6 +74,7 @@ final class StableRecordingViewController: NSViewController {
     private var hasRenderedTranscript = false
     private var partialText = ""
     private var partialTranslation = ""
+    private var lastSubmittedPartialTranslationUnit = ""
     private var translationCoordinator: LiveTranslationCoordinator!
     private var partialRevision = 0
     private var generation = 0
@@ -735,13 +736,13 @@ final class StableRecordingViewController: NSViewController {
                 // Otherwise pause/end can save the old partial a second time.
                 self.partialText = ""
                 self.partialTranslation = ""
+                self.lastSubmittedPartialTranslationUnit = ""
                 self.enqueueFinal(text, revision: eventRevision)
             } else {
                 self.partialText = text
                 self.partialTranslation = ""
                 self.refreshTranscript()
-                let cue = SubtitleCueBuilder.cue(from: text, maximumWords: self.subtitleMaximumWords)
-                self.submitPartialTranslation(text, cue: cue, revision: eventRevision)
+                self.submitPartialTranslation(text, revision: eventRevision)
             }
         }
     }
@@ -751,7 +752,19 @@ final class StableRecordingViewController: NSViewController {
         guard !trimmed.isEmpty, courseExists else { return }
         lastEnqueuedFinalRevision = revision
         ensureActiveRecord()
-        let sentence = Self.ensureEndingPunctuation(trimmed)
+        let units = StableSentenceUnits.split(trimmed)
+        for unit in units {
+            enqueueFinalUnit(Self.ensureEndingPunctuation(unit), revision: revision)
+        }
+        if partialText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
+            partialText = ""
+            partialTranslation = ""
+            lastSubmittedPartialTranslationUnit = ""
+        }
+        refreshTranscript()
+    }
+
+    private func enqueueFinalUnit(_ sentence: String, revision: Int) {
         let cue = SubtitleCueBuilder.cue(from: sentence, maximumWords: subtitleMaximumWords)
         // task-4：先挂当前（临时）说话人标签，取窗解析后由引擎回写精确标签。
         let segment = TranscriptSegment(original: sentence, translated: "", speaker: speakerEngine?.currentLabel)
@@ -760,11 +773,6 @@ final class StableRecordingViewController: NSViewController {
             rebuildFinalizedText(from: activeRecord)
             speakerEngine?.segmentsCommitted([segment.id])
         }
-        if partialText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
-            partialText = ""
-            partialTranslation = ""
-        }
-        refreshTranscript()
         translationCoordinator.submit(.init(
             kind: .final,
             text: sentence,
@@ -776,13 +784,21 @@ final class StableRecordingViewController: NSViewController {
         ))
     }
 
-    private func submitPartialTranslation(_ text: String, cue: String, revision: Int) {
+    private func submitPartialTranslation(_ text: String, revision: Int) {
+        // Growing hypotheses used to resend their complete text every 700 ms.
+        // Translate only the newest punctuation-closed unit; the final request
+        // then reuses the coordinator cache if recognition leaves it unchanged.
+        guard let stableUnit = StableSentenceUnits.split(text, includeTrailingFragment: false).last,
+              stableUnit != lastSubmittedPartialTranslationUnit else { return }
+        lastSubmittedPartialTranslationUnit = stableUnit
+        let cue = SubtitleCueBuilder.cue(from: stableUnit, maximumWords: subtitleMaximumWords)
         translationCoordinator.submit(.init(
             kind: .partial,
-            text: text,
+            text: stableUnit,
             cue: cue,
             revision: revision,
             generation: translationGeneration,
+            sourceSnapshot: text,
             completion: { [weak self] response in self?.handleTranslation(response) }
         ))
     }
@@ -791,8 +807,8 @@ final class StableRecordingViewController: NSViewController {
         guard response.request.generation == translationGeneration else { return }
         if response.request.kind == .partial {
             guard sessionState.phase == .recording,
-                  response.request.revision >= minimumValidPartialRevision,
-                  partialText == response.request.text else { return }
+                   response.request.revision >= minimumValidPartialRevision,
+                   partialText == (response.request.sourceSnapshot ?? response.request.text) else { return }
         }
         if !response.succeeded, response.request.kind == .partial {
             setStatus(
@@ -823,7 +839,7 @@ final class StableRecordingViewController: NSViewController {
 
         switch response.request.kind {
         case .partial:
-            if partialText == response.request.text {
+            if partialText == (response.request.sourceSnapshot ?? response.request.text) {
                 partialTranslation = response.translatedText
                 refreshTranscript()
             }
@@ -1081,6 +1097,7 @@ final class StableRecordingViewController: NSViewController {
         translationCoordinator.activateGeneration(translationGeneration)
         partialText = ""
         partialTranslation = ""
+        lastSubmittedPartialTranslationUnit = ""
         subtitleWindow.clearAll()
     }
 }

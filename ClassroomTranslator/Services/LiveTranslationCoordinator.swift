@@ -11,6 +11,9 @@ final class LiveTranslationCoordinator {
         let revision: Int
         let generation: Int
         let segmentID: UUID?
+        /// Full recognizer snapshot that produced a partial sentence unit.
+        /// Final requests leave this nil.
+        let sourceSnapshot: String?
         let completion: @MainActor (Response) -> Void
 
         init(
@@ -20,6 +23,7 @@ final class LiveTranslationCoordinator {
             revision: Int,
             generation: Int,
             segmentID: UUID? = nil,
+            sourceSnapshot: String? = nil,
             completion: @escaping @MainActor (Response) -> Void
         ) {
             self.kind = kind
@@ -28,6 +32,7 @@ final class LiveTranslationCoordinator {
             self.revision = revision
             self.generation = generation
             self.segmentID = segmentID
+            self.sourceSnapshot = sourceSnapshot
             self.completion = completion
         }
     }
@@ -52,6 +57,10 @@ final class LiveTranslationCoordinator {
     /// 并且可能同时跑两个 worker。
     private var workerToken = 0
     private var inFlightByWorker: [Int: Request] = [:]
+    /// Successful translations are immutable for this view's fixed language
+    /// pair. Repeated recognizer snapshots and final promotion therefore reuse
+    /// the first result instead of invoking Apple's model again.
+    private var translationCache: [String: String] = [:]
     private let clock = ContinuousClock()
 
     init(partialInterval: Duration = .milliseconds(700), translator: @escaping Translator) {
@@ -119,7 +128,14 @@ final class LiveTranslationCoordinator {
                     guard !Task.isCancelled else { break }
                 }
                 if request.kind == .partial { self.lastPartialStartedAt = self.clock.now }
-                var translated = await self.translator(request.text)
+                let cacheKey = self.normalizedCacheKey(request.text)
+                var translated = self.translationCache[cacheKey] ?? ""
+                if translated.isEmpty {
+                    translated = await self.translator(request.text)
+                    if !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self.translationCache[cacheKey] = translated
+                    }
+                }
                 // TranslationSession can transiently invalidate itself and the
                 // manager deliberately prepares it again on the next request.
                 // A final has no later update to repair it, so retry it once.
@@ -129,6 +145,9 @@ final class LiveTranslationCoordinator {
                     try? await self.clock.sleep(for: .milliseconds(250))
                     guard !Task.isCancelled else { break }
                     translated = await self.translator(request.text)
+                    if !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self.translationCache[cacheKey] = translated
+                    }
                 }
                 guard !Task.isCancelled else { break }
                 guard request.generation >= self.activeGeneration else { continue }
@@ -147,5 +166,9 @@ final class LiveTranslationCoordinator {
         if !pendingFinals.isEmpty { return pendingFinals.removeFirst() }
         defer { pendingPartial = nil }
         return pendingPartial
+    }
+
+    private func normalizedCacheKey(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }
