@@ -9,8 +9,8 @@ on:
 # GUI smoke / XCUITest / 失败分类器 / 截图巡览 / 证据上传等测试步骤全部删除。
 jobs:
   build:
-    name: Build and test on macOS 26 (Intel)
-    runs-on: macos-26-intel
+    name: Build and test on macOS 26 (Apple Silicon)
+    runs-on: macos-26
     steps:
     - uses: actions/checkout@v4
 
@@ -90,6 +90,6 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: LingoClass-macOS
+        name: LingoClass-macOS-Apple-Silicon
         path: LingoClass.dmg
         retention-days: 30
