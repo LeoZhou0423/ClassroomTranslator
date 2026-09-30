@@ -205,6 +205,21 @@ final class LiveTranscriptPolicyTests: XCTestCase {
         ))
     }
 
+    func testWhisperSchedulesFinalAfterSpeechChangedDuringSlowDecode() {
+        XCTAssertTrue(WhisperDecodePolicy.shouldScheduleFollowUpFinal(
+            speechRevisionAtDecodeStart: 4,
+            currentSpeechRevision: 9,
+            silentFor: 1.2,
+            hasSpeech: true
+        ))
+        XCTAssertFalse(WhisperDecodePolicy.shouldScheduleFollowUpFinal(
+            speechRevisionAtDecodeStart: 9,
+            currentSpeechRevision: 9,
+            silentFor: 1.2,
+            hasSpeech: true
+        ))
+    }
+
     func testSpeechResamplerAveragesEach48kInterval() {
         XCTAssertEqual(
             AccentClassifier.resample([1, 1, 1, 3, 3, 3], from: 48_000, to: 16_000),

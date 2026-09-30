@@ -248,18 +248,20 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         }
         #if canImport(WhisperKit)
         do {
-            // VM 无 ANE/GPU 时 CoreML 会不稳甚至把进程打没：强制 CPU 计算。
+            // This branch only runs on a real CoreML-capable Mac. Keep feature
+            // extraction on CPU while moving the expensive encoder to ANE and
+            // decoder to GPU. The VM takes the ONNX branch above.
             let compute = ModelComputeOptions(
                 melCompute: .cpuOnly,
-                audioEncoderCompute: .cpuOnly,
-                textDecoderCompute: .cpuOnly
+                audioEncoderCompute: .cpuAndNeuralEngine,
+                textDecoderCompute: .cpuAndGPU
             )
             let kit = try await WhisperKit(model: modelName, computeOptions: compute, verbose: false, logLevel: .error)
             kitLock.withLock {
                 kitCache = kit
                 kitCacheKey = desiredKey
             }
-            StartupLog.mark("whisper.kit-ready model=\(modelName) compute=cpuOnly")
+            StartupLog.mark("whisper.kit-ready model=\(modelName) compute=ane+gpu")
             return true
         } catch {
             StartupLog.mark("whisper.kit-load-error \(error.localizedDescription)")
@@ -470,7 +472,11 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         }
         Task { [weak self] in
             guard let self else { return }
+            let started = Date().timeIntervalSince1970
+            StartupLog.mark("whisper.decode-begin samples=\(window.count) revision=\(revision)")
             let decoded = await self.transcribeWindow(window, locale: locale)
+            let elapsed = Date().timeIntervalSince1970 - started
+            StartupLog.mark("whisper.decode-end seconds=\(String(format: "%.2f", elapsed)) chars=\(decoded?.count ?? 0)")
             self.finishDecode(
                 text: decoded,
                 speechRevisionAtDecodeStart: revision,
@@ -484,10 +490,14 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         speechRevisionAtDecodeStart: Int,
         epoch: Int
     ) {
-        let emission: ((@Sendable (String, Bool) -> Void), String, Bool)? = stateLock.withLock {
+        typealias FollowUp = (samples: [Float], locale: String, revision: Int, epoch: Int)
+        let outcome: (
+            emission: ((@Sendable (String, Bool) -> Void), String, Bool)?,
+            followUp: FollowUp?
+        ) = stateLock.withLock {
             // A decoder can finish after stop(), or even after a new recording
             // has started. It must not clear or append to the new session.
-            guard stopEpoch == epoch else { return nil }
+            guard stopEpoch == epoch else { return (nil, nil) }
             decodeInFlight = false
             // 累计窗文本：partial 更新；停顿分句时发 final
             let silentFor = Date().timeIntervalSince1970 - lastSpeechTime
@@ -518,11 +528,35 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 newSamplesSinceDecode = 0
                 speechRevision = 0
             }
-            return result
+            var followUp: FollowUp?
+            if !isFinal,
+               WhisperDecodePolicy.shouldScheduleFollowUpFinal(
+                    speechRevisionAtDecodeStart: speechRevisionAtDecodeStart,
+                    currentSpeechRevision: speechRevision,
+                    silentFor: silentFor,
+                    hasSpeech: hasSpeechInSegment
+               ) {
+                decodeInFlight = true
+                newSamplesSinceDecode = 0
+                followUp = (sampleBuffer, recognitionLocale, speechRevision, stopEpoch)
+            }
+            return (result, followUp)
         }
         // Never invoke app callbacks while holding the engine state lock.
-        if let (handler, text, isFinal) = emission {
+        if let (handler, text, isFinal) = outcome.emission {
             handler(text, isFinal)
+        }
+        if let followUp = outcome.followUp {
+            StartupLog.mark("whisper.decode-follow-up-final revision=\(followUp.revision)")
+            Task { [weak self] in
+                guard let self else { return }
+                let decoded = await self.transcribeWindow(followUp.samples, locale: followUp.locale)
+                self.finishDecode(
+                    text: decoded,
+                    speechRevisionAtDecodeStart: followUp.revision,
+                    epoch: followUp.epoch
+                )
+            }
         }
     }
 }

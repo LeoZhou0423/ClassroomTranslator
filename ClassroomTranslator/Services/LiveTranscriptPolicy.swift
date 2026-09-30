@@ -228,6 +228,21 @@ enum WhisperDecodePolicy {
     ) -> Bool {
         silentFor > 1.0 && speechRevisionAtDecodeStart == currentSpeechRevision
     }
+
+    /// A decode that started while speech was still arriving cannot be final.
+    /// If it finishes after the pause, immediately decode the newest window;
+    /// otherwise a slow model can miss the only silence callback that would
+    /// have promoted the utterance to final text.
+    static func shouldScheduleFollowUpFinal(
+        speechRevisionAtDecodeStart: Int,
+        currentSpeechRevision: Int,
+        silentFor: TimeInterval,
+        hasSpeech: Bool
+    ) -> Bool {
+        hasSpeech
+            && silentFor > 1.0
+            && speechRevisionAtDecodeStart != currentSpeechRevision
+    }
 }
 
 enum WhisperTranscriptQuality {
