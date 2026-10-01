@@ -342,7 +342,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     private func transcribeWindow(_ samples: [Float], locale: String) async -> String? {
         let cached = Self.kitLock.withLock { Self.kitCache }
-        let accepted: String?
+        var accepted: String? = nil
         var rawText = ""
         if let recognizer = cached as? SherpaOnnxOfflineRecognizer {
             let result = recognizer.decode(samples: samples, sampleRate: 16_000)
