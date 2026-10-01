@@ -368,12 +368,12 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 let results = try await activeKit.transcribe(audioArray: samples, decodeOptions: options)
                 var text = results.map(\.text).joined()
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                if let first = results.first {
-                    func stat(_ value: Float?) -> String {
-                        value.map { String(format: "%.2f", $0) } ?? "-"
+                if let first = results.first, let segment = first.segments.first {
+                    func stat(_ value: Float) -> String {
+                        String(format: "%.2f", value)
                     }
                     StartupLog.mark(
-                        "whisper.decode-stats avgLogprob=\(stat(first.avgLogprob)) noSpeechProb=\(stat(first.noSpeechProb)) temperature=\(stat(first.temperature))"
+                        "whisper.decode-stats avgLogprob=\(stat(segment.avgLogprob)) noSpeechProb=\(stat(segment.noSpeechProb)) temperature=\(stat(segment.temperature))"
                     )
                 }
                 if text.isEmpty, samples.count >= 32_000, !Self.coremlBroken {
