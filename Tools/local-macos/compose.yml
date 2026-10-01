@@ -7,6 +7,9 @@ services:
       - /shared/ClassroomTranslator/Tools/local-macos/entrypoint-audio.sh
     environment:
       VERSION: "26"
+      # Docker Desktop may need `modprobe kvm_intel` after a restart before
+      # this device is available.
+      KVM: "Y"
       CONNECTIONS: "4"
       RAM_SIZE: "12G"
       CPU_CORES: "8"
@@ -21,8 +24,8 @@ services:
       # docker exec -i 写入对应 null sink（audio-setup.sh 配置）。
       ARGUMENTS: "-device intel-hda -device hda-micro,audiodev=audio0 -audiodev alsa,id=audio0,in.dev=mic_capture,in.fixed-settings=on,in.frequency=48000,in.channels=1,in.format=s16,in.buffer-length=100000,out.dev=null"
     devices:
-      - /dev/kvm
       - /dev/net/tun
+      - /dev/kvm:/dev/kvm
     cap_add:
       - NET_ADMIN
     extra_hosts:
