@@ -79,7 +79,7 @@ final class SpeechManager {
         guard languageCode != currentLanguageCode else { return }
         guard languageCode != "auto", languageCode != "auto-detect" else { return }
         currentLanguageCode = languageCode
-        onLanguageModelStatusChanged?("")
+        postStatus("")
     }
 
     static let allEnglishLocales = [
@@ -109,7 +109,7 @@ final class SpeechManager {
                 preset: .progressiveLongDictation
             )
             // LOC 4.2：状态行是 NSTextField.stringValue，不会查表，必须显式本地化。
-            onLanguageModelStatusChanged?(String(
+            postStatus(String(
                 format: String(localized: "Downloading %@… (%lld/%lld)"),
                 code,
                 index + 1,
@@ -129,13 +129,13 @@ final class SpeechManager {
             }
         }
 
-        onLanguageModelStatusChanged?(String(
+        postStatus(String(
             format: String(localized: "%lld/%lld English models ready."),
             ready,
             total
         ))
         try? await Task.sleep(nanoseconds: 2_000_000_000)
-        onLanguageModelStatusChanged?("")
+        postStatus("")
         return (ready, total)
     }
 
@@ -213,7 +213,7 @@ final class SpeechManager {
                 },
                 onModelStatus: { [weak self] message in
                     Task { @MainActor in
-                        self?.onLanguageModelStatusChanged?(message)
+                        self?.postStatus(message)
                     }
                 },
                 onRecognition: { [weak self] text, isFinal in
@@ -480,7 +480,7 @@ final class SpeechManager {
         UserDefaults.standard.set(result.accent, forKey: "detectedAccentName")
         onAccentDetected?(result.accent, locale, result.confidence)
 
-        onLanguageModelStatusChanged?(String(
+        postStatus(String(
             format: String(localized: "Detected %@ (%@)."),
             locale,
             result.accent
@@ -516,7 +516,7 @@ final class SpeechManager {
         }
 
         currentLanguageCode = locale
-        onLanguageModelStatusChanged?(String(
+        postStatus(String(
             format: String(localized: "Switching recognition to %@…"),
             locale
         ))
@@ -532,7 +532,7 @@ final class SpeechManager {
 
         do {
             try await startRecording()
-            onLanguageModelStatusChanged?(String(
+            postStatus(String(
                 format: String(localized: "%@ model active."),
                 locale
             ))
@@ -544,17 +544,30 @@ final class SpeechManager {
         }
     }
 
+    /// Single outgoing funnel for the status line. Keeping the last message
+    /// lets a pending transient clear see whether a newer status replaced it.
+    private var currentStatusMessage = ""
+
+    private func postStatus(_ message: String) {
+        currentStatusMessage = message
+        onLanguageModelStatusChanged?(message)
+    }
+
     /// Shows a short-lived status line. Accent retries happen several times in
     /// a row; without this the last message (for example "Accent uncertain")
     /// stays pinned in the UI forever and looks like the app got stuck.
     private func showTransientStatus(_ message: String, seconds: Double = 2.5) {
         onLanguageModelStatusChanged?(message)
+        currentStatusMessage = message
         statusClearGeneration += 1
         let generation = statusClearGeneration
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard let self, self.statusClearGeneration == generation else { return }
-            self.onLanguageModelStatusChanged?("")
+            // A newer status (model download, accent detected, …) replaced this
+            // one while the timer slept — never wipe it.
+            guard self.currentStatusMessage == message else { return }
+            self.postStatus("")
         }
     }
 
