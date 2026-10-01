@@ -321,7 +321,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 kitCache = kit
                 kitCacheKey = desiredKey
             }
-            StartupLog.mark("whisper.kit-ready model=\(modelName) compute=ane+gpu")
+            StartupLog.mark("whisper.kit-ready model=\(modelName) compute=cpu+gpu")
             return true
         } catch {
             StartupLog.mark("whisper.kit-load-error \(error.localizedDescription)")
@@ -389,7 +389,10 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 task: .transcribe,
                 language: lang,
                 temperature: 0.0,
-                temperatureFallbackCount: 0
+                temperatureFallbackCount: 0,
+                skipSpecialTokens: true,
+                withoutTimestamps: true,
+                suppressBlank: true
             )
             do {
                 // A previous run may have proven the accelerated CoreML
@@ -399,6 +402,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                     ? (await Self.ensureCpuFallbackKit() ?? kit)
                     : kit
                 let results = try await activeKit.transcribe(audioArray: samples, decodeOptions: options)
+                Self.logDecodeResults(results, stage: "primary")
                 var text = results.map(\.text).joined()
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if let first = results.first, let segment = first.segments.first {
@@ -417,16 +421,19 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                         "whisper.coreml-diag segments=0 text=\(Self.escapedLog(first.text)) modelFolder=\(activeKit.modelFolder?.path ?? "-")"
                     )
                 }
-                if text.isEmpty, samples.count >= 32_000, !Self.coremlBroken {
-                    // Greedy-only decode can yield an empty hypothesis on hard
-                    // audio. One fallback pass distinguishes "decoder failed"
-                    // from "the window is genuinely silent".
-                    var fallback = options
-                    fallback.temperatureFallbackCount = 5
-                    let retried = try await activeKit.transcribe(audioArray: samples, decodeOptions: fallback)
+                var recoveryOptions = options
+                recoveryOptions.usePrefillCache = false
+                recoveryOptions.noSpeechThreshold = nil
+                recoveryOptions.temperatureFallbackCount = 1
+                if text.isEmpty, samples.count >= 32_000 {
+                    // These windows have already passed the capture VAD. Retry
+                    // once without the library's segment-silence gate and cached
+                    // prefill; retain the application's hallucination filter.
+                    let retried = try await activeKit.transcribe(audioArray: samples, decodeOptions: recoveryOptions)
+                    Self.logDecodeResults(retried, stage: "empty-recovery")
                     text = retried.map(\.text).joined()
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    StartupLog.mark("whisper.temperature-fallback-retry chars=\(text.count)")
+                    StartupLog.mark("whisper.empty-recovery chars=\(text.count) timestamps=false silenceGate=false prefillCache=false")
                 }
                 rawText = text
                 StartupLog.mark("whisper.raw backend=\(Self.coremlBroken ? "cpu-fallback" : "coreml") chars=\(text.count) text=\(Self.escapedLog(text))")
@@ -438,14 +445,15 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 if (accepted == nil || text.isEmpty), samples.count >= 32_000,
                    !Self.coremlBroken,
                    let cpuKit = await Self.ensureCpuFallbackKit() {
-                    let cpuResults = try await cpuKit.transcribe(audioArray: samples, decodeOptions: options)
+                    let cpuResults = try await cpuKit.transcribe(audioArray: samples, decodeOptions: recoveryOptions)
+                    Self.logDecodeResults(cpuResults, stage: "cpu-recovery")
                     let cpuText = cpuResults.map(\.text).joined()
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     StartupLog.mark("whisper.cpu-fallback chars=\(cpuText.count) text=\(Self.escapedLog(cpuText))")
-                    if !cpuText.isEmpty {
+                    if let cpuAccepted = WhisperTranscriptQuality.accepted(cpuText) {
                         Self.coremlBroken = true
                         rawText = cpuText
-                        accepted = WhisperTranscriptQuality.accepted(cpuText)
+                        accepted = cpuAccepted
                     }
                 }
                 // Both WhisperKit instances decoded real speech to nothing, so
@@ -480,6 +488,15 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             Self.dumpWindow(samples, reason: rawText.isEmpty ? "empty" : "filtered-\(rawText.count)chars")
         }
         return accepted
+    }
+
+    private static func logDecodeResults(_ results: [TranscriptionResult], stage: String) {
+        let segments = results.flatMap(\.segments)
+        StartupLog.mark("whisper.result stage=\(stage) results=\(results.count) segments=\(segments.count) chars=\(results.reduce(0) { $0 + $1.text.count })")
+        for segment in segments.prefix(3) {
+            let tokens = segment.tokens.prefix(24).map(String.init).joined(separator: ",")
+            StartupLog.mark("whisper.segment stage=\(stage) chars=\(segment.text.count) avgLogprob=\(segment.avgLogprob) noSpeechProb=\(segment.noSpeechProb) tokens=[\(tokens)]")
+        }
     }
 
     /// Truncated, single-line preview of a decoder result for StartupLog.
