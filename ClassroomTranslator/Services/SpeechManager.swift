@@ -42,6 +42,7 @@ final class SpeechManager {
     private var accentDetectionTask: Task<Void, Never>?
     private var accentDetectionActive = false
     private var accentDetectionAttempts = 0
+    private var statusClearGeneration = 0
     private static let maximumAccentDetectionAttempts = 3
 
     private(set) var currentLanguageCode: String
@@ -543,16 +544,35 @@ final class SpeechManager {
         }
     }
 
+    /// Shows a short-lived status line. Accent retries happen several times in
+    /// a row; without this the last message (for example "Accent uncertain")
+    /// stays pinned in the UI forever and looks like the app got stuck.
+    private func showTransientStatus(_ message: String, seconds: Double = 2.5) {
+        onLanguageModelStatusChanged?(message)
+        statusClearGeneration += 1
+        let generation = statusClearGeneration
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self, self.statusClearGeneration == generation else { return }
+            self.onLanguageModelStatusChanged?("")
+        }
+    }
+
     private func retryAccentDetectionIfPossible(reason: String) {
         accentDetectionActive = false
         StartupLog.mark("sm.accent-retry attempt=\(accentDetectionAttempts) reason=\(reason)")
+        // Cancel a pending clear so it cannot wipe the message below.
+        statusClearGeneration += 1
         if accentDetectionAttempts < Self.maximumAccentDetectionAttempts {
-            onLanguageModelStatusChanged?(String(localized: "Accent uncertain · listening again…"))
+            showTransientStatus(String(localized: "Accent uncertain · listening again…"))
             driver.setAccentCapture(enabled: true)
         } else {
             driver.onAccentSamples = nil
             driver.setAccentCapture(enabled: false)
-            onLanguageModelStatusChanged?(String(localized: "Accent could not be determined · using the current English model"))
+            showTransientStatus(
+                String(localized: "Accent could not be determined · using the current English model"),
+                seconds: 4
+            )
         }
     }
 

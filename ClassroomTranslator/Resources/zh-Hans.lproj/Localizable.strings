@@ -252,7 +252,11 @@
 "Downloading %@… (%lld/%lld)" = "正在下载 %@…（%lld/%lld）";
 "%lld/%lld English models ready." = "%lld/%lld 个英语模型已就绪。";
 "Detected %@ (%@)…" = "已识别为 %@（%@）…";
+"Detected %@ (%@)." = "已识别为 %@（%@）。";
 "Detected %@." = "已识别为 %@。";
+/* 口音检测重试/放弃：缺失时中文界面会直接漏出英文原文 */
+"Accent uncertain · listening again…" = "口音不确定 · 继续聆听…";
+"Accent could not be determined · using the current English model" = "无法确定口音 · 使用当前英语模型";
 "Switching recognition to %@…" = "正在切换到 %@ 识别模型…";
 "%@ model active." = "%@ 识别模型已启用。";
 "Downloading %@ speech model…" = "正在下载 %@ 语音模型…";
