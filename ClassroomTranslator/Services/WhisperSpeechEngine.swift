@@ -75,6 +75,15 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private nonisolated(unsafe) static var kitCacheKey: String?
     private static let kitLock = NSLock()
 
+    /// Pure-CPU WhisperKit instance created lazily after the accelerated
+    /// CoreML pipeline produces empty output on real speech, plus the flag
+    /// that routes every later decode to it. Runtime-only: a fresh launch
+    /// gives the accelerated pipeline another chance.
+    private nonisolated(unsafe) static var cpuFallbackKit: WhisperKit?
+    private nonisolated(unsafe) static var cpuFallbackKitLoading = false
+    private nonisolated(unsafe) static var coremlBroken = false
+    private static let fallbackLock = NSLock()
+
     var running: Bool {
         stateLock.withLock { isRunning }
     }
@@ -292,6 +301,45 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     }
 
     #if canImport(WhisperKit)
+    /// Creates (once) a WhisperKit instance that runs mel, encoder and decoder
+    /// entirely on the CPU. Slowest but immune to compute-unit regressions.
+    private static func ensureCpuFallbackKit() async -> WhisperKit? {
+        if let kit = fallbackLock.withLock({ cpuFallbackKit }) { return kit }
+        var shouldLoad = false
+        fallbackLock.withLock {
+            if cpuFallbackKit == nil && !cpuFallbackKitLoading {
+                cpuFallbackKitLoading = true
+                shouldLoad = true
+            }
+        }
+        guard shouldLoad else {
+            // Another task is loading it; wait briefly and re-check.
+            for _ in 0..<60 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if let kit = fallbackLock.withLock({ cpuFallbackKit }) { return kit }
+            }
+            return nil
+        }
+        do {
+            let compute = ModelComputeOptions(
+                melCompute: .cpuOnly,
+                audioEncoderCompute: .cpuOnly,
+                textDecoderCompute: .cpuOnly
+            )
+            let kit = try await WhisperKit(model: modelName, computeOptions: compute, verbose: false, logLevel: .error)
+            fallbackLock.withLock {
+                cpuFallbackKit = kit
+                cpuFallbackKitLoading = false
+            }
+            StartupLog.mark("whisper.cpu-fallback-kit-ready model=\(modelName)")
+            return kit
+        } catch {
+            fallbackLock.withLock { cpuFallbackKitLoading = false }
+            StartupLog.mark("whisper.cpu-fallback-kit-failed \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     private func transcribeWindow(_ samples: [Float], locale: String) async -> String? {
         let cached = Self.kitLock.withLock { Self.kitCache }
         let accepted: String?
@@ -311,23 +359,54 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 temperatureFallbackCount: 0
             )
             do {
-                let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
+                // A previous run may have proven the accelerated CoreML
+                // pipeline broken (empty output on real speech). Stick with
+                // the pure-CPU instance for the rest of the process.
+                let activeKit = Self.coremlBroken
+                    ? (await Self.ensureCpuFallbackKit() ?? kit)
+                    : kit
+                let results = try await activeKit.transcribe(audioArray: samples, decodeOptions: options)
                 var text = results.map(\.text).joined()
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                if text.isEmpty, samples.count >= 32_000 {
+                if let first = results.first {
+                    func stat(_ value: Float?) -> String {
+                        value.map { String(format: "%.2f", $0) } ?? "-"
+                    }
+                    StartupLog.mark(
+                        "whisper.decode-stats avgLogprob=\(stat(first.avgLogprob)) noSpeechProb=\(stat(first.noSpeechProb)) temperature=\(stat(first.temperature))"
+                    )
+                }
+                if text.isEmpty, samples.count >= 32_000, !Self.coremlBroken {
                     // Greedy-only decode can yield an empty hypothesis on hard
                     // audio. One fallback pass distinguishes "decoder failed"
                     // from "the window is genuinely silent".
                     var fallback = options
                     fallback.temperatureFallbackCount = 5
-                    let retried = try await kit.transcribe(audioArray: samples, decodeOptions: fallback)
+                    let retried = try await activeKit.transcribe(audioArray: samples, decodeOptions: fallback)
                     text = retried.map(\.text).joined()
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     StartupLog.mark("whisper.temperature-fallback-retry chars=\(text.count)")
                 }
                 rawText = text
-                StartupLog.mark("whisper.raw backend=coreml chars=\(text.count) text=\(Self.escapedLog(text))")
+                StartupLog.mark("whisper.raw backend=\(Self.coremlBroken ? "cpu-fallback" : "coreml") chars=\(text.count) text=\(Self.escapedLog(text))")
                 accepted = WhisperTranscriptQuality.accepted(text)
+                // Clear English speech decoding to nothing points at the
+                // accelerated CoreML compute units. Re-decode the same window
+                // on a pure-CPU WhisperKit instance; if that produces text,
+                // every later decode uses it (self-healing without restart).
+                if (accepted == nil || text.isEmpty), samples.count >= 32_000,
+                   !Self.coremlBroken,
+                   let cpuKit = await Self.ensureCpuFallbackKit() {
+                    let cpuResults = try await cpuKit.transcribe(audioArray: samples, decodeOptions: options)
+                    let cpuText = cpuResults.map(\.text).joined()
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    StartupLog.mark("whisper.cpu-fallback chars=\(cpuText.count) text=\(Self.escapedLog(cpuText))")
+                    if !cpuText.isEmpty {
+                        Self.coremlBroken = true
+                        rawText = cpuText
+                        accepted = WhisperTranscriptQuality.accepted(cpuText)
+                    }
+                }
             } catch {
                 StartupLog.mark("whisper.transcribe-error \(error.localizedDescription)")
                 return nil
