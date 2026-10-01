@@ -293,8 +293,16 @@ enum WhisperTranscriptQuality {
     /// Reject obvious decoder loops such as "i n i n i n". These are produced
     /// by silence/noise and should never become persisted classroom content.
     static func accepted(_ text: String) -> String? {
-        let clean = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard !clean.isEmpty else { return nil }
+        let withoutSoundTags = text.replacingOccurrences(
+            of: #"(?i)[\[(](?:sad\s+)?(?:music|noise|sobs?|sobbing|scoffs?|laughter|applause|silence|inaudible)[\])]"#,
+            with: "",
+            options: .regularExpression
+        )
+        let clean = withoutSoundTags.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let soundOnly = clean.lowercased().trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
+        guard !soundOnly.isEmpty,
+              !["music", "sad music", "noise", "sad noise", "sobs", "scoffs", "silence", "inaudible"].contains(soundOnly)
+        else { return nil }
         let tokens = clean.split(separator: " ").map {
             $0.lowercased().trimmingCharacters(in: .punctuationCharacters)
         }.filter { !$0.isEmpty }

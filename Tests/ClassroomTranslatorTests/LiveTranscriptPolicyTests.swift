@@ -253,4 +253,14 @@ final class LiveTranscriptPolicyTests: XCTestCase {
             "Today we will compare plants and animals in class"
         )
     }
+
+    func testWhisperRejectsSoundDescriptionsButKeepsSpeech() {
+        for tag in ["[Music]", "(sad music).", "[Sobs]", "(Scoffs).", "\"sad noise\""] {
+            XCTAssertNil(WhisperTranscriptQuality.accepted(tag), tag)
+        }
+        XCTAssertEqual(WhisperTranscriptQuality.accepted("[Music] What is a data structure?"),
+                       "What is a data structure?")
+        XCTAssertEqual(WhisperTranscriptQuality.accepted("Music helps students learn."),
+                       "Music helps students learn.")
+    }
 }
