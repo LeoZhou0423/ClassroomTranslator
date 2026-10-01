@@ -163,6 +163,22 @@ final class LiveTranscriptPolicyTests: XCTestCase {
         XCTAssertFalse(WhisperDecodePolicy.containsSpeech(rms: 0.001))
     }
 
+    func testWhisperSegmentNeedsTwoConsecutiveSpeechBuffersFromSilence() {
+        XCTAssertFalse(WhisperDecodePolicy.shouldOpenSegment(
+            consecutiveSpeechBuffers: 1, hasSpeech: false))
+        XCTAssertTrue(WhisperDecodePolicy.shouldOpenSegment(
+            consecutiveSpeechBuffers: 2, hasSpeech: false))
+        XCTAssertTrue(WhisperDecodePolicy.shouldOpenSegment(
+            consecutiveSpeechBuffers: 3, hasSpeech: false))
+    }
+
+    func testWhisperOpenSegmentSurvivesSingleSpeechBuffer() {
+        XCTAssertTrue(WhisperDecodePolicy.shouldOpenSegment(
+            consecutiveSpeechBuffers: 1, hasSpeech: true))
+        XCTAssertTrue(WhisperDecodePolicy.shouldOpenSegment(
+            consecutiveSpeechBuffers: 0, hasSpeech: true))
+    }
+
     func testWhisperPartialRequiresNewAudioSincePreviousDecode() {
         XCTAssertFalse(WhisperDecodePolicy.shouldDecode(
             hasSpeech: true, decodeInFlight: false,

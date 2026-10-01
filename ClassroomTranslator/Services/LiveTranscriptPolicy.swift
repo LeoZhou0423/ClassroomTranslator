@@ -249,6 +249,16 @@ enum WhisperDecodePolicy {
         rms >= minimumSpeechRMS
     }
 
+    /// Buffers (each ~42 ms) of consecutive speech needed to open a segment
+    /// from silence. Two buffers filter isolated VM noise spikes that sit just
+    /// above the quiet-speech RMS floor; once a segment is open, single speech
+    /// buffers keep it alive via `hasSpeech`.
+    static let segmentOpenSpeechBuffers = 2
+
+    static func shouldOpenSegment(consecutiveSpeechBuffers: Int, hasSpeech: Bool) -> Bool {
+        hasSpeech || consecutiveSpeechBuffers >= segmentOpenSpeechBuffers
+    }
+
     static func shouldDecode(
         hasSpeech: Bool,
         decodeInFlight: Bool,

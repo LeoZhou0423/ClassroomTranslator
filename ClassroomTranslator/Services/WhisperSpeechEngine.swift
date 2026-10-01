@@ -66,6 +66,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private var decodeInFlight = false
     private var recognitionLocale = "en-US"
     private var hasSpeechInSegment = false
+    private var consecutiveSpeechBuffers = 0
     private var newSamplesSinceDecode = 0
     private var speechRevision = 0
     private var lastAudioDiagnosticsTime: TimeInterval = 0
@@ -118,6 +119,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             self.decodeInFlight = false
             self.recognitionLocale = localeIdentifier
             self.hasSpeechInSegment = false
+            self.consecutiveSpeechBuffers = 0
             self.newSamplesSinceDecode = 0
             self.speechRevision = 0
             self.lastAudioDiagnosticsTime = 0
@@ -228,6 +230,14 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         if !usesCoreML {
             guard WhisperModelStore.onnxModelFilesPresent() else { return false }
             let dir = WhisperModelStore.onnxModelDirectory
+            // A truncated-but-size-passing download decodes to silence forever,
+            // so record the exact bytes on disk next to the kit-ready line.
+            for item in WhisperModelStore.onnxFiles {
+                let path = dir.appendingPathComponent(item.name).path
+                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+                let size = (attrs?[.size] as? Int64) ?? 0
+                StartupLog.mark("whisper.onnx-file name=\(item.name) bytes=\(size) min=\(item.minBytes)")
+            }
             var config = sherpaOnnxOfflineRecognizerConfig(
                 featConfig: sherpaOnnxFeatureConfig(sampleRate: 16_000, featureDim: 80),
                 modelConfig: sherpaOnnxOfflineModelConfig(
@@ -253,11 +263,15 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         #if canImport(WhisperKit)
         do {
             // This branch only runs on a real CoreML-capable Mac. Keep feature
-            // extraction on CPU while moving the expensive encoder to ANE and
+            // extraction on CPU while moving the encoder to GPU and the
             // decoder to GPU. The VM takes the ONNX branch above.
+            // NOTE: do NOT route the encoder to the Neural Engine. On many
+            // Apple Silicon Macs the ANE encoder returns empty/garbled
+            // outputs and transcription comes back permanently empty while
+            // the VM's ONNX backend works fine.
             let compute = ModelComputeOptions(
                 melCompute: .cpuOnly,
-                audioEncoderCompute: .cpuAndNeuralEngine,
+                audioEncoderCompute: .cpuAndGPU,
                 textDecoderCompute: .cpuAndGPU
             )
             let kit = try await WhisperKit(model: modelName, computeOptions: compute, verbose: false, logLevel: .error)
@@ -280,29 +294,125 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     #if canImport(WhisperKit)
     private func transcribeWindow(_ samples: [Float], locale: String) async -> String? {
         let cached = Self.kitLock.withLock { Self.kitCache }
+        let accepted: String?
         if let recognizer = cached as? SherpaOnnxOfflineRecognizer {
             let result = recognizer.decode(samples: samples, sampleRate: 16_000)
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return WhisperTranscriptQuality.accepted(text)
-        }
-        let kit = cached as? WhisperKit
-        guard let kit else { return nil }
-        let lang = Self.whisperLanguage(from: locale)
-        let options = DecodingOptions(
-            task: .transcribe,
-            language: lang,
-            temperature: 0.0,
-            temperatureFallbackCount: 0
-        )
-        do {
-            let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
-            let text = results.map(\.text).joined()
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return WhisperTranscriptQuality.accepted(text)
-        } catch {
-            StartupLog.mark("whisper.transcribe-error \(error.localizedDescription)")
+            StartupLog.mark("whisper.raw backend=onnx chars=\(text.count) text=\(Self.escapedLog(text))")
+            accepted = WhisperTranscriptQuality.accepted(text)
+        } else if let kit = cached as? WhisperKit {
+            let lang = Self.whisperLanguage(from: locale)
+            let options = DecodingOptions(
+                task: .transcribe,
+                language: lang,
+                temperature: 0.0,
+                temperatureFallbackCount: 0
+            )
+            do {
+                let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
+                var text = results.map(\.text).joined()
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if text.isEmpty, samples.count >= 32_000 {
+                    // Greedy-only decode can yield an empty hypothesis on hard
+                    // audio. One fallback pass distinguishes "decoder failed"
+                    // from "the window is genuinely silent".
+                    var fallback = options
+                    fallback.temperatureFallbackCount = 5
+                    let retried = try await kit.transcribe(audioArray: samples, decodeOptions: fallback)
+                    text = retried.map(\.text).joined()
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    StartupLog.mark("whisper.temperature-fallback-retry chars=\(text.count)")
+                }
+                StartupLog.mark("whisper.raw backend=coreml chars=\(text.count) text=\(Self.escapedLog(text))")
+                accepted = WhisperTranscriptQuality.accepted(text)
+            } catch {
+                StartupLog.mark("whisper.transcribe-error \(error.localizedDescription)")
+                return nil
+            }
+        } else {
             return nil
         }
+        if accepted == nil {
+            // "Input has content but the output is empty" — persist the exact
+            // PCM Whisper saw so the anomaly can be replayed and listened to.
+            Self.dumpWindow(samples, reason: "empty")
+        }
+        return accepted
+    }
+
+    /// Truncated, single-line preview of a decoder result for StartupLog.
+    nonisolated private static func escapedLog(_ text: String?) -> String {
+        guard let text, !text.isEmpty else { return "-" }
+        let preview = text.count > 80 ? String(text.prefix(80)) + "…" : text
+        return preview
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+    }
+
+    /// Writes the decode window as 16 kHz mono PCM WAV under
+    /// Application Support/LingoClass/WhisperDumps. Enabled by default and
+    /// rate-limited to 20 files per process so a broken run cannot fill disk.
+    nonisolated private static func dumpWindow(_ samples: [Float], reason: String) {
+        let defaults = UserDefaults.standard
+        let enabled = defaults.object(forKey: "whisperDumpSuspiciousDecodes")
+            .map { ($0 as? Bool) ?? false } ?? true
+        guard enabled else { return }
+        dumpCountLock.lock()
+        guard dumpCount < 20 else {
+            dumpCountLock.unlock()
+            return
+        }
+        dumpCount += 1
+        dumpCountLock.unlock()
+
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first!
+            .appendingPathComponent("LingoClass/WhisperDumps", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("whisper-\(reason)-\(Int(Date().timeIntervalSince1970)).wav")
+        do {
+            try Self.writeWav16kMono(samples, to: url)
+            StartupLog.mark("whisper.dump reason=\(reason) samples=\(samples.count) path=\(url.path)")
+        } catch {
+            StartupLog.mark("whisper.dump-failed reason=\(reason) \(error.localizedDescription)")
+        }
+    }
+
+    private nonisolated(unsafe) static var dumpCount = 0
+    private static let dumpCountLock = NSLock()
+
+    nonisolated private static func writeWav16kMono(_ samples: [Float], to url: URL) throws {
+        let pcm = samples.map { sample -> Int16 in
+            let clamped = max(-1.0, min(1.0, sample))
+            return Int16((clamped * 32767.0).rounded())
+        }
+        var data = Data(capacity: 44 + pcm.count * 2)
+        func append(_ value: UInt32) {
+            var le = value.littleEndian
+            withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
+        }
+        func append16(_ value: UInt16) {
+            var le = value.littleEndian
+            withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
+        }
+        data.append(contentsOf: "RIFF".utf8)
+        append(UInt32(36 + pcm.count * 2))
+        data.append(contentsOf: "WAVE".utf8)
+        data.append(contentsOf: "fmt ".utf8)
+        append(16)
+        append16(1)                      // PCM
+        append16(1)                      // mono
+        append(16_000)                   // sample rate
+        append(32_000)                   // byte rate
+        append16(2)                      // block align
+        append16(16)                     // bits per sample
+        data.append(contentsOf: "data".utf8)
+        append(UInt32(pcm.count * 2))
+        pcm.withUnsafeBufferPointer { buffer in
+            data.append(contentsOf: UnsafeRawBufferPointer(buffer))
+        }
+        try data.write(to: url, options: .atomic)
     }
 
     private static func whisperLanguage(from locale: String) -> String {
@@ -453,9 +563,18 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             // and trailing silence used to trigger expensive empty decodes and
             // could evict the utterance while a slow model was still running.
             if speech { newSamplesSinceDecode += admitted }
+            consecutiveSpeechBuffers = speech ? consecutiveSpeechBuffers + 1 : 0
+            // Opening a segment needs two consecutive speech-classified buffers
+            // (~84 ms). A lone noise spike at the VM's quiet RMS floor used to
+            // open a segment and later emit a hallucinated Whisper final.
+            if speech && WhisperDecodePolicy.shouldOpenSegment(
+                consecutiveSpeechBuffers: consecutiveSpeechBuffers,
+                hasSpeech: hasSpeechInSegment
+            ) {
+                hasSpeechInSegment = true
+            }
             if speech {
                 lastSpeechTime = now
-                hasSpeechInSegment = true
                 speechRevision += 1
             }
             guard now - lastAudioDiagnosticsTime >= 1 else { return nil }
@@ -539,6 +658,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 lastEmitText = ""
                 accumulatedText = ""
                 hasSpeechInSegment = false
+                consecutiveSpeechBuffers = 0
                 newSamplesSinceDecode = 0
                 speechRevision = 0
             }
