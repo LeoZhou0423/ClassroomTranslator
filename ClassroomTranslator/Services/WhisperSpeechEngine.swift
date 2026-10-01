@@ -82,7 +82,11 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private nonisolated(unsafe) static var cpuFallbackKit: WhisperKit?
     private nonisolated(unsafe) static var cpuFallbackKitLoading = false
     private nonisolated(unsafe) static var coremlBroken = false
+    private nonisolated(unsafe) static var emptyCoremlDecodes = 0
     private static let fallbackLock = NSLock()
+    /// Consecutive speech windows that decoded to nothing before the session
+    /// abandons WhisperKit for the ONNX tiny decoder.
+    private static let maximumEmptyCoremlDecodes = 3
 
     var running: Bool {
         stateLock.withLock { isRunning }
@@ -232,36 +236,65 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     // MARK: - WhisperKit
 
+    /// Builds the sherpa-onnx tiny recognizer. Shared by the VM backend and by
+    /// the rescue path when WhisperKit/CoreML decodes nothing on a real Mac.
+    nonisolated private static func makeOnnxRecognizer() -> SherpaOnnxOfflineRecognizer? {
+        guard WhisperModelStore.onnxModelFilesPresent() else { return nil }
+        let dir = WhisperModelStore.onnxModelDirectory
+        // A truncated-but-size-passing download decodes to silence forever,
+        // so record the exact bytes on disk next to the kit-ready line.
+        for item in WhisperModelStore.onnxFiles {
+            let path = dir.appendingPathComponent(item.name).path
+            let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+            let size = (attrs?[.size] as? Int64) ?? 0
+            StartupLog.mark("whisper.onnx-file name=\(item.name) bytes=\(size) min=\(item.minBytes)")
+        }
+        var config = sherpaOnnxOfflineRecognizerConfig(
+            featConfig: sherpaOnnxFeatureConfig(sampleRate: 16_000, featureDim: 80),
+            modelConfig: sherpaOnnxOfflineModelConfig(
+                tokens: dir.appendingPathComponent("tiny-tokens.txt").path,
+                whisper: sherpaOnnxOfflineWhisperModelConfig(
+                    encoder: dir.appendingPathComponent("tiny-encoder.int8.onnx").path,
+                    decoder: dir.appendingPathComponent("tiny-decoder.int8.onnx").path,
+                    language: "",
+                    task: "transcribe"
+                ),
+                numThreads: 2,
+                provider: "cpu"
+            )
+        )
+        return SherpaOnnxOfflineRecognizer(config: &config)
+    }
+
+    /// WhisperKit returned nothing for real speech on both the accelerated and
+    /// the pure-CPU instance, so the failure is in something they share (the
+    /// downloaded CoreML model, its tokenizer or the mel path). Rescue the
+    /// session with the ONNX tiny decoder, which is verified to transcribe the
+    /// same audio correctly.
+    nonisolated private static func switchToOnnxRescueBackend() async {
+        if kitLock.withLock({ kitCacheKey == onnxRescueKey }) { return }
+        if !WhisperModelStore.onnxModelFilesPresent() {
+            await WhisperModelStore.shared.download()
+        }
+        guard let recognizer = makeOnnxRecognizer() else {
+            StartupLog.mark("whisper.onnx-rescue-unavailable")
+            return
+        }
+        kitLock.withLock {
+            kitCache = recognizer
+            kitCacheKey = onnxRescueKey
+        }
+        StartupLog.mark("whisper.onnx-rescue-ready backend=onnx-cpu")
+    }
+
+    private static let onnxRescueKey = "onnx:tiny-rescue"
+
     private static func loadKit() async -> Bool {
         let usesCoreML = WhisperModelTier.supportsWhisperRuntime()
         let desiredKey = usesCoreML ? "coreml:\(modelName)" : "onnx:tiny"
         if kitLock.withLock({ kitCache != nil && kitCacheKey == desiredKey }) { return true }
         if !usesCoreML {
-            guard WhisperModelStore.onnxModelFilesPresent() else { return false }
-            let dir = WhisperModelStore.onnxModelDirectory
-            // A truncated-but-size-passing download decodes to silence forever,
-            // so record the exact bytes on disk next to the kit-ready line.
-            for item in WhisperModelStore.onnxFiles {
-                let path = dir.appendingPathComponent(item.name).path
-                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-                let size = (attrs?[.size] as? Int64) ?? 0
-                StartupLog.mark("whisper.onnx-file name=\(item.name) bytes=\(size) min=\(item.minBytes)")
-            }
-            var config = sherpaOnnxOfflineRecognizerConfig(
-                featConfig: sherpaOnnxFeatureConfig(sampleRate: 16_000, featureDim: 80),
-                modelConfig: sherpaOnnxOfflineModelConfig(
-                    tokens: dir.appendingPathComponent("tiny-tokens.txt").path,
-                    whisper: sherpaOnnxOfflineWhisperModelConfig(
-                        encoder: dir.appendingPathComponent("tiny-encoder.int8.onnx").path,
-                        decoder: dir.appendingPathComponent("tiny-decoder.int8.onnx").path,
-                        language: "",
-                        task: "transcribe"
-                    ),
-                    numThreads: 2,
-                    provider: "cpu"
-                )
-            )
-            let recognizer = SherpaOnnxOfflineRecognizer(config: &config)
+            guard let recognizer = makeOnnxRecognizer() else { return false }
             kitLock.withLock {
                 kitCache = recognizer
                 kitCacheKey = desiredKey
@@ -375,6 +408,14 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                     StartupLog.mark(
                         "whisper.decode-stats avgLogprob=\(stat(segment.avgLogprob)) noSpeechProb=\(stat(segment.noSpeechProb)) temperature=\(stat(segment.temperature))"
                     )
+                    let tokenPreview = segment.tokens.prefix(24).map(String.init).joined(separator: ",")
+                    StartupLog.mark(
+                        "whisper.coreml-diag segments=\(first.segments.count) tokens=[\(tokenPreview)] modelFolder=\(activeKit.modelFolder?.path ?? "-") tokenizerFolder=\(activeKit.tokenizerFolder?.path ?? "-")"
+                    )
+                } else if let first = results.first {
+                    StartupLog.mark(
+                        "whisper.coreml-diag segments=0 text=\(Self.escapedLog(first.text)) modelFolder=\(activeKit.modelFolder?.path ?? "-")"
+                    )
                 }
                 if text.isEmpty, samples.count >= 32_000, !Self.coremlBroken {
                     // Greedy-only decode can yield an empty hypothesis on hard
@@ -406,6 +447,22 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                         rawText = cpuText
                         accepted = WhisperTranscriptQuality.accepted(cpuText)
                     }
+                }
+                // Both WhisperKit instances decoded real speech to nothing, so
+                // the shared model/tokenizer/mel path is at fault. After three
+                // such windows switch the session to the ONNX tiny decoder,
+                // which is verified to transcribe the same audio.
+                if (accepted == nil || rawText.isEmpty), samples.count >= 32_000 {
+                    let failures = Self.fallbackLock.withLock { () -> Int in
+                        emptyCoremlDecodes += 1
+                        return emptyCoremlDecodes
+                    }
+                    StartupLog.mark("whisper.coreml-empty-streak count=\(failures)")
+                    if failures >= Self.maximumEmptyCoremlDecodes {
+                        await Self.switchToOnnxRescueBackend()
+                    }
+                } else {
+                    Self.fallbackLock.withLock { emptyCoremlDecodes = 0 }
                 }
             } catch {
                 StartupLog.mark("whisper.transcribe-error \(error.localizedDescription)")
