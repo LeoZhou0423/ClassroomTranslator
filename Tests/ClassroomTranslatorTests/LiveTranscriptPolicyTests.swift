@@ -220,6 +220,25 @@ final class LiveTranscriptPolicyTests: XCTestCase {
         ))
     }
 
+    func testWhisperAudioWindowDoesNotGrowOnIdleSilence() {
+        var window = WhisperAudioWindow(sampleRate: 100)
+        for _ in 0..<20 {
+            XCTAssertEqual(window.append(Array(repeating: 0, count: 10), isSpeech: false), 0)
+        }
+        XCTAssertEqual(window.samples.count, 30)
+    }
+
+    func testWhisperAudioWindowPreservesSpeechAndCapsTrailingSilence() {
+        var window = WhisperAudioWindow(sampleRate: 100)
+        _ = window.append(Array(repeating: 0, count: 30), isSpeech: false)
+        XCTAssertEqual(window.append(Array(repeating: 1, count: 50), isSpeech: true), 50)
+        for _ in 0..<50 {
+            _ = window.append(Array(repeating: 0, count: 10), isSpeech: false)
+        }
+        XCTAssertEqual(window.samples.count, 180)
+        XCTAssertEqual(window.samples.filter { $0 == 1 }.count, 50)
+    }
+
     func testSpeechResamplerAveragesEach48kInterval() {
         XCTAssertEqual(
             AccentClassifier.resample([1, 1, 1, 3, 3, 3], from: 48_000, to: 16_000),

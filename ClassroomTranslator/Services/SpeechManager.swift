@@ -187,10 +187,12 @@ final class SpeechManager {
         defer { isStarting = false }
 
         StartupLog.mark("sm.start-recording locale=\(currentLanguageCode)")
-        guard AVCaptureDevice.default(for: .audio) != nil else {
-            StartupLog.mark("sm.no-input-device")
-            throw SpeechError.noInputDevice
-        }
+        // Do not gate AVAudioEngine on AVCaptureDevice discovery. Virtual HDA
+        // microphones (including the macOS VM used for product testing) can be
+        // available to Core Audio while AVCaptureDevice.default returns nil.
+        // Each engine validates the real input-node format and start result.
+        let captureDeviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "not-enumerated"
+        StartupLog.mark("sm.capture-device=\(captureDeviceName)")
 
         let phrases = currentContextPhrases()
         do {

@@ -196,6 +196,50 @@ enum WhisperTranscriptAccumulator {
     }
 }
 
+/// Keep idle silence from starting a decode, and preserve the utterance while
+/// a slow decoder runs after the user stops speaking.
+struct WhisperAudioWindow {
+    private(set) var samples: [Float] = []
+    private var hasSpeech = false
+    private var trailingSilence = 0
+    private let sampleRate: Int
+
+    init(sampleRate: Int = 16_000) { self.sampleRate = sampleRate }
+
+    @discardableResult
+    mutating func append(_ input: [Float], isSpeech: Bool) -> Int {
+        if !hasSpeech && !isSpeech {
+            samples.append(contentsOf: input)
+            let preRoll = sampleRate * 3 / 10
+            if samples.count > preRoll { samples.removeFirst(samples.count - preRoll) }
+            return 0
+        }
+        let count: Int
+        if isSpeech {
+            hasSpeech = true
+            trailingSilence = 0
+            count = input.count
+        } else {
+            count = min(input.count, max(0, sampleRate - trailingSilence))
+            trailingSilence += count
+        }
+        samples.append(contentsOf: input.prefix(count))
+        let maximum = sampleRate * WhisperSpeechWindowLimit.seconds
+        if samples.count > maximum { samples.removeFirst(samples.count - maximum) }
+        return count
+    }
+
+    mutating func reset() {
+        samples.removeAll(keepingCapacity: true)
+        hasSpeech = false
+        trailingSilence = 0
+    }
+}
+
+enum WhisperSpeechWindowLimit {
+    static let seconds = 8
+}
+
 enum WhisperDecodePolicy {
     /// The VM audio bridge commonly delivers speech around 0.002 RMS. Using a
     /// desktop-microphone threshold of 0.01 drops quiet words and sentence ends.

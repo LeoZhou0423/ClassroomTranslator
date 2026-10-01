@@ -727,7 +727,12 @@ final class StableRecordingViewController: NSViewController {
             startupStep?.kick()
         }
         speechManager.onSegmentRecognized = { [weak self] text, isFinal in
-            guard let self, self.sessionState.phase == .recording else { return }
+            guard let self else { return }
+            guard self.sessionState.phase == .recording else {
+                StartupLog.mark("ui.segment-dropped phase=\(self.sessionState.phase) final=\(isFinal) len=\(text.count)")
+                return
+            }
+            StartupLog.mark("ui.segment final=\(isFinal) len=\(text.count)")
             self.ensureActiveRecord()
             self.partialRevision += 1
             let eventRevision = self.partialRevision
@@ -804,11 +809,17 @@ final class StableRecordingViewController: NSViewController {
     }
 
     private func handleTranslation(_ response: LiveTranslationCoordinator.Response) {
-        guard response.request.generation == translationGeneration else { return }
+        guard response.request.generation == translationGeneration else {
+            StartupLog.mark("ui.tr-drop generation=\(response.request.generation) now=\(translationGeneration)")
+            return
+        }
         if response.request.kind == .partial {
             guard sessionState.phase == .recording,
                    response.request.revision >= minimumValidPartialRevision,
-                   partialText == (response.request.sourceSnapshot ?? response.request.text) else { return }
+                   partialText == (response.request.sourceSnapshot ?? response.request.text) else {
+                StartupLog.mark("ui.tr-partial-dropped phase=\(sessionState.phase) rev=\(response.request.revision) minRev=\(minimumValidPartialRevision)")
+                return
+            }
         }
         if !response.succeeded, response.request.kind == .partial {
             setStatus(
@@ -844,6 +855,7 @@ final class StableRecordingViewController: NSViewController {
                 refreshTranscript()
             }
         case .final:
+            StartupLog.mark("ui.tr-final succeeded=\(response.succeeded) len=\(response.translatedText.count) overlay=\(overlayVisible)")
             if courseExists, let record = activeRecord, let segmentID = response.request.segmentID {
                 historyStore.updateTranslation(for: segmentID, to: response.translatedText, in: record)
                 rebuildFinalizedText(from: record)

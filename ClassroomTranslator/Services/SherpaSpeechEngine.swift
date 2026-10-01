@@ -247,12 +247,10 @@ final class SherpaSpeechEngine: @unchecked Sendable, SpeechEngine {
         try await withCheckedThrowingContinuation { (continuationStart: CheckedContinuation<Void, Error>) in
             queue.async {
                 do {
-                    guard AVCaptureDevice.default(for: .audio) != nil else {
-                        throw AudioEngineError.noInputDevice
-                    }
                     let engine = AVAudioEngine()
                     let input = engine.inputNode
                     let format = input.outputFormat(forBus: 0)
+                    StartupLog.mark("sherpa.input-format rate=\(format.sampleRate) channels=\(format.channelCount) standard=\(format.isStandard)")
                     guard format.sampleRate > 0,
                           format.channelCount > 0,
                           format.streamDescription.pointee.mBytesPerFrame > 0,

@@ -59,6 +59,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     /// 16 kHz mono 滚动窗（最多 8s，控制 VM 解码延迟和内存）。
     private var sampleBuffer: [Float] = []
+    private var audioWindow = WhisperAudioWindow()
     private var lastEmitText = ""
     private var accumulatedText = ""
     private var lastSpeechTime: TimeInterval = 0
@@ -67,6 +68,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private var hasSpeechInSegment = false
     private var newSamplesSinceDecode = 0
     private var speechRevision = 0
+    private var lastAudioDiagnosticsTime: TimeInterval = 0
 
     private nonisolated(unsafe) static var kitCache: AnyObject?
     private nonisolated(unsafe) static var kitCacheKey: String?
@@ -109,6 +111,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         stateLock.withLock {
             self.recognitionHandler = onRecognition
             self.sampleBuffer = []
+            self.audioWindow.reset()
             self.lastEmitText = ""
             self.accumulatedText = ""
             self.lastSpeechTime = 0
@@ -117,6 +120,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             self.hasSpeechInSegment = false
             self.newSamplesSinceDecode = 0
             self.speechRevision = 0
+            self.lastAudioDiagnosticsTime = 0
         }
 
         onModelStatus(String(format: String(localized: "Loading %@ speech model…"), Self.displayName))
@@ -333,6 +337,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                     self.engine = engine
                     let input = engine.inputNode
                     let format = input.outputFormat(forBus: 0)
+                    StartupLog.mark("whisper.input-format rate=\(format.sampleRate) channels=\(format.channelCount) standard=\(format.isStandard)")
                     guard format.sampleRate > 0, format.channelCount > 0 else {
                         throw AudioEngineError.noInputDevice
                     }
@@ -436,23 +441,31 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
         let now = Date().timeIntervalSince1970
         let rms = samples.reduce(0) { $0 + $1 * $1 }
+        let rmsValue = sqrt(rms / Float(max(samples.count, 1)))
         let speech = WhisperDecodePolicy.containsSpeech(
-            rms: sqrt(rms / Float(max(samples.count, 1)))
+            rms: rmsValue
         )
 
-        stateLock.withLock {
-            sampleBuffer.append(contentsOf: samples)
-            newSamplesSinceDecode += samples.count
-            // 滚动窗上限：避免内存和解码成本无限涨（VM 上易 OOM/卡死）
-            let maxSamples = Self.maxWindowSeconds * 16_000
-            if sampleBuffer.count > maxSamples {
-                sampleBuffer.removeFirst(sampleBuffer.count - maxSamples)
-            }
+        let diagnostics: (buffered: Int, fresh: Int, inFlight: Bool)? = stateLock.withLock {
+            let admitted = audioWindow.append(samples, isSpeech: speech)
+            sampleBuffer = audioWindow.samples
+            // Only actual speech should advance the periodic decode clock. Idle
+            // and trailing silence used to trigger expensive empty decodes and
+            // could evict the utterance while a slow model was still running.
+            if speech { newSamplesSinceDecode += admitted }
             if speech {
                 lastSpeechTime = now
                 hasSpeechInSegment = true
                 speechRevision += 1
             }
+            guard now - lastAudioDiagnosticsTime >= 1 else { return nil }
+            lastAudioDiagnosticsTime = now
+            return (sampleBuffer.count, newSamplesSinceDecode, decodeInFlight)
+        }
+        if let diagnostics {
+            StartupLog.mark(
+                "whisper.audio rms=\(String(format: "%.5f", rmsValue)) speech=\(speech) buffered=\(diagnostics.buffered) freshSpeech=\(diagnostics.fresh) decoding=\(diagnostics.inFlight)"
+            )
         }
 
         let shouldDecode: Bool = stateLock.withLock {
@@ -522,6 +535,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
             if isFinal {
                 sampleBuffer = []
+                audioWindow.reset()
                 lastEmitText = ""
                 accumulatedText = ""
                 hasSpeechInSegment = false
@@ -542,6 +556,9 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             }
             return (result, followUp)
         }
+        StartupLog.mark(
+            "whisper.commit decodedChars=\(text?.count ?? 0) emitted=\(outcome.emission != nil) followUp=\(outcome.followUp != nil)"
+        )
         // Never invoke app callbacks while holding the engine state lock.
         if let (handler, text, isFinal) = outcome.emission {
             handler(text, isFinal)

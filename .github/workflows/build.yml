@@ -22,6 +22,9 @@ jobs:
     - name: Build Release
       run: swift build -c release
 
+    - name: Build Intel Release for local macOS VM
+      run: swift build -c release --arch x86_64 --scratch-path .build-intel
+
     - name: Test
       run: swift test
 
@@ -29,7 +32,8 @@ jobs:
       run: |
         mkdir -p LingoClass.app/Contents/MacOS
         mkdir -p LingoClass.app/Contents/Resources
-        cp .build/release/ClassroomTranslator LingoClass.app/Contents/MacOS/LingoClass
+        lipo -create .build/release/ClassroomTranslator .build-intel/x86_64-apple-macosx/release/ClassroomTranslator -output LingoClass.app/Contents/MacOS/LingoClass
+        lipo -info LingoClass.app/Contents/MacOS/LingoClass
         if [ -d .build/release/ClassroomTranslator_ClassroomTranslator.bundle ]; then
           # 资源包放 Contents/Resources（签名合规）。应用侧用 AppResourceBundle.swift 的
           # Bundle.lingoResources 解析此位置。不能用 SwiftPM 生成的 Bundle.module（只查
@@ -90,6 +94,6 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: LingoClass-macOS-Apple-Silicon
+        name: LingoClass-macOS-Universal
         path: LingoClass.dmg
         retention-days: 30
