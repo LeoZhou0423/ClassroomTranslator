@@ -295,9 +295,11 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private func transcribeWindow(_ samples: [Float], locale: String) async -> String? {
         let cached = Self.kitLock.withLock { Self.kitCache }
         let accepted: String?
+        var rawText = ""
         if let recognizer = cached as? SherpaOnnxOfflineRecognizer {
             let result = recognizer.decode(samples: samples, sampleRate: 16_000)
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            rawText = text
             StartupLog.mark("whisper.raw backend=onnx chars=\(text.count) text=\(Self.escapedLog(text))")
             accepted = WhisperTranscriptQuality.accepted(text)
         } else if let kit = cached as? WhisperKit {
@@ -323,6 +325,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     StartupLog.mark("whisper.temperature-fallback-retry chars=\(text.count)")
                 }
+                rawText = text
                 StartupLog.mark("whisper.raw backend=coreml chars=\(text.count) text=\(Self.escapedLog(text))")
                 accepted = WhisperTranscriptQuality.accepted(text)
             } catch {
@@ -335,7 +338,10 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         if accepted == nil {
             // "Input has content but the output is empty" — persist the exact
             // PCM Whisper saw so the anomaly can be replayed and listened to.
-            Self.dumpWindow(samples, reason: "empty")
+            // The file name already tells the two cases apart:
+            //   empty    = the decoder returned no text at all
+            //   filtered = the decoder returned text the quality gate rejected
+            Self.dumpWindow(samples, reason: rawText.isEmpty ? "empty" : "filtered-\(rawText.count)chars")
         }
         return accepted
     }
