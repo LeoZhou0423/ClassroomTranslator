@@ -462,15 +462,15 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 // which is verified to transcribe the same audio.
                 if (accepted == nil || rawText.isEmpty), samples.count >= 32_000 {
                     let failures = Self.fallbackLock.withLock { () -> Int in
-                        emptyCoremlDecodes += 1
-                        return emptyCoremlDecodes
+                        Self.emptyCoremlDecodes += 1
+                        return Self.emptyCoremlDecodes
                     }
                     StartupLog.mark("whisper.coreml-empty-streak count=\(failures)")
                     if failures >= Self.maximumEmptyCoremlDecodes {
                         await Self.switchToOnnxRescueBackend()
                     }
                 } else {
-                    Self.fallbackLock.withLock { emptyCoremlDecodes = 0 }
+                    Self.fallbackLock.withLock { Self.emptyCoremlDecodes = 0 }
                 }
             } catch {
                 StartupLog.mark("whisper.transcribe-error \(error.localizedDescription)")
