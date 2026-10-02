@@ -158,7 +158,7 @@ final class SubtitleWindowController: NSWindowController {
         let value = NSMutableAttributedString()
         for row in latestRows {
             if value.length > 0 { value.append(NSAttributedString(string: "\n\n")) }
-            let original = SubtitleCueBuilder.cue(from: row.original, maximumWords: configuration.maximumWords, maximumCharacters: 120)
+            let original = row.original
             let translated = row.translated
             if configuration.showOriginal, !original.isEmpty {
                 value.append(NSAttributedString(

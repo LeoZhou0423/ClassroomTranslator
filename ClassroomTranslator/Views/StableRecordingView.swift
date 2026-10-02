@@ -706,7 +706,7 @@ final class StableRecordingViewController: NSViewController {
         speechManager.onAudioLevelChanged = { [weak self] level in
             guard let self, sessionState.phase == .recording else { return }
             levelIndicator.doubleValue = Double(level)
-            if level > 0.03 && partialText.isEmpty {
+            if level > 0.03 && utteranceLedger.snapshot.isEmpty {
                 setStatus(String(localized: "Sound detected · recognizing…"))
             }
         }

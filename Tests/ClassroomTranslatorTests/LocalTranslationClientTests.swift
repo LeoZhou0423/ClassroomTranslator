@@ -2,14 +2,18 @@ import XCTest
 @testable import ClassroomTranslator
 
 final class LocalTranslationClientTests: XCTestCase {
+    @MainActor
     func testRequestUsesLocalModelAndRejectsEmptyOrTruncatedResponses() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [TranslationMockProtocol.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         let client = LocalTranslationClient(session: session)
-        let translated = try await client.translate("During office hours.", source: "en-US", target: "zh-Hans", context: "Course")
+        var drafts: [String] = []
+        let translated = try await client.translate("During office hours.", source: "en-US", target: "zh-Hans", context: "Course", onProgress: { drafts.append($0) })
         XCTAssertEqual(translated, "在答疑时间。")
+        XCTAssertEqual(drafts.first, "在答")
+        XCTAssertEqual(drafts.last, translated)
         do {
             _ = try await client.translate("EMPTY", source: "en", target: "zh-Hans", context: "")
             XCTFail("Empty output must not be reported as successful translation")
@@ -81,10 +85,17 @@ private final class TranslationMockProtocol: URLProtocol {
         let prompt = messages?.first?["content"] ?? ""
         let empty = prompt.hasSuffix("EMPTY")
         let truncated = prompt.hasSuffix("TRUNCATED")
-        let result: [String: Any] = ["message": ["content": empty ? "" : "在答疑时间。"], "done": true, "done_reason": truncated ? "length" : "stop"]
-        let data = try! JSONSerialization.data(withJSONObject: result)
-        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: data)
+        let chunks: [[String: Any]] = [
+            ["message": ["content": empty ? "" : "在答"], "done": false],
+            ["message": ["content": empty ? "" : "疑时间。"], "done": false],
+            ["message": ["content": ""], "done": true, "done_reason": truncated ? "length" : "stop"]
+        ]
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/x-ndjson"])!, cacheStoragePolicy: .notAllowed)
+        for chunk in chunks {
+            var data = try! JSONSerialization.data(withJSONObject: chunk)
+            data.append(0x0A)
+            client?.urlProtocol(self, didLoad: data)
+        }
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
