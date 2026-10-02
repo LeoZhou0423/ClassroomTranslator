@@ -32,6 +32,16 @@ protocol SpeechEngine: AnyObject {
     ) async throws
 
     func stop()
+    /// Last decoded text, including an emission queued for the UI actor.
+    func retainedTranscript() -> String
+    func stopRetainingTranscript() -> String
+    func acknowledgeTranscript(_ text: String)
+}
+
+extension SpeechEngine {
+    func stopRetainingTranscript() -> String { let text = retainedTranscript(); stop(); return text }
+    func retainedTranscript() -> String { "" }
+    func acknowledgeTranscript(_ text: String) {}
 }
 
 /// 引擎选择（设置 key `speechEngine`，默认 apple）。

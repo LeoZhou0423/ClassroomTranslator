@@ -257,6 +257,7 @@ final class SpeechManager {
             debounceWorkItem?.cancel()
             debounceWorkItem = nil
             commitFinal(text)
+            driver.acknowledgeTranscript(text)
         } else {
             updatePartial(fullText: text)
         }
@@ -269,9 +270,9 @@ final class SpeechManager {
             // silence boundary. Comparing it with the entire session history
             // incorrectly deletes legitimate repetitions (for example a
             // teacher asks the class to repeat the same sentence).
-            delta = finalText
+            delta = WhisperTranscriptAccumulator.finalCandidate(accumulated: lastPartialText, decoded: finalText)
             committedText = WhisperTranscriptAccumulator.appendingUtterance(
-                finalText,
+                delta,
                 to: committedText
             )
         } else if committedText.isEmpty {
@@ -310,12 +311,9 @@ final class SpeechManager {
             return
         }
 
-        let units = SentenceSplitter.commitUnits(from: cleaned)
-        for unit in units {
-            let piece = unit.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !piece.isEmpty else { continue }
-            onSegmentRecognized?(piece, true)
-        }
+        // Send one complete utterance snapshot. The presentation ledger owns
+        // sentence identities; splitting callbacks here prematurely resets it.
+        onSegmentRecognized?(cleaned, true)
 
         currentText = ""
         resetPauseModel()
@@ -336,7 +334,9 @@ final class SpeechManager {
         lastPartialText = fullText
 
         var text: String
-        if committedText.isEmpty {
+        if effectiveEngineKind == .whisper || committedText.isEmpty {
+            // Whisper snapshots belong only to the current utterance, never
+            // to the whole session history (legitimate repetitions must survive).
             text = fullText
         } else {
             text = RecognitionTextDelta.unseenText(after: committedText, in: fullText)
@@ -383,6 +383,14 @@ final class SpeechManager {
 
     private func pushContextUpdate() {
         driver.updateContext(phrases: currentContextPhrases())
+    }
+
+    func stopRecordingPreservingTranscript() -> String {
+        let preview = effectiveEngineKind == .whisper ? lastPartialText :
+            RecognitionTextDelta.unseenText(after: committedText, in: lastPartialText)
+        let retained = driver.stopRetainingTranscript()
+        stopRecording()
+        return WhisperTranscriptAccumulator.finalCandidate(accumulated: preview, decoded: retained)
     }
 
     func stopRecording() {

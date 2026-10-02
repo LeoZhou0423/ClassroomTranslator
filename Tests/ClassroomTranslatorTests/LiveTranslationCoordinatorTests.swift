@@ -3,6 +3,48 @@ import XCTest
 
 final class LiveTranslationCoordinatorTests: XCTestCase {
     @MainActor
+    func testStreamingProgressStaysBoundToEachSegmentAndCachesOnlyCompletion() async {
+        var calls = 0
+        var outputs: [String] = []
+        var completed: [Bool] = []
+        let coordinator = LiveTranslationCoordinator(streamingTranslator: { text, _, progress in
+            calls += 1
+            progress("draft:" + text)
+            return "done:" + text
+        })
+        for text in ["First sentence.", "Second sentence.", "First sentence."] {
+            coordinator.submit(.init(kind: .final, text: text, cue: "", revision: 1, generation: 1, segmentID: UUID()) {
+                outputs.append($0.translatedText)
+                completed.append($0.isComplete)
+            })
+            await coordinator.waitUntilIdle()
+        }
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(outputs, ["draft:First sentence.", "done:First sentence.", "draft:Second sentence.", "done:Second sentence.", "done:First sentence."])
+        XCTAssertEqual(completed, [false, true, false, true, true])
+    }
+
+    @MainActor
+    func testRemovedSegmentRejectsLateStreamAndCompletion() async {
+        var continuation: CheckedContinuation<String, Never>?
+        var progress: (@MainActor (String) -> Void)?
+        var outputs: [String] = []
+        let coordinator = LiveTranslationCoordinator(streamingTranslator: { _, _, callback in
+            progress = callback
+            return await withCheckedContinuation { continuation = $0 }
+        })
+        let id = UUID()
+        coordinator.submit(.init(kind: .final, text: "Old fragment.", cue: "", revision: 1, generation: 1, segmentID: id) { outputs.append($0.translatedText) })
+        for _ in 0..<200 where continuation == nil { await Task.yield() }
+        guard let continuation else { XCTFail("Translator never started"); coordinator.cancelAll(); return }
+        coordinator.invalidateSegments([id])
+        progress?("stale draft")
+        continuation.resume(returning: "stale final")
+        await coordinator.waitUntilIdle()
+        XCTAssertTrue(outputs.isEmpty)
+    }
+
+    @MainActor
     func testRevisionSupersedesInFlightAndPendingTranslations() async {
         var continuation: CheckedContinuation<String, Never>?
         var inputs: [String] = []

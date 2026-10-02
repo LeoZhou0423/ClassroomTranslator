@@ -63,6 +63,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private var sampleBuffer: [Float] = []
     private var audioWindow = WhisperAudioWindow()
     private var lastEmitText = ""
+    private var unacknowledgedFinals: [String] = []
     private var accumulatedText = ""
     private var lastSpeechTime: TimeInterval = 0
     private var decodeInFlight = false
@@ -126,6 +127,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
         stateLock.withLock {
             self.recognitionHandler = onRecognition
+            self.unacknowledgedFinals = []
             self.sampleBuffer = []
             self.audioWindow.reset()
             self.lastEmitText = ""
@@ -211,15 +213,30 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         StartupLog.mark("whisper.start-done")
     }
 
-    func stop() {
+    func retainedTranscript() -> String {
+        stateLock.withLock { (unacknowledgedFinals + [accumulatedText]).filter { !$0.isEmpty }.joined(separator: " ") }
+    }
+
+    func acknowledgeTranscript(_ text: String) {
         stateLock.withLock {
+            if let index = unacknowledgedFinals.firstIndex(of: text) { unacknowledgedFinals.remove(at: index) }
+        }
+    }
+
+    func stop() { _ = stopRetainingTranscript() }
+
+    func stopRetainingTranscript() -> String {
+        let retained = stateLock.withLock {
+            let text = (unacknowledgedFinals + [accumulatedText]).filter { !$0.isEmpty }.joined(separator: " ")
             stopEpoch += 1
             isRunning = false
             recognitionHandler = nil
+            accumulatedText = ""
+            unacknowledgedFinals = []
+            return text
         }
-        queue.sync {
-            self.teardownEngineOnQueue()
-        }
+        queue.sync { self.teardownEngineOnQueue() }
+        return retained
     }
 
     private func stopAsync() async {
@@ -854,6 +871,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             }
 
             if isFinal {
+                if !stableText.isEmpty { unacknowledgedFinals.append(stableText) }
                 sampleBuffer = []
                 audioWindow.reset()
                 lastEmitText = ""

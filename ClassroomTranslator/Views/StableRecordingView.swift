@@ -73,6 +73,9 @@ final class StableRecordingViewController: NSViewController {
     private var renderedFinalizedText = ""
     private var liveTranscriptRange: NSRange?
     private var hasRenderedTranscript = false
+    private var utteranceLedger = LiveUtteranceLedger()
+    private var rowBindings: [UUID: (segmentID: UUID, prefix: String)] = [:]
+    private var translationDrafts: [UUID: String] = [:]
     private var partialText = ""
     private var partialTranslation = ""
     private var lastSubmittedPartialTranslationUnit = ""
@@ -107,9 +110,9 @@ final class StableRecordingViewController: NSViewController {
         self.translationManager = translationManager
         self.onClose = onClose
         super.init(nibName: nil, bundle: nil)
-        translationCoordinator = LiveTranslationCoordinator(contextualTranslator: { [weak self] text, context in
+        translationCoordinator = LiveTranslationCoordinator(streamingTranslator: { [weak self] text, context, progress in
             guard let self else { return "" }
-            return await self.translationManager.translate(text, context: context, backend: self.translationBackend)
+            return await self.translationManager.translate(text, context: context, backend: self.translationBackend, onProgress: progress)
         })
     }
 
@@ -499,7 +502,7 @@ final class StableRecordingViewController: NSViewController {
 
     @objc private func toggleOverlayPressed() {
         overlayVisible.toggle()
-        if overlayVisible { subtitleWindow.showWindow() } else { subtitleWindow.hideWindow() }
+        if overlayVisible { subtitleWindow.showWindow(); refreshOverlay() } else { subtitleWindow.hideWindow() }
         overlayButton.title = overlayVisible ? String(localized: "Hide Overlay") : String(localized: "Show Overlay")
     }
 
@@ -742,77 +745,81 @@ final class StableRecordingViewController: NSViewController {
             self.ensureActiveRecord()
             self.partialRevision += 1
             let eventRevision = self.partialRevision
-            if isFinal {
-                // A final recognition snapshot supersedes its volatile partial.
-                // Otherwise pause/end can save the old partial a second time.
-                self.partialText = ""
-                self.partialTranslation = ""
-                self.lastSubmittedPartialTranslationUnit = ""
-                self.enqueueFinal(text, revision: eventRevision)
-            } else {
-                self.partialText = text
-                if !LivePartialTranslationPolicy.containsUnit(self.lastSubmittedPartialTranslationUnit, in: text) {
-                    self.partialTranslation = ""
-                }
-                self.refreshTranscript()
-                if self.overlayVisible {
-                    self.subtitleWindow.showStableCue(
-                        original: text, translated: self.partialTranslation,
-                        speaker: self.speakerEngine?.currentLabel,
-                        aliases: self.activeRecord?.aliasMap ?? [:]
-                    )
-                }
-                self.submitPartialTranslation(text, revision: eventRevision)
+            self.applyRecognitionSnapshot(text, final: isFinal, revision: eventRevision)
+        }
+    }
+
+    private func applyRecognitionSnapshot(_ text: String, final: Bool, revision: Int) {
+        guard courseExists else { return }
+        ensureActiveRecord()
+        guard let record = activeRecord else { return }
+        let update = utteranceLedger.ingest(text, final: final)
+        let removedSegments = Set(update.removedIDs.compactMap { rowBindings[$0]?.segmentID })
+        if !removedSegments.isEmpty {
+            historyStore.removeSegments(removedSegments, in: record)
+            translationCoordinator.invalidateSegments(removedSegments)
+            for id in removedSegments { translationDrafts.removeValue(forKey: id) }
+            if deferredFinalRequest?.segmentID.map(removedSegments.contains) == true {
+                fragmentTranslationTask?.cancel()
+                deferredFinalRequest = nil
             }
         }
-    }
-
-    private func enqueueFinal(_ text: String, revision: Int) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, courseExists else { return }
-        lastEnqueuedFinalRevision = revision
-        ensureActiveRecord()
-        let units = StableSentenceUnits.split(trimmed)
-        for unit in units {
-            enqueueFinalUnit(unit, revision: revision)
+        for id in update.removedIDs { rowBindings.removeValue(forKey: id) }
+        for row in update.rows {
+            let segmentID: UUID
+            let original: String
+            if let binding = rowBindings[row.id] {
+                segmentID = binding.segmentID
+                original = binding.prefix + row.original
+                let previous = record.segments.first(where: { $0.id == segmentID })
+                historyStore.reviseOriginal(for: segmentID, to: original, in: record, isFinal: row.isFinal)
+                if row.isFinal, previous?.isFinal == false { speakerEngine?.segmentsCommitted([segmentID]) }
+                guard previous?.original != original else { continue }
+            } else if rowBindings.isEmpty, let previous = record.segments.last,
+                      let joined = continuation(of: previous, with: row.original) {
+                segmentID = previous.id
+                original = joined
+                rowBindings[row.id] = (segmentID, String(joined.dropLast(row.original.count)))
+                historyStore.reviseOriginal(for: segmentID, to: original, in: record, isFinal: row.isFinal)
+            } else {
+                segmentID = row.id
+                original = row.original
+                rowBindings[row.id] = (segmentID, "")
+                historyStore.addSegmentIfNew(TranscriptSegment(id: segmentID, original: original, isFinal: row.isFinal, speaker: speakerEngine?.currentLabel), to: record)
+                if row.isFinal { speakerEngine?.segmentsCommitted([segmentID]) }
+            }
+            translationDrafts.removeValue(forKey: segmentID)
+            scheduleFinalTranslation(.init(
+                kind: .final, text: original,
+                cue: SubtitleCueBuilder.cue(from: original, maximumWords: subtitleMaximumWords),
+                revision: revision, generation: translationGeneration, segmentID: segmentID,
+                context: translationContext(excluding: segmentID),
+                completion: { [weak self] response in self?.handleTranslation(response) }
+            ))
         }
-        if partialText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
-            partialText = ""
-            partialTranslation = ""
-            lastSubmittedPartialTranslationUnit = ""
-        }
-        refreshTranscript()
-        if overlayVisible {
-            subtitleWindow.showStableCue(
-                original: activeRecord?.segments.last?.original ?? trimmed,
-                translated: "", speaker: speakerEngine?.currentLabel,
-                aliases: activeRecord?.aliasMap ?? [:]
-            )
-        }
-    }
-
-    private func enqueueFinalUnit(_ sentence: String, revision: Int) {
-        guard let record = activeRecord else { return }
-        let speaker = speakerEngine?.currentLabel
-        let segment: TranscriptSegment
-        if let previous = record.segments.last,
-           let joined = continuation(of: previous, with: sentence) {
-            historyStore.reviseOriginal(for: previous.id, to: joined, in: record)
-            segment = record.segments.last!
-            StartupLog.mark("ui.segment-revised chars=\(joined.count)")
-        } else {
-            segment = TranscriptSegment(original: sentence, translated: "", speaker: speaker)
-            historyStore.addSegmentIfNew(segment, to: record)
-            speakerEngine?.segmentsCommitted([segment.id])
-        }
+        StartupLog.mark("ui.snapshot final=\(final) inputChars=\(text.count) retainedChars=\(utteranceLedger.snapshot.count) rows=\(update.rows.count)")
+        partialText = update.tail
+        partialTranslation = ""
         rebuildFinalizedText(from: record)
-        let cue = SubtitleCueBuilder.cue(from: segment.original, maximumWords: subtitleMaximumWords)
-        scheduleFinalTranslation(.init(
-            kind: .final, text: segment.original, cue: cue, revision: revision,
-            generation: translationGeneration, segmentID: segment.id,
-            context: translationContext(excluding: segment.id),
-            completion: { [weak self] response in self?.handleTranslation(response) }
-        ))
+        refreshTranscript()
+        refreshOverlay()
+        if final {
+            utteranceLedger.reset()
+            rowBindings.removeAll()
+            lastEnqueuedFinalRevision = revision
+        }
+    }
+
+    private func refreshOverlay() {
+        guard overlayVisible, courseExists else { return }
+        var rows = (activeRecord?.segments ?? []).suffix(20).map {
+            SubtitlePair(id: $0.id, original: $0.original,
+                         translated: translationDrafts[$0.id] ?? $0.translated, speaker: $0.speaker)
+        }
+        if !partialText.isEmpty {
+            rows.append(SubtitlePair(id: nil, original: partialText, translated: "", speaker: speakerEngine?.currentLabel))
+        }
+        subtitleWindow.showTranscriptRows(rows, aliases: activeRecord?.aliasMap ?? [:])
     }
 
     private func continuation(of previous: TranscriptSegment, with incoming: String) -> String? {
@@ -865,33 +872,6 @@ final class StableRecordingViewController: NSViewController {
         return "Course: " + course.name + "\nRecent speech: " + String(recent.map(\.original).joined(separator: " ").suffix(600))
     }
 
-    private func submitPartialTranslation(_ text: String, revision: Int) {
-        // Growing hypotheses used to resend their complete text every 700 ms.
-        // Translate only the newest punctuation-closed unit; the final request
-        // then reuses the coordinator cache if recognition leaves it unchanged.
-        guard let stableUnit = StableSentenceUnits.split(text, includeTrailingFragment: false).last,
-              !TranscriptContinuationPolicy.needsContinuation(stableUnit),
-              stableUnit != lastSubmittedPartialTranslationUnit else { return }
-        if let previous = activeRecord?.segments.last,
-           continuation(of: previous, with: stableUnit) != nil {
-            // Do not translate a dependent clause in isolation and then repeat
-            // that work when the final repairs its preceding segment.
-            return
-        }
-        lastSubmittedPartialTranslationUnit = stableUnit
-        let cue = SubtitleCueBuilder.cue(from: stableUnit, maximumWords: subtitleMaximumWords)
-        translationCoordinator.submit(.init(
-            kind: .partial,
-            text: stableUnit,
-            cue: cue,
-            revision: revision,
-            generation: translationGeneration,
-            sourceSnapshot: text,
-            context: translationContext(),
-            completion: { [weak self] response in self?.handleTranslation(response) }
-        ))
-    }
-
     private func handleTranslation(_ response: LiveTranslationCoordinator.Response) {
         guard response.request.generation == translationGeneration else {
             StartupLog.mark("ui.tr-drop generation=\(response.request.generation) now=\(translationGeneration)")
@@ -912,46 +892,19 @@ final class StableRecordingViewController: NSViewController {
             )
             return
         }
-        if response.succeeded, overlayVisible,
-           response.request.kind == .partial || response.request.revision >= partialRevision {
-            // task-4：字幕带说话人前缀（final 用段落里的精确标签，partial 用当前标签）。
-            let speaker: String?
-            if response.request.kind == .final,
-               let segmentID = response.request.segmentID,
-               let record = activeRecord {
-                speaker = record.segments.first(where: { $0.id == segmentID })?.speaker
-            } else {
-                speaker = speakerEngine?.currentLabel
-            }
-            subtitleWindow.showStableCue(
-                original: response.request.kind == .partial ? partialText : response.request.text,
-                translated: response.translatedText,
-                speaker: speaker,
-                // task-10：会话上下文（本记录人员映射）传入字幕悬浮窗；
-                // 新录记录 speakerNames=nil → [:] 零解析开销。
-                aliases: activeRecord?.aliasMap ?? [:]
-            )
-        }
-
-        switch response.request.kind {
-        case .partial:
-            if LivePartialTranslationPolicy.containsUnit(response.request.text, in: partialText) {
-                partialTranslation = response.translatedText
-                refreshTranscript()
-            }
-        case .final:
-            StartupLog.mark("ui.tr-final succeeded=\(response.succeeded) len=\(response.translatedText.count) overlay=\(overlayVisible)")
-            if courseExists, let record = activeRecord, let segmentID = response.request.segmentID {
+        if response.request.kind == .final,
+           courseExists, let record = activeRecord, let segmentID = response.request.segmentID {
+            guard record.segments.first(where: { $0.id == segmentID })?.original == response.request.text else { return }
+            if response.isComplete {
+                translationDrafts.removeValue(forKey: segmentID)
                 historyStore.updateTranslation(for: segmentID, to: response.translatedText, in: record, expectedOriginal: response.request.text)
-                rebuildFinalizedText(from: record)
+            } else {
+                translationDrafts[segmentID] = response.translatedText
             }
-            if partialText.trimmingCharacters(in: .whitespacesAndNewlines) == response.request.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                || partialRevision == response.request.revision {
-                partialText = ""
-                partialTranslation = ""
-            }
+            rebuildFinalizedText(from: record)
             refreshTranscript()
-            if sessionState.phase == .paused || sessionState.phase == .interrupted {
+            refreshOverlay()
+            if response.isComplete, sessionState.phase == .paused || sessionState.phase == .interrupted {
                 checkpointActiveRecord()
             }
         }
@@ -971,10 +924,12 @@ final class StableRecordingViewController: NSViewController {
 
     private func queueCurrentPartialIfNeeded() {
         defer { flushDeferredTranslation() }
-        let text = partialText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, partialRevision != lastEnqueuedFinalRevision else { return }
+        let retained = speechManager.stopRecordingPreservingTranscript()
+        let text = retained.isEmpty ? utteranceLedger.snapshot : retained
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         partialRevision += 1
-        enqueueFinal(text, revision: partialRevision)
+        applyRecognitionSnapshot(text, final: true, revision: partialRevision)
+        StartupLog.mark("ui.pause-snapshot-preserved chars=\(text.count)")
     }
 
     /// VIS-02：原文 13pt / secondary，译文 15pt / label —— 一眼能分清哪句是译文。
@@ -1035,7 +990,7 @@ final class StableRecordingViewController: NSViewController {
                 string: SpeakerLabels.prefix(segment.speaker, aliases: aliases) + segment.original,
                 attributes: Self.originalTextAttributes
             ))
-            let translation = segment.translated.trimmingCharacters(in: .whitespacesAndNewlines)
+            let translation = (translationDrafts[segment.id] ?? segment.translated).trimmingCharacters(in: .whitespacesAndNewlines)
             if !translation.isEmpty {
                 result.append(NSAttributedString(string: "\n"))
                 result.append(NSAttributedString(
@@ -1157,6 +1112,9 @@ final class StableRecordingViewController: NSViewController {
         activeRecord = historyStore.startNewRecord(in: course)
         translationGeneration += 1
         translationCoordinator.activateGeneration(translationGeneration)
+        utteranceLedger.reset()
+        rowBindings.removeAll()
+        translationDrafts.removeAll()
         partialText = ""
         partialTranslation = ""
         lastSubmittedPartialTranslationUnit = ""

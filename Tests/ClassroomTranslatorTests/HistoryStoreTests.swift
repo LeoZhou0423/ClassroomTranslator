@@ -3,6 +3,20 @@ import XCTest
 
 final class HistoryStoreTests: XCTestCase {
     @MainActor
+    func testFinalPromotionAndNewRowsPreserveEarlierTranslation() {
+        let store = HistoryStore(isStoredInMemoryOnly: true)
+        let course = Course(name: "Test")
+        store.addCourse(course)
+        let record = store.startNewRecord(in: course)
+        let first = TranscriptSegment(original: "We study science.", translated: "我们学习科学。", isFinal: false)
+        store.addSegmentIfNew(first, to: record)
+        store.reviseOriginal(for: first.id, to: first.original, in: record, isFinal: true)
+        store.addSegmentIfNew(TranscriptSegment(original: "We organize data.", translated: "我们组织数据。"), to: record)
+        XCTAssertEqual(record.segments.map(\.translated), ["我们学习科学。", "我们组织数据。"])
+        XCTAssertTrue(record.segments[0].isFinal)
+    }
+
+    @MainActor
     func testRevisionPreservesIdentityAndRejectsStaleTranslation() {
         let store = HistoryStore(isStoredInMemoryOnly: true)
         let course = Course(name: "Test")

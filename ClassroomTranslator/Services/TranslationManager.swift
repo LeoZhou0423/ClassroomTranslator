@@ -83,7 +83,7 @@ final class TranslationManager {
         }
     }
 
-    func translate(_ text: String, context: String = "", backend: TranslationBackendChoice? = nil) async -> String {
+    func translate(_ text: String, context: String = "", backend: TranslationBackendChoice? = nil, onProgress: (@MainActor (String) -> Void)? = nil) async -> String {
         guard !text.isEmpty else { return "" }
         if Self.baseLanguage(sourceLanguageCode) == Self.baseLanguage(targetLanguageCode),
            !sourceLanguageCode.isEmpty {
@@ -105,7 +105,7 @@ final class TranslationManager {
         let result: String
         if choice == .translateGemma {
             do {
-                result = try await LocalTranslationClient().translate(text, source: sourceLanguageCode, target: targetLanguageCode, context: context)
+                result = try await LocalTranslationClient().translate(text, source: sourceLanguageCode, target: targetLanguageCode, context: context, onProgress: onProgress)
                 lastErrorMessage = ""
             } catch is CancellationError { result = "" }
             catch { result = ""; lastErrorMessage = error.localizedDescription }

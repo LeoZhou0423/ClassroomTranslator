@@ -20,6 +20,26 @@ final class LocalTranslationClientTests: XCTestCase {
         } catch { XCTAssertTrue(error is LocalTranslationClient.Failure) }
     }
 
+    func testStreamingDeltasFormOneCompleteSentence() throws {
+        var stream = LocalTranslationStream()
+        try stream.append(#"{"message":{"content":"在答"},"done":false}"#)
+        XCTAssertEqual(stream.text, "在答")
+        XCTAssertFalse(stream.done)
+        try stream.append(#"{"message":{"content":"疑时间。"},"done":false}"#)
+        try stream.append(#"{"message":{"content":""},"done":true,"done_reason":"stop"}"#)
+        XCTAssertEqual(stream.text, "在答疑时间。")
+        XCTAssertTrue(stream.done)
+        XCTAssertFalse(stream.truncated)
+    }
+
+    func testStreamingErrorsAndTruncationCannotLookComplete() throws {
+        var stream = LocalTranslationStream()
+        XCTAssertThrowsError(try stream.append(#"{"error":"model not found"}"#))
+        XCTAssertThrowsError(try stream.append("invalid json"))
+        try stream.append(#"{"message":{"content":"截断"},"done":true,"done_reason":"length"}"#)
+        XCTAssertTrue(stream.truncated)
+    }
+
     func testTranslateGemmaPromptKeepsReferenceOutsideSourceAndNamesLanguage() {
         let text = "My name is Shelly Kagan."
         let prompt = LocalTranslationClient.prompt(text: text, source: "en-US", target: "zh-Hans", context: "Course: Philosophy 176")
@@ -56,7 +76,7 @@ private final class TranslationMockProtocol: URLProtocol {
         }
         let payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
         XCTAssertEqual(payload?["model"] as? String, "translategemma:4b")
-        XCTAssertEqual(payload?["stream"] as? Bool, false)
+        XCTAssertEqual(payload?["stream"] as? Bool, true)
         let messages = payload?["messages"] as? [[String: String]]
         let prompt = messages?.first?["content"] ?? ""
         let empty = prompt.hasSuffix("EMPTY")

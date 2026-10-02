@@ -109,14 +109,19 @@ final class HistoryStore {
         record.segments = segs
     }
 
+    func removeSegments(_ ids: Set<UUID>, in record: TranscriptRecord) {
+        record.segments = record.segments.filter { !ids.contains($0.id) }
+    }
+
     /// Preserve the segment identity/timestamp/speaker when a continuation
     /// repairs its text, and invalidate only that segment's old translation.
-    func reviseOriginal(for segmentID: UUID, to original: String, in record: TranscriptRecord) {
+    func reviseOriginal(for segmentID: UUID, to original: String, in record: TranscriptRecord, isFinal: Bool? = nil) {
         var segments = record.segments
         guard let index = segments.firstIndex(where: { $0.id == segmentID }) else { return }
         let old = segments[index]
-        segments[index] = TranscriptSegment(id: old.id, original: original, translated: "",
-                                            timestamp: old.timestamp, isFinal: old.isFinal, speaker: old.speaker)
+        segments[index] = TranscriptSegment(id: old.id, original: original,
+                                            translated: old.original == original ? old.translated : "",
+                                            timestamp: old.timestamp, isFinal: isFinal ?? old.isFinal, speaker: old.speaker)
         record.segments = segments
     }
 

@@ -38,18 +38,38 @@ struct LocalTranslationClient {
         return "You are a professional \(sourceName) (\(sourceCode)) to \(targetName) (\(targetCode)) translator. Your goal is to accurately convey the meaning and nuances of the original \(sourceName) text while adhering to \(targetName) grammar, vocabulary, and cultural sensitivities." + reference + "\nProduce only the \(targetName) translation, without any additional explanations or commentary. Please translate the following \(sourceName) text into \(targetName):\n\n\n" + text
     }
 
-    func translate(_ text: String, source: String, target: String, context: String) async throws -> String {
+    func translate(_ text: String, source: String, target: String, context: String,
+                   onProgress: (@MainActor (String) -> Void)? = nil) async throws -> String {
         let payload: [String: Any] = [
             "model": Self.model,
             "messages": [["role": "user", "content": Self.prompt(text: text, source: source, target: target, context: context)]],
-            "stream": false, "keep_alive": "10m",
+            "stream": true, "keep_alive": "10m",
             "options": ["temperature": 0, "num_ctx": 2048, "num_predict": 512]
         ]
-        let data = try await request(path: "api/chat", payload: payload, timeout: 60)
-        let response = try JSONDecoder().decode(ChatResponse.self, from: data)
-        guard response.done == true else { throw Failure.incomplete }
-        guard response.done_reason != "length" else { throw Failure.incomplete }
-        let output = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        var request = URLRequest(url: Self.baseURL.appendingPathComponent("api/chat"), timeoutInterval: 60)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do { (bytes, response) = try await session.bytes(for: request) }
+        catch { if Task.isCancelled { throw CancellationError() }; throw Failure.unavailable }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw Failure.response((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        var stream = LocalTranslationStream()
+        var lastUpdate = Date.distantPast
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            guard !line.isEmpty else { continue }
+            try stream.append(line)
+            if !stream.text.isEmpty, Date().timeIntervalSince(lastUpdate) >= 0.1 || stream.done {
+                if let onProgress { await onProgress(stream.text) }
+                lastUpdate = Date()
+            }
+        }
+        guard stream.done, !stream.truncated else { throw Failure.incomplete }
+        let output = stream.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !output.isEmpty else { throw Failure.empty }
         return output
     }
@@ -82,14 +102,30 @@ struct LocalTranslationClient {
         return data
     }
 
-    private struct ChatResponse: Decodable {
-        struct Message: Decodable { let content: String }
-        let message: Message
-        let done: Bool?
-        let done_reason: String?
-    }
     private struct ModelList: Decodable {
         struct Model: Decodable { let name: String }
         let models: [Model]
+    }
+}
+
+/// The wire protocol sends token DELTAS; the UI receives growing text for just
+/// one segment. Only a done/stop response may enter the completed cache.
+struct LocalTranslationStream {
+    private(set) var text = ""
+    private(set) var done = false
+    private(set) var truncated = false
+    mutating func append(_ line: String) throws {
+        struct Chunk: Decodable {
+            struct Message: Decodable { let content: String? }
+            let message: Message?
+            let done: Bool?
+            let done_reason: String?
+            let error: String?
+        }
+        let chunk = try JSONDecoder().decode(Chunk.self, from: Data(line.utf8))
+        if chunk.error != nil { throw LocalTranslationClient.Failure.response(500) }
+        text += chunk.message?.content ?? ""
+        done = chunk.done == true
+        truncated = chunk.done_reason == "length"
     }
 }

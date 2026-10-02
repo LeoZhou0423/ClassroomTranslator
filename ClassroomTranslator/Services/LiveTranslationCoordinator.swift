@@ -43,12 +43,13 @@ final class LiveTranslationCoordinator {
     struct Response {
         let request: Request
         let translatedText: String
+        var isComplete = true
         var succeeded: Bool { !translatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     typealias Translator = @MainActor (String) async -> String
 
-    private let translator: @MainActor (String, String) async -> String
+    private let translator: @MainActor (String, String, @escaping @MainActor (String) -> Void) async -> String
     private let partialInterval: Duration
     private var pendingFinals: [Request] = []
     private var pendingPartial: Request?
@@ -69,12 +70,17 @@ final class LiveTranslationCoordinator {
 
     init(partialInterval: Duration = .milliseconds(700), translator: @escaping Translator) {
         self.partialInterval = partialInterval
-        self.translator = { text, _ in await translator(text) }
+        self.translator = { text, _, _ in await translator(text) }
     }
 
     init(partialInterval: Duration = .milliseconds(700), contextualTranslator: @escaping @MainActor (String, String) async -> String) {
         self.partialInterval = partialInterval
-        self.translator = contextualTranslator
+        self.translator = { text, context, _ in await contextualTranslator(text, context) }
+    }
+
+    init(partialInterval: Duration = .milliseconds(700), streamingTranslator: @escaping @MainActor (String, String, @escaping @MainActor (String) -> Void) async -> String) {
+        self.partialInterval = partialInterval
+        self.translator = streamingTranslator
     }
 
     func submit(_ request: Request) {
@@ -89,6 +95,11 @@ final class LiveTranslationCoordinator {
         case .partial: pendingPartial = request
         }
         startWorkerIfNeeded()
+    }
+
+    func invalidateSegments(_ ids: Set<UUID>) {
+        pendingFinals.removeAll { $0.segmentID.map(ids.contains) ?? false }
+        for id in ids { latestSegmentRequests[id] = (.max, .max, "") }
     }
 
     func cancelPartials() {
@@ -146,7 +157,13 @@ final class LiveTranslationCoordinator {
                 let cacheKey = self.normalizedCacheKey(request.text) + "\u{001F}" + request.context
                 var translated = self.translationCache[cacheKey] ?? ""
                 if translated.isEmpty {
-                    translated = await self.translator(request.text, request.context)
+                    translated = await self.translator(request.text, request.context, { [weak self] draft in
+                        guard let self, !Task.isCancelled, self.workerToken == token,
+                              request.generation >= self.activeGeneration else { return }
+                        if let id = request.segmentID, let latest = self.latestSegmentRequests[id],
+                           latest.generation != request.generation || latest.revision != request.revision || latest.text != request.text { return }
+                        request.completion(Response(request: request, translatedText: draft, isComplete: false))
+                    })
                     if !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         self.translationCache[cacheKey] = translated
                     }
@@ -159,7 +176,13 @@ final class LiveTranslationCoordinator {
                    !Task.isCancelled {
                     try? await self.clock.sleep(for: .milliseconds(250))
                     guard !Task.isCancelled else { break }
-                    translated = await self.translator(request.text, request.context)
+                    translated = await self.translator(request.text, request.context, { [weak self] draft in
+                        guard let self, !Task.isCancelled, self.workerToken == token,
+                              request.generation >= self.activeGeneration else { return }
+                        if let id = request.segmentID, let latest = self.latestSegmentRequests[id],
+                           latest.generation != request.generation || latest.revision != request.revision || latest.text != request.text { return }
+                        request.completion(Response(request: request, translatedText: draft, isComplete: false))
+                    })
                     if !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         self.translationCache[cacheKey] = translated
                     }

@@ -5,6 +5,7 @@ import AppKit
 final class SubtitleWindowController: NSWindowController {
     private let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 580, height: 180))
     private var overlayWasVisible = false
+    private var latestRows: [SubtitlePair] = []
     private var latestOriginal = ""
     private var latestTranslation = ""
     /// task-4：当前字幕的说话人（nil = 无标签）。
@@ -36,7 +37,7 @@ final class SubtitleWindowController: NSWindowController {
         self.init(window: window)
 
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
-        scrollView.hasVerticalScroller = false
+        scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
         scrollView.autoresizingMask = [.width, .height]
@@ -137,6 +138,7 @@ final class SubtitleWindowController: NSWindowController {
         aliases: [String: SpeakerAlias] = [:]
     ) {
         guard !original.isEmpty || !translated.isEmpty else { return }
+        latestRows = [SubtitlePair(id: nil, original: original, translated: translated, speaker: speaker)]
         latestOriginal = original
         latestTranslation = translated
         latestSpeaker = speaker
@@ -144,44 +146,37 @@ final class SubtitleWindowController: NSWindowController {
         renderLatestCue()
     }
 
+    func showTranscriptRows(_ rows: [SubtitlePair], aliases: [String: SpeakerAlias] = [:]) {
+        latestRows = rows
+        latestAliases = aliases
+        renderLatestCue()
+    }
+
     private func renderLatestCue() {
         let configuration = SubtitleDisplayConfiguration()
         let fontSize = max(configuration.fontSize * fontScale(), 12)
-        let showOriginal = configuration.showOriginal
-        let originalCue = SubtitleCueBuilder.cue(
-            from: latestOriginal,
-            maximumWords: configuration.maximumWords,
-            maximumCharacters: 52
-        )
-        let translatedCue = SubtitleCueBuilder.cue(
-            from: latestTranslation,
-            maximumWords: 10,
-            maximumCharacters: 32
-        )
         let value = NSMutableAttributedString()
-        if showOriginal, !originalCue.isEmpty {
-            // VIS-04：字号拉到 12 时原文会掉到 8pt（后排完全看不见）—— 下限锁死 12pt；
-            // 同时把纯 #FFCC00 换成柔和的 #FFD866。
-            // task-4：前缀在截断**之后**拼接，保证「老师: 」永远完整、
-            // 且不吃掉句子的 52 字符阅读预算（共用 SpeakerLabels helper）。
-            // task-10：带会话人员映射（昵称如「王教授: 」）。
-            value.append(NSAttributedString(
-                string: SpeakerLabels.prefix(latestSpeaker, aliases: latestAliases) + originalCue,
-                attributes: subtitleAttrs(
-                    fontSize: max(fontSize - 4, 12),
-                    color: Self.softOriginalYellow
-                )
-            ))
-        }
-        if !translatedCue.isEmpty {
-            let prefix = value.length > 0 ? "\n" : ""
-            value.append(NSAttributedString(string: prefix + translatedCue, attributes: subtitleAttrs(fontSize: fontSize, color: .white)))
+        for row in latestRows {
+            if value.length > 0 { value.append(NSAttributedString(string: "\n\n")) }
+            let original = SubtitleCueBuilder.cue(from: row.original, maximumWords: configuration.maximumWords, maximumCharacters: 120)
+            let translated = row.translated
+            if configuration.showOriginal, !original.isEmpty {
+                value.append(NSAttributedString(
+                    string: SpeakerLabels.prefix(row.speaker, aliases: latestAliases) + original,
+                    attributes: subtitleAttrs(fontSize: max(fontSize - 4, 12), color: Self.softOriginalYellow)
+                ))
+            }
+            if !translated.isEmpty {
+                let prefix = configuration.showOriginal && !original.isEmpty ? "\n" : ""
+                value.append(NSAttributedString(string: prefix + translated, attributes: subtitleAttrs(fontSize: fontSize, color: .white)))
+            }
         }
         textView.textStorage?.setAttributedString(value)
-        scrollToBottom()
+        if configuration.autoScroll { scrollToBottom() }
     }
 
     func clearAll() {
+        latestRows = []
         textView.string = ""
         latestOriginal = ""
         latestTranslation = ""
