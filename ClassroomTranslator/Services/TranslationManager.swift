@@ -94,7 +94,10 @@ final class TranslationManager {
             return ""
         }
         isTranslating = true
+        let started = Date()
+        StartupLog.mark("translation.begin chars=\(text.count) source=\(sourceLanguageCode) target=\(targetLanguageCode)")
         let result = await performTranslation(text)
+        StartupLog.mark("translation.end chars=\(result.count) seconds=\(String(format: "%.2f", Date().timeIntervalSince(started)))")
         isTranslating = false
         await requestGate.release()
         return result

@@ -2,6 +2,29 @@ import XCTest
 @testable import ClassroomTranslator
 
 final class LiveTranscriptPolicyTests: XCTestCase {
+    func testLiveTranslationSurvivesAppendedUnfinishedSentence() {
+        XCTAssertTrue(LivePartialTranslationPolicy.containsUnit("Hello students.", in: "Hello students. Today we"))
+        XCTAssertFalse(LivePartialTranslationPolicy.containsUnit("Hello students.", in: "Hello teachers. Today we"))
+        XCTAssertFalse(LivePartialTranslationPolicy.containsUnit("Hello students.", in: "Hello students. Next sentence."))
+        XCTAssertFalse(LivePartialTranslationPolicy.containsUnit("", in: "Hello."))
+    }
+
+    func testFirstWhisperPreviewStartsBeforeRegularDecodeInterval() {
+        XCTAssertTrue(WhisperDecodePolicy.shouldDecode(
+            hasSpeech: true, decodeInFlight: false, bufferedSamples: 24_000,
+            newSamplesSinceDecode: 24_000, silentFor: 0, hasEmittedText: false
+        ))
+        XCTAssertFalse(WhisperDecodePolicy.shouldDecode(
+            hasSpeech: true, decodeInFlight: true, bufferedSamples: 24_000,
+            newSamplesSinceDecode: 24_000, silentFor: 0, hasEmittedText: false
+        ))
+    }
+
+    func testConjunctionDoesNotSplitTranslationContext() {
+        XCTAssertEqual(StableSentenceUnits.split("We use data, because its structure matters."),
+                       ["We use data, because its structure matters."])
+    }
+
     func testFinalTextSplitsIntoIndependentTranslationUnits() {
         XCTAssertEqual(
             StableSentenceUnits.split("First sentence. Is this second? Yes! trailing fragment"),

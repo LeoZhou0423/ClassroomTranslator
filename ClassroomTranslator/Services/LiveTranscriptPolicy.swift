@@ -265,14 +265,16 @@ enum WhisperDecodePolicy {
         bufferedSamples: Int,
         newSamplesSinceDecode: Int,
         silentFor: TimeInterval,
-        sampleRate: Int = 16_000
+        sampleRate: Int = 16_000,
+        hasEmittedText: Bool = true
     ) -> Bool {
         guard hasSpeech, !decodeInFlight else { return false }
         // Finalize even a short utterance after a real pause.
         if silentFor > 1.0, bufferedSamples >= sampleRate / 2 { return true }
-        // A partial requires 2.5 seconds of genuinely new audio. Merely having
-        // a 3-second rolling buffer must not trigger an endless decode loop.
-        return newSamplesSinceDecode >= sampleRate * 5 / 2
+        // Produce the first preview sooner; subsequent decodes remain spaced
+        // out to avoid repeatedly spending CPU on the same rolling window.
+        let requiredSamples = hasEmittedText ? sampleRate * 5 / 2 : sampleRate * 5 / 4
+        return newSamplesSinceDecode >= requiredSamples
     }
 
     static func shouldFinalize(
@@ -343,5 +345,14 @@ enum SubtitleCueBuilder {
             return words.suffix(maximumWords).joined(separator: " ")
         }
         return String(clean.suffix(maximumCharacters))
+    }
+}
+
+/// A completed sentence remains usable when the recognizer appends a new tail.
+/// Revisions of that sentence must invalidate its translation.
+enum LivePartialTranslationPolicy {
+    static func containsUnit(_ unit: String, in snapshot: String) -> Bool {
+        guard !unit.isEmpty else { return false }
+        return StableSentenceUnits.split(snapshot, includeTrailingFragment: false).last == unit
     }
 }

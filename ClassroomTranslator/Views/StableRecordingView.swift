@@ -745,8 +745,17 @@ final class StableRecordingViewController: NSViewController {
                 self.enqueueFinal(text, revision: eventRevision)
             } else {
                 self.partialText = text
-                self.partialTranslation = ""
+                if !LivePartialTranslationPolicy.containsUnit(self.lastSubmittedPartialTranslationUnit, in: text) {
+                    self.partialTranslation = ""
+                }
                 self.refreshTranscript()
+                if self.overlayVisible {
+                    self.subtitleWindow.showStableCue(
+                        original: text, translated: self.partialTranslation,
+                        speaker: self.speakerEngine?.currentLabel,
+                        aliases: self.activeRecord?.aliasMap ?? [:]
+                    )
+                }
                 self.submitPartialTranslation(text, revision: eventRevision)
             }
         }
@@ -816,7 +825,7 @@ final class StableRecordingViewController: NSViewController {
         if response.request.kind == .partial {
             guard sessionState.phase == .recording,
                    response.request.revision >= minimumValidPartialRevision,
-                   partialText == (response.request.sourceSnapshot ?? response.request.text) else {
+                   LivePartialTranslationPolicy.containsUnit(response.request.text, in: partialText) else {
                 StartupLog.mark("ui.tr-partial-dropped phase=\(sessionState.phase) rev=\(response.request.revision) minRev=\(minimumValidPartialRevision)")
                 return
             }
@@ -828,7 +837,8 @@ final class StableRecordingViewController: NSViewController {
             )
             return
         }
-        if response.succeeded, overlayVisible {
+        if response.succeeded, overlayVisible,
+           response.request.kind == .partial || response.request.revision >= partialRevision {
             // task-4：字幕带说话人前缀（final 用段落里的精确标签，partial 用当前标签）。
             let speaker: String?
             if response.request.kind == .final,
@@ -839,7 +849,7 @@ final class StableRecordingViewController: NSViewController {
                 speaker = speakerEngine?.currentLabel
             }
             subtitleWindow.showStableCue(
-                original: response.request.text,
+                original: response.request.kind == .partial ? partialText : response.request.text,
                 translated: response.translatedText,
                 speaker: speaker,
                 // task-10：会话上下文（本记录人员映射）传入字幕悬浮窗；
@@ -850,7 +860,7 @@ final class StableRecordingViewController: NSViewController {
 
         switch response.request.kind {
         case .partial:
-            if partialText == (response.request.sourceSnapshot ?? response.request.text) {
+            if LivePartialTranslationPolicy.containsUnit(response.request.text, in: partialText) {
                 partialTranslation = response.translatedText
                 refreshTranscript()
             }
@@ -892,7 +902,7 @@ final class StableRecordingViewController: NSViewController {
     }
 
     private static func ensureEndingPunctuation(_ text: String) -> String {
-        let result = fixInternalPunctuation(text)
+        let result = text
         let trimmed = result.trimmingCharacters(in: .whitespaces)
         guard let last = trimmed.last else { return result }
         if ".!?。！？…".contains(last) { return trimmed }
@@ -905,26 +915,6 @@ final class StableRecordingViewController: NSViewController {
             return trimmed + "?"
         }
         return trimmed + "."
-    }
-
-    private static func fixInternalPunctuation(_ text: String) -> String {
-        let conjunctions = ["and ", "but ", "so ", "or ", "yet ", "because ", "although ",
-                            "while ", "when ", "if ", "then ", "therefore ", "however ",
-                            "moreover ", "furthermore ", "nevertheless ", "also "]
-        var result = text
-        for conj in conjunctions {
-            let pattern = ", " + conj
-            while let range = result.range(of: pattern, options: .caseInsensitive) {
-                let afterConj = result[range.upperBound...]
-                let words = afterConj.prefix(while: { !$0.isNewline && $0 != "." && $0 != "!" && $0 != "?" })
-                if words.split(separator: " ").count >= 2 {
-                    result.replaceSubrange(range.lowerBound..<range.upperBound, with: ". " + conj)
-                } else {
-                    break
-                }
-            }
-        }
-        return result
     }
 
     /// VIS-02：原文 13pt / secondary，译文 15pt / label —— 一眼能分清哪句是译文。

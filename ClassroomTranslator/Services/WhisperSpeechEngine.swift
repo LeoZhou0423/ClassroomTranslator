@@ -793,7 +793,8 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 decodeInFlight: decodeInFlight,
                 bufferedSamples: sampleBuffer.count,
                 newSamplesSinceDecode: newSamplesSinceDecode,
-                silentFor: now - lastSpeechTime
+                silentFor: now - lastSpeechTime,
+                hasEmittedText: !lastEmitText.isEmpty
             )
         }
         guard shouldDecode else { return }
@@ -802,7 +803,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             newSamplesSinceDecode = 0
             return (sampleBuffer, recognitionLocale, speechRevision, stopEpoch)
         }
-        Task { [weak self] in
+        Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             let started = Date().timeIntervalSince1970
             StartupLog.mark("whisper.decode-begin samples=\(window.count) revision=\(revision)")
@@ -863,8 +864,9 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 speechRevision = 0
             }
             var followUp: FollowUp?
+            let newerAudioReady = newSamplesSinceDecode >= 16_000 * 5 / 2
             if !isFinal,
-               WhisperDecodePolicy.shouldScheduleFollowUpFinal(
+               newerAudioReady || WhisperDecodePolicy.shouldScheduleFollowUpFinal(
                     speechRevisionAtDecodeStart: speechRevisionAtDecodeStart,
                     currentSpeechRevision: speechRevision,
                     silentFor: silentFor,
@@ -884,8 +886,8 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
             handler(text, isFinal)
         }
         if let followUp = outcome.followUp {
-            StartupLog.mark("whisper.decode-follow-up-final revision=\(followUp.revision)")
-            Task { [weak self] in
+            StartupLog.mark("whisper.decode-follow-up revision=\(followUp.revision)")
+            Task.detached(priority: .userInitiated) { [weak self] in
                 guard let self else { return }
                 let decoded = await self.transcribeWindow(followUp.samples, locale: followUp.locale)
                 self.finishDecode(
