@@ -65,7 +65,7 @@ final class LiveTranslationCoordinator {
     /// the first result instead of invoking Apple's model again.
     private var translationCache: [String: String] = [:]
     private let clock = ContinuousClock()
-    private var latestSegmentRequests: [UUID: (generation: Int, revision: Int)] = [:]
+    private var latestSegmentRequests: [UUID: (generation: Int, revision: Int, text: String)] = [:]
 
     init(partialInterval: Duration = .milliseconds(700), translator: @escaping Translator) {
         self.partialInterval = partialInterval
@@ -83,7 +83,7 @@ final class LiveTranslationCoordinator {
         case .final:
             if let id = request.segmentID {
                 pendingFinals.removeAll { $0.segmentID == id && $0.generation == request.generation }
-                latestSegmentRequests[id] = (request.generation, request.revision)
+                latestSegmentRequests[id] = (request.generation, request.revision, request.text)
             }
             pendingFinals.append(request)
         case .partial: pendingPartial = request
@@ -167,7 +167,7 @@ final class LiveTranslationCoordinator {
                 guard !Task.isCancelled else { break }
                 guard request.generation >= self.activeGeneration else { continue }
                 if let id = request.segmentID, let latest = self.latestSegmentRequests[id],
-                   latest.generation != request.generation || latest.revision != request.revision { continue }
+                   latest.generation != request.generation || latest.revision != request.revision || latest.text != request.text { continue }
                 request.completion(Response(request: request, translatedText: translated))
             }
             // 只有自己仍然是"当前那个 worker"时才收尾，避免清掉后继者的引用。

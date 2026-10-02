@@ -16,8 +16,8 @@ final class LiveTranslationCoordinatorTests: XCTestCase {
         coordinator.submit(.init(kind: .final, text: "office.", cue: "", revision: 1, generation: 1, segmentID: id) { outputs.append($0.translatedText) })
         for _ in 0..<200 where continuation == nil { await Task.yield() }
         guard let continuation else { XCTFail("Translator never started"); coordinator.cancelAll(); return }
-        coordinator.submit(.init(kind: .final, text: "office hours", cue: "", revision: 2, generation: 1, segmentID: id) { outputs.append($0.translatedText) })
-        coordinator.submit(.init(kind: .final, text: "office hours, ask questions.", cue: "", revision: 3, generation: 1, segmentID: id) { outputs.append($0.translatedText) })
+        coordinator.submit(.init(kind: .final, text: "office hours", cue: "", revision: 1, generation: 1, segmentID: id) { outputs.append($0.translatedText) })
+        coordinator.submit(.init(kind: .final, text: "office hours, ask questions.", cue: "", revision: 1, generation: 1, segmentID: id) { outputs.append($0.translatedText) })
         continuation.resume(returning: "Wrong office")
         await coordinator.waitUntilIdle()
         XCTAssertEqual(inputs, ["office.", "office hours, ask questions."])
