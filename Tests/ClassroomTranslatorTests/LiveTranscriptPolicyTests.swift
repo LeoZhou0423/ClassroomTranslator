@@ -42,6 +42,12 @@ final class LiveTranscriptPolicyTests: XCTestCase {
             previous: "The first thing I want to do is invite you.", incoming: "to call me Shelly.", sameSpeaker: true, age: 3),
             "The first thing I want to do is invite you to call me Shelly.")
         XCTAssertEqual(TranscriptContinuationPolicy.joined(
+            previous: "Now I am gray.", incoming: "and august.", sameSpeaker: true, age: 3),
+            "Now I am gray and august.")
+        XCTAssertEqual(TranscriptContinuationPolicy.joined(
+            previous: "The synapses take longer.", incoming: "for that.", sameSpeaker: true, age: 3),
+            "The synapses take longer for that.")
+        XCTAssertEqual(TranscriptContinuationPolicy.joined(
             previous: "That is.", incoming: "if we meet on the street.", sameSpeaker: true, age: 3),
             "That is if we meet on the street.")
     }

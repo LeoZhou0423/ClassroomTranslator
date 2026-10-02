@@ -391,7 +391,8 @@ enum TranscriptContinuationPolicy {
         guard incomplete || startsDependentClause else { return nil }
         // Restore a compound that was split by an ASR-inserted period.
         let joinsOfficeHours = last == "office" && first == "hours"
-        let stripBoundary = incomplete || joinsOfficeHours || first == "to"
+        let dependentFragment = words.count <= 3 && ["and", "but", "for"].contains(first)
+        let stripBoundary = incomplete || joinsOfficeHours || first == "to" || dependentFragment
         let prefix = stripBoundary ? left.trimmingCharacters(in: CharacterSet(charactersIn: ".…- ")) : left
         return prefix + " " + right
     }
