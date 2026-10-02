@@ -16,6 +16,8 @@ jobs:
 
     - name: Show toolchain
       run: |
+        # Swift 6.3 / macOS 26.4 SDK exposes Translation highFidelity.
+        sudo xcode-select -s /Applications/Xcode_26.4.app/Contents/Developer
         sw_vers
         swift --version
 

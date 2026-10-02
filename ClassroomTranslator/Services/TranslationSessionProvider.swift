@@ -16,7 +16,7 @@ struct TranslationSessionHost<Content: View>: View {
     @AppStorage("recognitionLanguage") private var language = "auto"
     @AppStorage("detectedRecognitionLanguage") private var detectedLanguage = ""
     @AppStorage("translationTarget") private var target = "zh-Hans"
-    @State private var config = TranslationSession.Configuration(
+    @State private var config = Self.makeConfiguration(
         source: Locale.Language(identifier: "en"),
         target: Locale.Language(identifier: "zh-Hans")
     )
@@ -34,7 +34,7 @@ struct TranslationSessionHost<Content: View>: View {
         let source = TranslationManager.resolveAutoSource(selectedSource)
         let target = targetLanguage ?? UserDefaults.standard.string(forKey: "translationTarget") ?? "zh-Hans"
         let sessionTarget = Self.sessionTarget(source: source, desiredTarget: target)
-        _config = State(initialValue: TranslationSession.Configuration(
+        _config = State(initialValue: Self.makeConfiguration(
             source: Locale.Language(identifier: source),
             target: Locale.Language(identifier: sessionTarget)
         ))
@@ -86,10 +86,22 @@ struct TranslationSessionHost<Content: View>: View {
         manager.detachSession()
         appliedSource = src
         appliedTarget = sessionTarget
-        config = TranslationSession.Configuration(
+        config = Self.makeConfiguration(
             source: Locale.Language(identifier: src),
             target: Locale.Language(identifier: sessionTarget)
         )
+    }
+
+    /// Ask for the fluent Apple Intelligence translator on supported systems.
+    /// Availability is handled by Translation; unsupported devices/languages
+    /// fall back to the traditional translator without changing the source text.
+    static func makeConfiguration(source: Locale.Language, target: Locale.Language) -> TranslationSession.Configuration {
+        #if compiler(>=6.3)
+        if #available(macOS 26.4, *) {
+            return TranslationSession.Configuration(source: source, target: target, preferredStrategy: .highFidelity)
+        }
+        #endif
+        return TranslationSession.Configuration(source: source, target: target)
     }
 
     private static func baseLanguage(_ identifier: String) -> String {

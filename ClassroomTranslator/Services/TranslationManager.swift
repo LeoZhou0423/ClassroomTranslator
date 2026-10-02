@@ -27,6 +27,11 @@ final class TranslationManager {
     @available(macOS 15, *)
     func attach(session: TranslationSession, sourceLanguage: String, targetLanguage: String) {
         sessionStorage = session
+        #if compiler(>=6.3)
+        if #available(macOS 26.4, *) {
+            StartupLog.mark("translation.session preferredStrategy=\(session.preferredStrategy == .highFidelity ? "highFidelity" : "lowLatency")")
+        }
+        #endif
         sourceLanguageCode = sourceLanguage
         targetLanguageCode = targetLanguage
         modelReady = Self.baseLanguage(sourceLanguage) == Self.baseLanguage(targetLanguage) ? true : nil
