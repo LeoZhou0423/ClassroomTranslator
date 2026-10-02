@@ -782,6 +782,13 @@ final class StableRecordingViewController: NSViewController {
             lastSubmittedPartialTranslationUnit = ""
         }
         refreshTranscript()
+        if overlayVisible {
+            subtitleWindow.showStableCue(
+                original: activeRecord?.segments.last?.original ?? trimmed,
+                translated: "", speaker: speakerEngine?.currentLabel,
+                aliases: activeRecord?.aliasMap ?? [:]
+            )
+        }
     }
 
     private func enqueueFinalUnit(_ sentence: String, revision: Int) {
