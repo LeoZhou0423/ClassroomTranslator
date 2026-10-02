@@ -87,7 +87,7 @@ final class PunctuationModelStore {
     private func fetchModel(from url: URL) async throws {
         let fm = FileManager.default
         try fm.createDirectory(at: Self.modelDirectory, withIntermediateDirectories: true)
-        let (stream, response) = try await URLSession.shared.bytes(for: url)
+        let (stream, response) = try await URLSession.shared.bytes(for: URLRequest(url: url))
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
@@ -97,7 +97,7 @@ final class PunctuationModelStore {
         var lastLoggedFraction = -1.0
         defer { try? fm.removeItem(at: temporary) }
         do {
-            try FileManager.default.createFile(atPath: temporary.path, contents: nil)
+            FileManager.default.createFile(atPath: temporary.path, contents: nil)
             let handle = try FileHandle(forWritingTo: temporary)
             defer { try? handle.close() }
             var buffer = Data()
