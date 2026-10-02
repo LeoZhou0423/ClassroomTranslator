@@ -274,7 +274,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     nonisolated private static func switchToOnnxRescueBackend() async {
         if kitLock.withLock({ kitCacheKey == onnxRescueKey }) { return }
         if !WhisperModelStore.onnxModelFilesPresent() {
-            await WhisperModelStore.shared.download()
+            guard await WhisperModelStore.shared.ensureOnnxRecoveryModel() else { return }
         }
         guard let recognizer = makeOnnxRecognizer() else {
             StartupLog.mark("whisper.onnx-rescue-unavailable")
@@ -392,6 +392,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 temperatureFallbackCount: 0,
                 skipSpecialTokens: true,
                 withoutTimestamps: true,
+                windowClipTime: 0,
                 suppressBlank: true
             )
             do {
@@ -401,7 +402,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 let activeKit = Self.coremlBroken
                     ? (await Self.ensureCpuFallbackKit() ?? kit)
                     : kit
-                let results = try await activeKit.transcribe(audioArray: samples, decodeOptions: options)
+                let results = try await activeKit.transcribe(audioArray: samples, decodeOptions: options, callback: Self.decodeDiagnosticCallback(stage: "primary"))
                 Self.logDecodeResults(results, stage: "primary")
                 var text = results.map(\.text).joined()
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -429,7 +430,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                     // These windows have already passed the capture VAD. Retry
                     // once without the library's segment-silence gate and cached
                     // prefill; retain the application's hallucination filter.
-                    let retried = try await activeKit.transcribe(audioArray: samples, decodeOptions: recoveryOptions)
+                    let retried = try await activeKit.transcribe(audioArray: samples, decodeOptions: recoveryOptions, callback: Self.decodeDiagnosticCallback(stage: "empty-recovery"))
                     Self.logDecodeResults(retried, stage: "empty-recovery")
                     text = retried.map(\.text).joined()
                         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -445,7 +446,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 if (accepted == nil || text.isEmpty), samples.count >= 32_000,
                    !Self.coremlBroken,
                    let cpuKit = await Self.ensureCpuFallbackKit() {
-                    let cpuResults = try await cpuKit.transcribe(audioArray: samples, decodeOptions: recoveryOptions)
+                    let cpuResults = try await cpuKit.transcribe(audioArray: samples, decodeOptions: recoveryOptions, callback: Self.decodeDiagnosticCallback(stage: "cpu-recovery"))
                     Self.logDecodeResults(cpuResults, stage: "cpu-recovery")
                     let cpuText = cpuResults.map(\.text).joined()
                         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -468,6 +469,13 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                     StartupLog.mark("whisper.coreml-empty-streak count=\(failures)")
                     if failures >= Self.maximumEmptyCoremlDecodes {
                         await Self.switchToOnnxRescueBackend()
+                        if let rescue = Self.kitLock.withLock({ Self.kitCache as? SherpaOnnxOfflineRecognizer }) {
+                            let rescuedText = rescue.decode(samples: samples, sampleRate: 16_000).text
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            rawText = rescuedText
+                            accepted = WhisperTranscriptQuality.accepted(rescuedText)
+                            StartupLog.mark("whisper.onnx-rescue-replay chars=\(rescuedText.count) accepted=\(accepted != nil)")
+                        }
                     }
                 } else {
                     Self.fallbackLock.withLock { Self.emptyCoremlDecodes = 0 }
@@ -493,9 +501,24 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private static func logDecodeResults(_ results: [TranscriptionResult], stage: String) {
         let segments = results.flatMap(\.segments)
         StartupLog.mark("whisper.result stage=\(stage) results=\(results.count) segments=\(segments.count) chars=\(results.reduce(0) { $0 + $1.text.count })")
+        for result in results {
+            let timing = result.timings
+            StartupLog.mark("whisper.pipeline stage=\(stage) melRuns=\(timing.totalLogmelRuns) encoderRuns=\(timing.totalEncodingRuns) decoderLoops=\(timing.totalDecodingLoops) windows=\(timing.totalDecodingWindows)")
+        }
         for segment in segments.prefix(3) {
             let tokens = segment.tokens.prefix(24).map(String.init).joined(separator: ",")
             StartupLog.mark("whisper.segment stage=\(stage) chars=\(segment.text.count) avgLogprob=\(segment.avgLogprob) noSpeechProb=\(segment.noSpeechProb) tokens=[\(tokens)]")
+        }
+    }
+
+    private static func decodeDiagnosticCallback(stage: String) -> TranscriptionCallback {
+        { progress in
+            let count = progress.tokens.count
+            if count <= 8 || count % 32 == 0 {
+                let tokens = progress.tokens.suffix(8).map(String.init).joined(separator: ",")
+                StartupLog.mark("whisper.tokens stage=\(stage) count=\(count) chars=\(progress.text.count) last=[\(tokens)]")
+            }
+            return nil
         }
     }
 

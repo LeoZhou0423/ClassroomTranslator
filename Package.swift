@@ -17,7 +17,7 @@ let package = Package(
         // Package.swift 以 exact 1.28.2 钉死。
         .package(url: "https://github.com/k2-fsa/sherpa-onnx", exact: "1.13.8"),
         // Whisper ASR（WhisperKit / CoreML）：课堂嘈杂与 TTS 下比 Dictation 更稳。
-        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0")
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", exact: "0.18.0")
     ],
     targets: [
         .executableTarget(

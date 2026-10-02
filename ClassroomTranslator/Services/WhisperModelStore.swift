@@ -137,6 +137,21 @@ final class WhisperModelStore {
         }
     }
 
+    func ensureOnnxRecoveryModel() async -> Bool {
+        if Self.onnxModelFilesPresent() { return true }
+        guard !isDownloading else { return false }
+        isDownloading = true
+        defer { isDownloading = false }
+        do {
+            try await downloadOnnxTiny()
+            StartupLog.mark("whisper.onnx-rescue-model-downloaded")
+            return Self.onnxModelFilesPresent()
+        } catch {
+            StartupLog.mark("whisper.onnx-rescue-download-failed \(error.localizedDescription)")
+            return false
+        }
+    }
+
     private func downloadOnnxTiny() async throws {
         let fm = FileManager.default
         try fm.createDirectory(at: Self.onnxModelDirectory, withIntermediateDirectories: true)
