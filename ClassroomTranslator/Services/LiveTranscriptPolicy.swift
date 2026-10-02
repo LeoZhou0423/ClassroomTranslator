@@ -385,14 +385,14 @@ enum TranscriptContinuationPolicy {
         let last = String(leftWords.last ?? "").trimmingCharacters(in: .punctuationCharacters)
         let first = String(words.first ?? "").trimmingCharacters(in: .punctuationCharacters)
         let incompleteEnds: Set<String> = ["a", "an", "the", "to", "of", "for", "with", "during", "because", "and", "or", "that", "my", "your", "our", "their", "office"]
-        let startsDependentClause = ["to ", "for that", "and ", "but ", "because "].contains { right.lowercased().hasPrefix($0) }
+        let dependentFragment = words.count <= 3 && ["and", "but", "for"].contains(first)
+        let startsDependentClause = first == "to" || first == "because" || right.lowercased().hasPrefix("for that") || dependentFragment
         let discourseFragment = ["that is", "you know", "for that"].contains(left.lowercased().trimmingCharacters(in: .punctuationCharacters))
         let incomplete = incompleteEnds.contains(last) || discourseFragment || !".!?。！？…".contains(left.last!)
         guard incomplete || startsDependentClause else { return nil }
         // Restore a compound that was split by an ASR-inserted period.
         let joinsOfficeHours = last == "office" && first == "hours"
-        let dependentFragment = words.count <= 3 && ["and", "but", "for"].contains(first)
-        let stripBoundary = incomplete || joinsOfficeHours || first == "to" || dependentFragment
+        let stripBoundary = incomplete || joinsOfficeHours || first == "to" || first == "because" || dependentFragment
         let prefix = stripBoundary ? left.trimmingCharacters(in: CharacterSet(charactersIn: ".…- ")) : left
         return prefix + " " + right
     }

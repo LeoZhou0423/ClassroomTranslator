@@ -57,6 +57,8 @@ final class LiveTranscriptPolicyTests: XCTestCase {
         XCTAssertNil(TranscriptContinuationPolicy.joined(previous: "During office.", incoming: "hours.", sameSpeaker: true, age: 16))
         XCTAssertNil(TranscriptContinuationPolicy.joined(previous: "What is death?", incoming: "to study it.", sameSpeaker: true, age: 2))
         XCTAssertNil(TranscriptContinuationPolicy.joined(previous: "It worked.", incoming: "Now I am older.", sameSpeaker: true, age: 2))
+        XCTAssertNil(TranscriptContinuationPolicy.joined(previous: "It worked.", incoming: "But the synapses take longer.", sameSpeaker: true, age: 2))
+        XCTAssertNil(TranscriptContinuationPolicy.joined(previous: "It worked.", incoming: "And now we study death.", sameSpeaker: true, age: 2))
     }
 
     func testFinalTextSplitsIntoIndependentTranslationUnits() {
