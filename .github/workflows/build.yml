@@ -40,6 +40,11 @@ jobs:
           # app 根 + 构建机硬编码路径；放 app 根 codesign 报 unsealed contents 无法签名）。
           cp -R .build/release/ClassroomTranslator_ClassroomTranslator.bundle LingoClass.app/Contents/Resources/
         fi
+        test -f LingoClass.app/Contents/Resources/ClassroomTranslator_ClassroomTranslator.bundle/silero_vad.onnx
+        if rg -n 'Bundle\.module' ClassroomTranslator --glob '*.swift'; then
+          echo 'Use Bundle.lingoResources for installed application resources.'
+          exit 1
+        fi
         if [ -d ClassroomTranslator/Resources ]; then
           cp -R ClassroomTranslator/Resources/*.lproj LingoClass.app/Contents/Resources/
         fi

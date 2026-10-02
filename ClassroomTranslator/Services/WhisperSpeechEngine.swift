@@ -627,7 +627,8 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         try await withCheckedThrowingContinuation { (continuationStart: CheckedContinuation<Void, Error>) in
             queue.async {
                 do {
-                    guard let vadModel = Bundle.module.url(forResource: "silero_vad", withExtension: "onnx") else {
+                    guard let vadModel = Bundle.lingoResources.url(forResource: "silero_vad", withExtension: "onnx") else {
+                        StartupLog.mark("whisper.vad-model-missing")
                         throw AudioEngineError.modelUnavailable
                     }
                     var vadConfig = sherpaOnnxVadModelConfig(
