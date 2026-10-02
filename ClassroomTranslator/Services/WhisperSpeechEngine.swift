@@ -20,6 +20,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     /// 当前档位变体名（设置覆盖优先，否则按硬件推荐）。
     static var modelName: String {
+        if WhisperModelTier.usesOnnxBackend { return "tiny" }
         if let raw = UserDefaults.standard.string(forKey: WhisperModelTier.defaultsKey),
            let tier = WhisperModelTier(rawValue: raw) {
             return tier.variantName
@@ -290,7 +291,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private static let onnxRescueKey = "onnx:tiny-rescue"
 
     private static func loadKit() async -> Bool {
-        let usesCoreML = WhisperModelTier.supportsWhisperRuntime()
+        let usesCoreML = !WhisperModelTier.usesOnnxBackend && WhisperModelTier.supportsWhisperRuntime()
         let desiredKey = usesCoreML ? "coreml:\(modelName)" : "onnx:tiny"
         if kitLock.withLock({ kitCache != nil && kitCacheKey == desiredKey }) { return true }
         if !usesCoreML {

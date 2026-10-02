@@ -26,11 +26,13 @@ final class WhisperModelStore {
         refreshReadyFlag()
     }
 
-    var variant: String { tier.variantName }
+    var variant: String { usesOnnxCompatibilityBackend ? "tiny" : tier.variantName }
 
     /// QEMU has no usable CoreML/Metal path. Its compatibility backend uses the
     /// multilingual sherpa-onnx tiny model regardless of the physical-Mac tier.
-    var usesOnnxCompatibilityBackend: Bool { !WhisperModelTier.supportsWhisperRuntime() }
+    var usesOnnxCompatibilityBackend: Bool {
+        WhisperModelTier.usesOnnxBackend || !WhisperModelTier.supportsWhisperRuntime()
+    }
 
     func selectTier(_ tier: WhisperModelTier) {
         guard tier != self.tier else { return }

@@ -36,6 +36,7 @@ enum WhisperModelTier: String, CaseIterable, Identifiable, Sendable {
     }
 
     static let defaultsKey = "whisperModelTier"
+    static let usesOnnxBackend = true
     static let fallback: WhisperModelTier = .tiny
 
     init(userDefaults: UserDefaults = .standard) {

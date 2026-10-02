@@ -137,8 +137,8 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-                    if !WhisperModelTier.supportsWhisperRuntime() {
-                        Text("Whisper uses the CPU compatibility backend in this virtual machine. It is slower, but produces real Whisper results.")
+                    if WhisperModelStore.shared.usesOnnxCompatibilityBackend {
+                        Text("Whisper tiny uses ONNX on CPU on both physical Macs and virtual machines.")
                             .font(.caption)
                             .foregroundColor(.orange)
                     }
@@ -310,7 +310,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(WhisperModelTier.tiny.title)
                     .font(.body)
-                Text(String(localized: "Virtual machines use the fixed Whisper tiny CPU model."))
+                Text("Whisper tiny · ONNX CPU")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
