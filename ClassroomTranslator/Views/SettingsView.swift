@@ -154,6 +154,10 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Punctuation Restoration") {
+                    punctuationDownloadSection
+                }
+
                 Section("Teacher Language / Model") {
                     Text("Auto English starts with UK English, then detects the teacher’s accent and switches if needed")
                         .font(.caption)
@@ -394,6 +398,37 @@ struct SettingsView: View {
             .buttonStyle(.borderedProminent)
             .disabled(store.isDownloading)
             Text("Whisper weights are large. Download here first, then start recording.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    /// 标点恢复模型：缺席时静默降级（行为等同未开启），下载后自动生效。
+    private var punctuationDownloadSection: some View {
+        let store = PunctuationModelStore.shared
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Restores sentence punctuation on finalized speech before translation, so sentences are split cleanly instead of word salad.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            HStack(spacing: 8) {
+                if store.isDownloading {
+                    ProgressView(value: store.fraction)
+                        .frame(maxWidth: 180)
+                }
+                Text(store.message.isEmpty
+                     ? (store.isReady ? String(localized: "Punctuation model ready.")
+                                      : String(localized: "Punctuation model not downloaded"))
+                     : store.message)
+                    .font(.caption)
+                    .foregroundColor(store.lastError == nil ? .secondary : .red)
+            }
+            Button(store.isReady ? String(localized: "Re-download Punctuation Model")
+                                 : String(localized: "Download Punctuation Model")) {
+                Task { await store.download() }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(store.isDownloading)
+            Text("About 300 MB. Runs locally on CPU (a few milliseconds per sentence).")
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }

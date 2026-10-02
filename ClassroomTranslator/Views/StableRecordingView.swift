@@ -753,7 +753,10 @@ final class StableRecordingViewController: NSViewController {
         guard courseExists else { return }
         ensureActiveRecord()
         guard let record = activeRecord else { return }
-        let update = utteranceLedger.ingest(text, final: final)
+        // 终稿先恢复标点再进 ledger：StableSentenceUnits 依赖 .!? 边界，
+        // 无标点碎句会让翻译单元退化成半截话长串。partial 不做（临时文本）。
+        let ingestText = final ? PunctuationRestorer.shared.restore(text) : text
+        let update = utteranceLedger.ingest(ingestText, final: final)
         let removedSegments = Set(update.removedIDs.compactMap { rowBindings[$0]?.segmentID })
         if !removedSegments.isEmpty {
             historyStore.removeSegments(removedSegments, in: record)
