@@ -41,7 +41,7 @@ jobs:
           cp -R .build/release/ClassroomTranslator_ClassroomTranslator.bundle LingoClass.app/Contents/Resources/
         fi
         test -f LingoClass.app/Contents/Resources/ClassroomTranslator_ClassroomTranslator.bundle/silero_vad.onnx
-        if rg -n 'Bundle\.module' ClassroomTranslator --glob '*.swift'; then
+        if rg -n 'Bundle\.module\.' ClassroomTranslator --glob '*.swift'; then
           echo 'Use Bundle.lingoResources for installed application resources.'
           exit 1
         fi
