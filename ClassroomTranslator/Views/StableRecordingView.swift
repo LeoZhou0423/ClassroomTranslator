@@ -796,10 +796,7 @@ final class StableRecordingViewController: NSViewController {
         let speaker = speakerEngine?.currentLabel
         let segment: TranscriptSegment
         if let previous = record.segments.last,
-           let joined = TranscriptContinuationPolicy.joined(
-               previous: previous.original, incoming: sentence,
-               sameSpeaker: previous.speaker == speaker,
-               age: Date().timeIntervalSince(previous.timestamp)) {
+           let joined = continuation(of: previous, with: sentence) {
             historyStore.reviseOriginal(for: previous.id, to: joined, in: record)
             segment = record.segments.last!
             StartupLog.mark("ui.segment-revised chars=\(joined.count)")
@@ -816,6 +813,20 @@ final class StableRecordingViewController: NSViewController {
             context: translationContext(excluding: segment.id),
             completion: { [weak self] response in self?.handleTranslation(response) }
         ))
+    }
+
+    private func continuation(of previous: TranscriptSegment, with incoming: String) -> String? {
+        let speaker = speakerEngine?.currentLabel
+        // A generic placeholder is not proof that two voices are the same.
+        // With speaker detection disabled, bounded textual continuation still
+        // works; with detection active, require a resolved matching identity.
+        let knownSpeaker = speakerEngine?.canInfer != true ||
+            (speaker != nil && speaker != SpeakerLabeler.genericSpeakerName)
+        return TranscriptContinuationPolicy.joined(
+            previous: previous.original, incoming: incoming,
+            sameSpeaker: knownSpeaker && previous.speaker == speaker,
+            age: Date().timeIntervalSince(previous.timestamp)
+        )
     }
 
     private func scheduleFinalTranslation(_ request: LiveTranslationCoordinator.Request) {
@@ -861,6 +872,12 @@ final class StableRecordingViewController: NSViewController {
         guard let stableUnit = StableSentenceUnits.split(text, includeTrailingFragment: false).last,
               !TranscriptContinuationPolicy.needsContinuation(stableUnit),
               stableUnit != lastSubmittedPartialTranslationUnit else { return }
+        if let previous = activeRecord?.segments.last,
+           continuation(of: previous, with: stableUnit) != nil {
+            // Do not translate a dependent clause in isolation and then repeat
+            // that work when the final repairs its preceding segment.
+            return
+        }
         lastSubmittedPartialTranslationUnit = stableUnit
         let cue = SubtitleCueBuilder.cue(from: stableUnit, maximumWords: subtitleMaximumWords)
         translationCoordinator.submit(.init(

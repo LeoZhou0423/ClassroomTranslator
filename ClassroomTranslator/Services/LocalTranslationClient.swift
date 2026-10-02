@@ -32,7 +32,8 @@ struct LocalTranslationClient {
         let sourceCode = source.split(separator: "-").first.map(String.init) ?? source
         let targetCode = target.hasPrefix("zh") ? target : (target.split(separator: "-").first.map(String.init) ?? target)
         let sourceName = english.localizedString(forLanguageCode: sourceCode) ?? sourceCode
-        let targetName = target == "zh-Hans" ? "Simplified Chinese" : (english.localizedString(forLanguageCode: targetCode) ?? targetCode)
+        let targetName = target.hasPrefix("zh-Hans") ? "Simplified Chinese" :
+            (target.hasPrefix("zh-Hant") ? "Traditional Chinese" : (english.localizedString(forLanguageCode: targetCode) ?? targetCode))
         let reference = context.isEmpty ? "" : "\nReference context (do not translate or add it to the output): \(context)\nPreserve names and numbers. Use context to disambiguate meaning; do not invent missing source words."
         return "You are a professional \(sourceName) (\(sourceCode)) to \(targetName) (\(targetCode)) translator. Your goal is to accurately convey the meaning and nuances of the original \(sourceName) text while adhering to \(targetName) grammar, vocabulary, and cultural sensitivities." + reference + "\nProduce only the \(targetName) translation, without any additional explanations or commentary. Please translate the following \(sourceName) text into \(targetName):\n\n\n" + text
     }
