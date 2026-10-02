@@ -26,7 +26,7 @@ final class WhisperModelStore {
         refreshReadyFlag()
     }
 
-    var variant: String { usesOnnxCompatibilityBackend ? "tiny" : tier.variantName }
+    var variant: String { tier.variantName }
 
     /// QEMU has no usable CoreML/Metal path. Its compatibility backend uses the
     /// multilingual sherpa-onnx tiny model regardless of the physical-Mac tier.
@@ -35,6 +35,7 @@ final class WhisperModelStore {
     }
 
     func selectTier(_ tier: WhisperModelTier) {
+        guard !isDownloading else { return }
         guard tier != self.tier else { return }
         self.tier = tier
         UserDefaults.standard.set(tier.rawValue, forKey: WhisperModelTier.defaultsKey)
@@ -86,11 +87,11 @@ final class WhisperModelStore {
 
         do {
             if usesOnnxCompatibilityBackend {
-                try await downloadOnnxTiny()
+                try await downloadOnnxModel()
                 isReady = true
                 fraction = 1
                 message = String(localized: "Whisper model ready.")
-                StartupLog.mark("whisper.onnx-model-downloaded variant=tiny")
+                StartupLog.mark("whisper.onnx-model-downloaded variant=\(variant)")
                 return
             }
             #if canImport(WhisperKit)
@@ -119,16 +120,33 @@ final class WhisperModelStore {
         }
     }
 
-    nonisolated static var onnxModelDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("LingoClass/WhisperONNX/tiny", isDirectory: true)
+    nonisolated static var selectedOnnxModel: String {
+        UserDefaults.standard.string(forKey: WhisperModelTier.defaultsKey)
+            .flatMap(WhisperModelTier.init(rawValue:))?.rawValue ?? "small"
     }
 
-    nonisolated static let onnxFiles: [(name: String, minBytes: Int64, url: URL)] = [
-        ("tiny-encoder.int8.onnx", 12_000_000, URL(string: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/tiny-encoder.int8.onnx?download=true")!),
-        ("tiny-decoder.int8.onnx", 85_000_000, URL(string: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/tiny-decoder.int8.onnx?download=true")!),
-        ("tiny-tokens.txt", 100_000, URL(string: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/tiny-tokens.txt?download=true")!)
-    ]
+    nonisolated static var onnxModelDirectory: URL {
+        onnxDirectory(model: selectedOnnxModel)
+    }
+
+    nonisolated static func onnxDirectory(model: String) -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("LingoClass/WhisperONNX/\(model)", isDirectory: true)
+    }
+
+    nonisolated static var onnxFiles: [(name: String, minBytes: Int64, url: URL)] {
+        onnxFiles(model: selectedOnnxModel)
+    }
+
+    nonisolated static func onnxFiles(model: String) -> [(name: String, minBytes: Int64, url: URL)] {
+        let sizes: (Int64, Int64) = model == "small" ? (100_000_000, 250_000_000)
+            : model == "base" ? (28_000_000, 125_000_000) : (12_000_000, 85_000_000)
+        return [("\(model)-encoder.int8.onnx", sizes.0),
+                ("\(model)-decoder.int8.onnx", sizes.1),
+                ("\(model)-tokens.txt", 100_000)].map { name, minimum in
+            (name, minimum, URL(string: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-\(model)/resolve/main/\(name)?download=true")!)
+        }
+    }
 
     nonisolated static func onnxModelFilesPresent() -> Bool {
         onnxFiles.allSatisfy { item in
@@ -145,7 +163,7 @@ final class WhisperModelStore {
         isDownloading = true
         defer { isDownloading = false }
         do {
-            try await downloadOnnxTiny()
+            try await downloadOnnxModel()
             StartupLog.mark("whisper.onnx-rescue-model-downloaded")
             return Self.onnxModelFilesPresent()
         } catch {
@@ -154,16 +172,19 @@ final class WhisperModelStore {
         }
     }
 
-    private func downloadOnnxTiny() async throws {
+    private func downloadOnnxModel() async throws {
         let fm = FileManager.default
-        try fm.createDirectory(at: Self.onnxModelDirectory, withIntermediateDirectories: true)
-        for (index, item) in Self.onnxFiles.enumerated() {
-            let destination = Self.onnxModelDirectory.appendingPathComponent(item.name)
+        let model = Self.selectedOnnxModel
+        let directory = Self.onnxDirectory(model: model)
+        let files = Self.onnxFiles(model: model)
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (index, item) in files.enumerated() {
+            let destination = directory.appendingPathComponent(item.name)
             if let attrs = try? fm.attributesOfItem(atPath: destination.path),
                let size = attrs[.size] as? Int64, size >= item.minBytes {
                 continue
             }
-            fraction = Double(index) / Double(Self.onnxFiles.count)
+            fraction = Double(index) / Double(files.count)
             message = String(format: String(localized: "Downloading Whisper model… %lld%%"), Int(fraction! * 100))
             let (temporary, response) = try await URLSession.shared.download(from: item.url)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

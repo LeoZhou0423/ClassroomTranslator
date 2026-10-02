@@ -138,7 +138,7 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                     }
                     if WhisperModelStore.shared.usesOnnxCompatibilityBackend {
-                        Text("Whisper tiny uses ONNX on CPU on both physical Macs and virtual machines.")
+                        Text("Whisper uses ONNX on CPU on both physical Macs and virtual machines.")
                             .font(.caption)
                             .foregroundColor(.orange)
                     }
@@ -306,15 +306,6 @@ struct SettingsView: View {
     private var whisperTierPicker: some View {
         let store = WhisperModelStore.shared
         let recommended = WhisperModelTier.recommended()
-        if store.usesOnnxCompatibilityBackend {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(WhisperModelTier.tiny.title)
-                    .font(.body)
-                Text("Whisper tiny · ONNX CPU")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        } else {
             VStack(alignment: .leading, spacing: 6) {
                 Picker("Model size", selection: Binding(
                     get: { store.tier },
@@ -340,7 +331,6 @@ struct SettingsView: View {
                         .foregroundColor(.green)
                 }
             }
-        }
     }
 
     /// Whisper 大模型：必须预下载并显示进度，禁止只在点开始时默默下。

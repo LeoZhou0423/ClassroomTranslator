@@ -20,7 +20,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     /// 当前档位变体名（设置覆盖优先，否则按硬件推荐）。
     static var modelName: String {
-        if WhisperModelTier.usesOnnxBackend { return "tiny" }
+        if WhisperModelTier.usesOnnxBackend { return WhisperModelStore.selectedOnnxModel }
         if let raw = UserDefaults.standard.string(forKey: WhisperModelTier.defaultsKey),
            let tier = WhisperModelTier(rawValue: raw) {
             return tier.variantName
@@ -254,10 +254,10 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         var config = sherpaOnnxOfflineRecognizerConfig(
             featConfig: sherpaOnnxFeatureConfig(sampleRate: 16_000, featureDim: 80),
             modelConfig: sherpaOnnxOfflineModelConfig(
-                tokens: dir.appendingPathComponent("tiny-tokens.txt").path,
+                tokens: dir.appendingPathComponent("\(modelName)-tokens.txt").path,
                 whisper: sherpaOnnxOfflineWhisperModelConfig(
-                    encoder: dir.appendingPathComponent("tiny-encoder.int8.onnx").path,
-                    decoder: dir.appendingPathComponent("tiny-decoder.int8.onnx").path,
+                    encoder: dir.appendingPathComponent("\(modelName)-encoder.int8.onnx").path,
+                    decoder: dir.appendingPathComponent("\(modelName)-decoder.int8.onnx").path,
                     language: locale.split(separator: "-").first.map(String.init) ?? "en",
                     task: "transcribe"
                 ),
@@ -293,7 +293,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     private static func loadKit(locale: String) async -> Bool {
         let usesCoreML = !WhisperModelTier.usesOnnxBackend && WhisperModelTier.supportsWhisperRuntime()
-        let desiredKey = usesCoreML ? "coreml:\(modelName)" : "onnx:tiny:\(locale)"
+        let desiredKey = usesCoreML ? "coreml:\(modelName)" : "onnx:\(modelName):\(locale)"
         if kitLock.withLock({ kitCache != nil && kitCacheKey == desiredKey }) { return true }
         if !usesCoreML {
             guard let recognizer = makeOnnxRecognizer(locale: locale) else { return false }
@@ -301,7 +301,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 kitCache = recognizer
                 kitCacheKey = desiredKey
             }
-            StartupLog.mark("whisper.kit-ready model=tiny backend=onnx-cpu locale=\(locale)")
+            StartupLog.mark("whisper.kit-ready model=\(modelName) backend=onnx-cpu locale=\(locale)")
             return true
         }
         #if canImport(WhisperKit)

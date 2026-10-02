@@ -2,6 +2,17 @@ import XCTest
 @testable import ClassroomTranslator
 
 final class WhisperModelTierTests: XCTestCase {
+    func testDefaultIsSmallAndExplicitSelectionIsPreserved() {
+        let name = "WhisperModelTierTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        XCTAssertEqual(WhisperModelTier(userDefaults: defaults), .small)
+        defaults.set("base", forKey: WhisperModelTier.defaultsKey)
+        XCTAssertEqual(WhisperModelTier(userDefaults: defaults), .base)
+        defaults.set("tiny", forKey: WhisperModelTier.defaultsKey)
+        XCTAssertEqual(WhisperModelTier(userDefaults: defaults), .tiny)
+    }
+
     func testWhisperRuntimeRequiresBothPhysicalMachineAndMetal() {
         XCTAssertFalse(WhisperModelTier.supportsWhisperRuntime(isVirtualMachine: true, hasMetalDevice: true))
         XCTAssertFalse(WhisperModelTier.supportsWhisperRuntime(isVirtualMachine: false, hasMetalDevice: false))

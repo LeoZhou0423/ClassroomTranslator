@@ -44,7 +44,7 @@ enum WhisperModelTier: String, CaseIterable, Identifiable, Sendable {
            let tier = WhisperModelTier(rawValue: raw) {
             self = tier
         } else {
-            self = Self.recommended()
+            self = .small
         }
     }
 
