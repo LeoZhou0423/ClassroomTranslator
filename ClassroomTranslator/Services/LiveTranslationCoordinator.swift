@@ -8,6 +8,7 @@ final class LiveTranslationCoordinator {
         let kind: Kind
         let text: String
         let cue: String
+        let context: String
         let revision: Int
         let generation: Int
         let segmentID: UUID?
@@ -24,11 +25,13 @@ final class LiveTranslationCoordinator {
             generation: Int,
             segmentID: UUID? = nil,
             sourceSnapshot: String? = nil,
+            context: String = "",
             completion: @escaping @MainActor (Response) -> Void
         ) {
             self.kind = kind
             self.text = text
             self.cue = cue
+            self.context = context
             self.revision = revision
             self.generation = generation
             self.segmentID = segmentID
@@ -45,7 +48,7 @@ final class LiveTranslationCoordinator {
 
     typealias Translator = @MainActor (String) async -> String
 
-    private let translator: Translator
+    private let translator: @MainActor (String, String) async -> String
     private let partialInterval: Duration
     private var pendingFinals: [Request] = []
     private var pendingPartial: Request?
@@ -62,16 +65,27 @@ final class LiveTranslationCoordinator {
     /// the first result instead of invoking Apple's model again.
     private var translationCache: [String: String] = [:]
     private let clock = ContinuousClock()
+    private var latestSegmentRequests: [UUID: (generation: Int, revision: Int)] = [:]
 
     init(partialInterval: Duration = .milliseconds(700), translator: @escaping Translator) {
         self.partialInterval = partialInterval
-        self.translator = translator
+        self.translator = { text, _ in await translator(text) }
+    }
+
+    init(partialInterval: Duration = .milliseconds(700), contextualTranslator: @escaping @MainActor (String, String) async -> String) {
+        self.partialInterval = partialInterval
+        self.translator = contextualTranslator
     }
 
     func submit(_ request: Request) {
         guard request.generation >= activeGeneration else { return }
         switch request.kind {
-        case .final: pendingFinals.append(request)
+        case .final:
+            if let id = request.segmentID {
+                pendingFinals.removeAll { $0.segmentID == id && $0.generation == request.generation }
+                latestSegmentRequests[id] = (request.generation, request.revision)
+            }
+            pendingFinals.append(request)
         case .partial: pendingPartial = request
         }
         startWorkerIfNeeded()
@@ -84,6 +98,7 @@ final class LiveTranslationCoordinator {
     func cancelAll() {
         pendingPartial = nil
         pendingFinals.removeAll()
+        latestSegmentRequests.removeAll()
         workerToken += 1
         worker?.cancel()
         worker = nil
@@ -128,10 +143,10 @@ final class LiveTranslationCoordinator {
                     guard !Task.isCancelled else { break }
                 }
                 if request.kind == .partial { self.lastPartialStartedAt = self.clock.now }
-                let cacheKey = self.normalizedCacheKey(request.text)
+                let cacheKey = self.normalizedCacheKey(request.text) + "\u{001F}" + request.context
                 var translated = self.translationCache[cacheKey] ?? ""
                 if translated.isEmpty {
-                    translated = await self.translator(request.text)
+                    translated = await self.translator(request.text, request.context)
                     if !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         self.translationCache[cacheKey] = translated
                     }
@@ -144,13 +159,15 @@ final class LiveTranslationCoordinator {
                    !Task.isCancelled {
                     try? await self.clock.sleep(for: .milliseconds(250))
                     guard !Task.isCancelled else { break }
-                    translated = await self.translator(request.text)
+                    translated = await self.translator(request.text, request.context)
                     if !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         self.translationCache[cacheKey] = translated
                     }
                 }
                 guard !Task.isCancelled else { break }
                 guard request.generation >= self.activeGeneration else { continue }
+                if let id = request.segmentID, let latest = self.latestSegmentRequests[id],
+                   latest.generation != request.generation || latest.revision != request.revision { continue }
                 request.completion(Response(request: request, translatedText: translated))
             }
             // 只有自己仍然是"当前那个 worker"时才收尾，避免清掉后继者的引用。

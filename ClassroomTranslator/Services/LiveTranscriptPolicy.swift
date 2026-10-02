@@ -356,3 +356,43 @@ enum LivePartialTranslationPolicy {
         return StableSentenceUnits.split(snapshot, includeTrailingFragment: false).last == unit
     }
 }
+
+/// Reopen only recent, same-speaker English fragments. Do not use a generic
+/// lowercase rule: Whisper can lowercase an entirely new sentence too.
+enum TranscriptContinuationPolicy {
+    static func needsContinuation(_ text: String) -> Bool {
+        let clean = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let end = clean.last else { return false }
+        if !".!?。！？…".contains(end) { return true }
+        if "!?。！？".contains(end) { return false }
+        let bare = clean.trimmingCharacters(in: .punctuationCharacters)
+        let words = bare.split(whereSeparator: \.isWhitespace)
+        let last = String(words.last ?? "")
+        if ["that is", "you know", "for that"].contains(bare) { return true }
+        if ["a", "an", "the", "to", "of", "for", "with", "during", "because", "and", "or", "my", "your", "our", "their", "office"].contains(last) { return true }
+        return words.count <= 3 && ["and ", "but ", "to ", "for "].contains { bare.hasPrefix($0) }
+    }
+
+    static func joined(previous: String, incoming: String, sameSpeaker: Bool, age: TimeInterval) -> String? {
+        guard sameSpeaker, age >= 0, age <= 15 else { return nil }
+        let left = previous.trimmingCharacters(in: .whitespacesAndNewlines)
+        let right = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !left.isEmpty, !right.isEmpty,
+              left.split(whereSeparator: \.isWhitespace).count < 100,
+              !"!?。！？".contains(left.last!) else { return nil }
+        let words = right.lowercased().split(whereSeparator: \.isWhitespace)
+        let leftWords = left.lowercased().split(whereSeparator: \.isWhitespace)
+        let last = String(leftWords.last ?? "").trimmingCharacters(in: .punctuationCharacters)
+        let first = String(words.first ?? "").trimmingCharacters(in: .punctuationCharacters)
+        let incompleteEnds: Set<String> = ["a", "an", "the", "to", "of", "for", "with", "during", "because", "and", "or", "that", "my", "your", "our", "their", "office"]
+        let startsDependentClause = ["to ", "for that", "and ", "but ", "because "].contains { right.lowercased().hasPrefix($0) }
+        let discourseFragment = ["that is", "you know", "for that"].contains(left.lowercased().trimmingCharacters(in: .punctuationCharacters))
+        let incomplete = incompleteEnds.contains(last) || discourseFragment || !".!?。！？…".contains(left.last!)
+        guard incomplete || startsDependentClause else { return nil }
+        // Restore a compound that was split by an ASR-inserted period.
+        let joinsOfficeHours = last == "office" && first == "hours"
+        let stripBoundary = incomplete || joinsOfficeHours || first == "to"
+        let prefix = stripBoundary ? left.trimmingCharacters(in: CharacterSet(charactersIn: ".…- ")) : left
+        return prefix + " " + right
+    }
+}

@@ -25,6 +25,34 @@ final class LiveTranscriptPolicyTests: XCTestCase {
                        ["We use data, because its structure matters."])
     }
 
+    func testOnlyDanglingClausesWaitForContinuation() {
+        XCTAssertTrue(TranscriptContinuationPolicy.needsContinuation("During office."))
+        XCTAssertTrue(TranscriptContinuationPolicy.needsContinuation("That is."))
+        XCTAssertTrue(TranscriptContinuationPolicy.needsContinuation("and Auguste."))
+        XCTAssertTrue(TranscriptContinuationPolicy.needsContinuation("I invite you"))
+        XCTAssertFalse(TranscriptContinuationPolicy.needsContinuation("It seemed to work."))
+        XCTAssertFalse(TranscriptContinuationPolicy.needsContinuation("What is death?"))
+    }
+
+    func testLectureContinuationRepairsCompoundAndInfinitive() {
+        XCTAssertEqual(TranscriptContinuationPolicy.joined(
+            previous: "You come talking to me during office.", incoming: "hours, you ask some question.", sameSpeaker: true, age: 3),
+            "You come talking to me during office hours, you ask some question.")
+        XCTAssertEqual(TranscriptContinuationPolicy.joined(
+            previous: "The first thing I want to do is invite you.", incoming: "to call me Shelly.", sameSpeaker: true, age: 3),
+            "The first thing I want to do is invite you to call me Shelly.")
+        XCTAssertEqual(TranscriptContinuationPolicy.joined(
+            previous: "That is.", incoming: "if we meet on the street.", sameSpeaker: true, age: 3),
+            "That is if we meet on the street.")
+    }
+
+    func testContinuationNeverCrossesSpeakerOrLongPause() {
+        XCTAssertNil(TranscriptContinuationPolicy.joined(previous: "During office.", incoming: "hours.", sameSpeaker: false, age: 2))
+        XCTAssertNil(TranscriptContinuationPolicy.joined(previous: "During office.", incoming: "hours.", sameSpeaker: true, age: 16))
+        XCTAssertNil(TranscriptContinuationPolicy.joined(previous: "What is death?", incoming: "to study it.", sameSpeaker: true, age: 2))
+        XCTAssertNil(TranscriptContinuationPolicy.joined(previous: "It worked.", incoming: "Now I am older.", sameSpeaker: true, age: 2))
+    }
+
     func testFinalTextSplitsIntoIndependentTranslationUnits() {
         XCTAssertEqual(
             StableSentenceUnits.split("First sentence. Is this second? Yes! trailing fragment"),

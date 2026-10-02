@@ -83,7 +83,7 @@ final class TranslationManager {
         }
     }
 
-    func translate(_ text: String) async -> String {
+    func translate(_ text: String, context: String = "", backend: TranslationBackendChoice? = nil) async -> String {
         guard !text.isEmpty else { return "" }
         if Self.baseLanguage(sourceLanguageCode) == Self.baseLanguage(targetLanguageCode),
            !sourceLanguageCode.isEmpty {
@@ -100,8 +100,18 @@ final class TranslationManager {
         }
         isTranslating = true
         let started = Date()
-        StartupLog.mark("translation.begin chars=\(text.count) source=\(sourceLanguageCode) target=\(targetLanguageCode)")
-        let result = await performTranslation(text)
+        StartupLog.mark("translation.begin backend=\((backend ?? TranslationBackendChoice()).rawValue) chars=\(text.count) source=\(sourceLanguageCode) target=\(targetLanguageCode)")
+        let choice = backend ?? TranslationBackendChoice()
+        let result: String
+        if choice == .translateGemma {
+            do {
+                result = try await LocalTranslationClient().translate(text, source: sourceLanguageCode, target: targetLanguageCode, context: context)
+                lastErrorMessage = ""
+            } catch is CancellationError { result = "" }
+            catch { result = ""; lastErrorMessage = error.localizedDescription }
+        } else {
+            result = await performTranslation(text)
+        }
         StartupLog.mark("translation.end chars=\(result.count) seconds=\(String(format: "%.2f", Date().timeIntervalSince(started)))")
         isTranslating = false
         await requestGate.release()

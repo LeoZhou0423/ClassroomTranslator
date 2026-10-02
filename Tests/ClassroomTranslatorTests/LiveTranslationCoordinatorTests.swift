@@ -3,6 +3,42 @@ import XCTest
 
 final class LiveTranslationCoordinatorTests: XCTestCase {
     @MainActor
+    func testRevisionSupersedesInFlightAndPendingTranslations() async {
+        var continuation: CheckedContinuation<String, Never>?
+        var inputs: [String] = []
+        var outputs: [String] = []
+        let coordinator = LiveTranslationCoordinator(partialInterval: .zero) { text in
+            inputs.append(text)
+            if text == "office." { return await withCheckedContinuation { continuation = $0 } }
+            return "T:" + text
+        }
+        let id = UUID()
+        coordinator.submit(.init(kind: .final, text: "office.", cue: "", revision: 1, generation: 1, segmentID: id) { outputs.append($0.translatedText) })
+        for _ in 0..<200 where continuation == nil { await Task.yield() }
+        guard let continuation else { XCTFail("Translator never started"); coordinator.cancelAll(); return }
+        coordinator.submit(.init(kind: .final, text: "office hours", cue: "", revision: 2, generation: 1, segmentID: id) { outputs.append($0.translatedText) })
+        coordinator.submit(.init(kind: .final, text: "office hours, ask questions.", cue: "", revision: 3, generation: 1, segmentID: id) { outputs.append($0.translatedText) })
+        continuation.resume(returning: "Wrong office")
+        await coordinator.waitUntilIdle()
+        XCTAssertEqual(inputs, ["office.", "office hours, ask questions."])
+        XCTAssertEqual(outputs, ["T:office hours, ask questions."])
+    }
+
+    @MainActor
+    func testContextIsIncludedInTranslationCacheIdentity() async {
+        var calls = 0
+        let coordinator = LiveTranslationCoordinator(partialInterval: .zero, contextualTranslator: { text, context in
+            calls += 1
+            return context + text
+        })
+        for context in ["Course", "Course", "Different course"] {
+            coordinator.submit(.init(kind: .final, text: "176", cue: "", revision: 1, generation: 1, context: context) { _ in })
+        }
+        await coordinator.waitUntilIdle()
+        XCTAssertEqual(calls, 2)
+    }
+
+    @MainActor
     func testIdenticalFinalTextIsTranslatedOnlyOnce() async {
         var calls = 0
         var outputs: [String] = []

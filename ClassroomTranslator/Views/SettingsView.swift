@@ -28,6 +28,9 @@ struct SettingsView: View {
     /// 由单测 testDefaultsKeyIsSpeechEngine 锁定；默认 apple（Step 1 暂只暴露 Apple）。
     @AppStorage("speechEngine") private var speechEngineChoice: String = "apple"
     
+    @AppStorage("translationBackend") private var translationBackend: String = "apple"
+    @State private var localModelBusy = false
+    @State private var localModelStatus = ""
     @State private var isDownloadingAll = false
     @State private var downloadProgress = ""
     
@@ -225,6 +228,27 @@ struct SettingsView: View {
                     }
                 }
                 
+                Section("翻译引擎") {
+                    Picker("翻译模型", selection: $translationBackend) {
+                        Text("Apple 系统翻译").tag("apple")
+                        Text("TranslateGemma 4B · 本地").tag("translateGemma")
+                    }
+                    Text("切换后重新进入录音页生效。英文字幕不等待翻译完成。")
+                        .font(.caption).foregroundColor(.secondary)
+                    if translationBackend == "translateGemma" {
+                        Text("先安装并启动 Ollama，再下载翻译模型（约 3.3 GB）。模型在本机运行，会与 Whisper 共用内存和计算资源。")
+                            .font(.caption).foregroundColor(.secondary)
+                        Link("安装 Ollama", destination: URL(string: "https://ollama.com/download/mac")!)
+                        HStack {
+                            Button("检查本地模型") { checkLocalTranslationModel(download: false) }
+                            Button("下载翻译模型") { checkLocalTranslationModel(download: true) }
+                        }.disabled(localModelBusy)
+                        if !localModelStatus.isEmpty {
+                            Text(localModelStatus).font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+                }
+
                 Section("About") {
                     HStack {
                         Text("Version")
@@ -260,6 +284,20 @@ struct SettingsView: View {
         }
     }
     
+    private func checkLocalTranslationModel(download: Bool) {
+        localModelBusy = true
+        localModelStatus = download ? "正在下载 TranslateGemma 4B，请保持 Ollama 运行…" : "正在检查…"
+        Task { @MainActor in
+            defer { localModelBusy = false }
+            do {
+                let client = LocalTranslationClient()
+                if download { try await client.downloadModel() }
+                let installed = try await client.modelInstalled()
+                localModelStatus = installed ? "模型已就绪，可重新进入录音页测试。" : "Ollama 已连接，翻译模型尚未下载。"
+            } catch { localModelStatus = error.localizedDescription }
+        }
+    }
+
     /// About 区动态引擎行。刻意用 isAvailable + fallback 而非 resolved：
     /// 渲染路径不应反复触发 StartupLog 记日志。
     private var resolvedEngineDisplayName: String {

@@ -3,6 +3,25 @@ import XCTest
 
 final class HistoryStoreTests: XCTestCase {
     @MainActor
+    func testRevisionPreservesIdentityAndRejectsStaleTranslation() {
+        let store = HistoryStore(isStoredInMemoryOnly: true)
+        let course = Course(name: "Test")
+        store.addCourse(course)
+        let record = store.startNewRecord(in: course)
+        let segment = TranscriptSegment(original: "During office.", translated: "Old", speaker: "Teacher")
+        store.addSegmentIfNew(segment, to: record)
+        store.reviseOriginal(for: segment.id, to: "During office hours.", in: record)
+        store.updateTranslation(for: segment.id, to: "Stale", in: record, expectedOriginal: segment.original)
+        XCTAssertEqual(record.segments.count, 1)
+        XCTAssertEqual(record.segments[0].id, segment.id)
+        XCTAssertEqual(record.segments[0].timestamp, segment.timestamp)
+        XCTAssertEqual(record.segments[0].speaker, segment.speaker)
+        XCTAssertEqual(record.segments[0].translated, "")
+        store.updateTranslation(for: segment.id, to: "Correct", in: record, expectedOriginal: "During office hours.")
+        XCTAssertEqual(record.segments[0].translated, "Correct")
+    }
+
+    @MainActor
     func testEachRecordingCreatesASeparateRecord() {
         let store = HistoryStore(isStoredInMemoryOnly: true)
         let course = Course(name: "Test")

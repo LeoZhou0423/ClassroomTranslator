@@ -109,10 +109,22 @@ final class HistoryStore {
         record.segments = segs
     }
 
-    func updateTranslation(for segmentID: UUID, to translation: String, in record: TranscriptRecord) {
+    /// Preserve the segment identity/timestamp/speaker when a continuation
+    /// repairs its text, and invalidate only that segment's old translation.
+    func reviseOriginal(for segmentID: UUID, to original: String, in record: TranscriptRecord) {
         var segments = record.segments
         guard let index = segments.firstIndex(where: { $0.id == segmentID }) else { return }
         let old = segments[index]
+        segments[index] = TranscriptSegment(id: old.id, original: original, translated: "",
+                                            timestamp: old.timestamp, isFinal: old.isFinal, speaker: old.speaker)
+        record.segments = segments
+    }
+
+    func updateTranslation(for segmentID: UUID, to translation: String, in record: TranscriptRecord, expectedOriginal: String? = nil) {
+        var segments = record.segments
+        guard let index = segments.firstIndex(where: { $0.id == segmentID }) else { return }
+        let old = segments[index]
+        guard expectedOriginal == nil || old.original == expectedOriginal else { return }
         segments[index] = TranscriptSegment(
             id: old.id,
             original: old.original,

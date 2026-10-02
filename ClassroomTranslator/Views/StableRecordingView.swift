@@ -37,6 +37,7 @@ final class StableRecordingViewController: NSViewController {
     private let historyStore: HistoryStore
     private let translationManager: TranslationManager
     private let onClose: () -> Void
+    private let translationBackend = TranslationBackendChoice()
     private let speechManager = SpeechManager()
     private let subtitleWindow = SubtitleWindowController()
 
@@ -76,6 +77,8 @@ final class StableRecordingViewController: NSViewController {
     private var partialTranslation = ""
     private var lastSubmittedPartialTranslationUnit = ""
     private var translationCoordinator: LiveTranslationCoordinator!
+    private var deferredFinalRequest: LiveTranslationCoordinator.Request?
+    private var fragmentTranslationTask: Task<Void, Never>?
     private var partialRevision = 0
     private var generation = 0
     private var startupStep: RecordingStartupStep?
@@ -104,10 +107,10 @@ final class StableRecordingViewController: NSViewController {
         self.translationManager = translationManager
         self.onClose = onClose
         super.init(nibName: nil, bundle: nil)
-        translationCoordinator = LiveTranslationCoordinator { [weak self] text in
+        translationCoordinator = LiveTranslationCoordinator(contextualTranslator: { [weak self] text, context in
             guard let self else { return "" }
-            return await self.translationManager.translate(text)
-        }
+            return await self.translationManager.translate(text, context: context, backend: self.translationBackend)
+        })
     }
 
     required init?(coder: NSCoder) { nil }
@@ -583,6 +586,9 @@ final class StableRecordingViewController: NSViewController {
             sessionState.interrupt()
         }
         speechManager.stopRecording()
+        fragmentTranslationTask?.cancel()
+        fragmentTranslationTask = nil
+        deferredFinalRequest = nil
         translationCoordinator.cancelAll()
         if courseExists, let activeRecord {
             finalizeRoleAssignments()
@@ -768,7 +774,7 @@ final class StableRecordingViewController: NSViewController {
         ensureActiveRecord()
         let units = StableSentenceUnits.split(trimmed)
         for unit in units {
-            enqueueFinalUnit(Self.ensureEndingPunctuation(unit), revision: revision)
+            enqueueFinalUnit(unit, revision: revision)
         }
         if partialText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
             partialText = ""
@@ -779,23 +785,66 @@ final class StableRecordingViewController: NSViewController {
     }
 
     private func enqueueFinalUnit(_ sentence: String, revision: Int) {
-        let cue = SubtitleCueBuilder.cue(from: sentence, maximumWords: subtitleMaximumWords)
-        // task-4：先挂当前（临时）说话人标签，取窗解析后由引擎回写精确标签。
-        let segment = TranscriptSegment(original: sentence, translated: "", speaker: speakerEngine?.currentLabel)
-        if let activeRecord {
-            historyStore.addSegmentIfNew(segment, to: activeRecord)
-            rebuildFinalizedText(from: activeRecord)
+        guard let record = activeRecord else { return }
+        let speaker = speakerEngine?.currentLabel
+        let segment: TranscriptSegment
+        if let previous = record.segments.last,
+           let joined = TranscriptContinuationPolicy.joined(
+               previous: previous.original, incoming: sentence,
+               sameSpeaker: previous.speaker == speaker,
+               age: Date().timeIntervalSince(previous.timestamp)) {
+            historyStore.reviseOriginal(for: previous.id, to: joined, in: record)
+            segment = record.segments.last!
+            StartupLog.mark("ui.segment-revised chars=\(joined.count)")
+        } else {
+            segment = TranscriptSegment(original: sentence, translated: "", speaker: speaker)
+            historyStore.addSegmentIfNew(segment, to: record)
             speakerEngine?.segmentsCommitted([segment.id])
         }
-        translationCoordinator.submit(.init(
-            kind: .final,
-            text: sentence,
-            cue: cue,
-            revision: revision,
-            generation: translationGeneration,
-            segmentID: segment.id,
+        rebuildFinalizedText(from: record)
+        let cue = SubtitleCueBuilder.cue(from: segment.original, maximumWords: subtitleMaximumWords)
+        scheduleFinalTranslation(.init(
+            kind: .final, text: segment.original, cue: cue, revision: revision,
+            generation: translationGeneration, segmentID: segment.id,
+            context: translationContext(excluding: segment.id),
             completion: { [weak self] response in self?.handleTranslation(response) }
         ))
+    }
+
+    private func scheduleFinalTranslation(_ request: LiveTranslationCoordinator.Request) {
+        if let pending = deferredFinalRequest, pending.segmentID != request.segmentID {
+            flushDeferredTranslation()
+        }
+        fragmentTranslationTask?.cancel()
+        fragmentTranslationTask = nil
+        deferredFinalRequest = nil
+        guard TranscriptContinuationPolicy.needsContinuation(request.text) else {
+            translationCoordinator.submit(request)
+            return
+        }
+        // Persist/render English immediately; give a dangling clause a bounded
+        // chance to acquire its next words before invoking the translator.
+        deferredFinalRequest = request
+        fragmentTranslationTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            guard let self, !Task.isCancelled else { return }
+            self.flushDeferredTranslation()
+        }
+    }
+
+    private func flushDeferredTranslation() {
+        fragmentTranslationTask?.cancel()
+        fragmentTranslationTask = nil
+        if let request = deferredFinalRequest {
+            deferredFinalRequest = nil
+            translationCoordinator.submit(request)
+        }
+    }
+
+    private func translationContext(excluding segmentID: UUID? = nil) -> String {
+        guard courseExists else { return "" }
+        let recent = (activeRecord?.segments ?? []).filter { $0.id != segmentID }.suffix(2)
+        return "Course: " + course.name + "\nRecent speech: " + String(recent.map(\.original).joined(separator: " ").suffix(600))
     }
 
     private func submitPartialTranslation(_ text: String, revision: Int) {
@@ -803,6 +852,7 @@ final class StableRecordingViewController: NSViewController {
         // Translate only the newest punctuation-closed unit; the final request
         // then reuses the coordinator cache if recognition leaves it unchanged.
         guard let stableUnit = StableSentenceUnits.split(text, includeTrailingFragment: false).last,
+              !TranscriptContinuationPolicy.needsContinuation(stableUnit),
               stableUnit != lastSubmittedPartialTranslationUnit else { return }
         lastSubmittedPartialTranslationUnit = stableUnit
         let cue = SubtitleCueBuilder.cue(from: stableUnit, maximumWords: subtitleMaximumWords)
@@ -813,6 +863,7 @@ final class StableRecordingViewController: NSViewController {
             revision: revision,
             generation: translationGeneration,
             sourceSnapshot: text,
+            context: translationContext(),
             completion: { [weak self] response in self?.handleTranslation(response) }
         ))
     }
@@ -832,7 +883,7 @@ final class StableRecordingViewController: NSViewController {
         }
         if !response.succeeded, response.request.kind == .partial {
             setStatus(
-                String(localized: "Translation unavailable · transcript is still being saved"),
+                translationManager.lastErrorMessage.isEmpty ? String(localized: "Translation unavailable · transcript is still being saved") : translationManager.lastErrorMessage,
                 severity: .warning
             )
             return
@@ -867,7 +918,7 @@ final class StableRecordingViewController: NSViewController {
         case .final:
             StartupLog.mark("ui.tr-final succeeded=\(response.succeeded) len=\(response.translatedText.count) overlay=\(overlayVisible)")
             if courseExists, let record = activeRecord, let segmentID = response.request.segmentID {
-                historyStore.updateTranslation(for: segmentID, to: response.translatedText, in: record)
+                historyStore.updateTranslation(for: segmentID, to: response.translatedText, in: record, expectedOriginal: response.request.text)
                 rebuildFinalizedText(from: record)
             }
             if partialText.trimmingCharacters(in: .whitespacesAndNewlines) == response.request.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -885,7 +936,7 @@ final class StableRecordingViewController: NSViewController {
                 setStatus(String(localized: "Recording · live translation"))
             } else {
                 setStatus(
-                    String(localized: "Translation unavailable · transcript saved without translation"),
+                    translationManager.lastErrorMessage.isEmpty ? String(localized: "Translation unavailable · transcript saved without translation") : translationManager.lastErrorMessage,
                     severity: .warning
                 )
             }
@@ -895,26 +946,11 @@ final class StableRecordingViewController: NSViewController {
     }
 
     private func queueCurrentPartialIfNeeded() {
+        defer { flushDeferredTranslation() }
         let text = partialText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, partialRevision != lastEnqueuedFinalRevision else { return }
         partialRevision += 1
         enqueueFinal(text, revision: partialRevision)
-    }
-
-    private static func ensureEndingPunctuation(_ text: String) -> String {
-        let result = text
-        let trimmed = result.trimmingCharacters(in: .whitespaces)
-        guard let last = trimmed.last else { return result }
-        if ".!?。！？…".contains(last) { return trimmed }
-        let lower = trimmed.lowercased()
-        if lower.hasPrefix("what") || lower.hasPrefix("how") || lower.hasPrefix("why")
-            || lower.hasPrefix("where") || lower.hasPrefix("when") || lower.hasPrefix("who")
-            || lower.hasPrefix("can ") || lower.hasPrefix("could ") || lower.hasPrefix("would")
-            || lower.hasPrefix("is ") || lower.hasPrefix("are ") || lower.hasPrefix("do ")
-            || lower.hasPrefix("does ") || lower.hasPrefix("did ") {
-            return trimmed + "?"
-        }
-        return trimmed + "."
     }
 
     /// VIS-02：原文 13pt / secondary，译文 15pt / label —— 一眼能分清哪句是译文。
