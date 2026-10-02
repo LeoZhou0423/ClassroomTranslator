@@ -37,6 +37,7 @@ let package = Package(
                 .copy("Resources/SpeakerCAMWaveZHEng.mlpackage"),
                 .copy("Resources/SherpaStreamEN"),
                 .copy("Resources/role_vocab.txt"),
+                .copy("Resources/silero_vad.onnx"),
                 // TalkMoves MiniLM 老师/学生二分类（生产角色识别）
                 .copy("Resources/RoleMiniLM.mlpackage")
             ]

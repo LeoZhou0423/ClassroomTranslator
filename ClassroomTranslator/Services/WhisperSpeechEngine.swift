@@ -48,6 +48,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     private let stateLock = NSLock()
 
     private var engine: AVAudioEngine?
+    private var speechDetector: SherpaOnnxVoiceActivityDetectorWrapper?
     private var tapInstalled = false
     private var configurationObserver: NSObjectProtocol?
     private var isRunning = false
@@ -171,7 +172,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         }
 
         let loaded: Bool = await Task.detached(priority: .userInitiated) {
-            await Self.loadKit()
+            await Self.loadKit(locale: localeIdentifier)
         }.value
 
         guard loaded else {
@@ -239,7 +240,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     /// Builds the sherpa-onnx tiny recognizer. Shared by the VM backend and by
     /// the rescue path when WhisperKit/CoreML decodes nothing on a real Mac.
-    nonisolated private static func makeOnnxRecognizer() -> SherpaOnnxOfflineRecognizer? {
+    nonisolated private static func makeOnnxRecognizer(locale: String = "en-US") -> SherpaOnnxOfflineRecognizer? {
         guard WhisperModelStore.onnxModelFilesPresent() else { return nil }
         let dir = WhisperModelStore.onnxModelDirectory
         // A truncated-but-size-passing download decodes to silence forever,
@@ -257,7 +258,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                 whisper: sherpaOnnxOfflineWhisperModelConfig(
                     encoder: dir.appendingPathComponent("tiny-encoder.int8.onnx").path,
                     decoder: dir.appendingPathComponent("tiny-decoder.int8.onnx").path,
-                    language: "",
+                    language: locale.split(separator: "-").first.map(String.init) ?? "en",
                     task: "transcribe"
                 ),
                 numThreads: 2,
@@ -272,12 +273,12 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
     /// downloaded CoreML model, its tokenizer or the mel path). Rescue the
     /// session with the ONNX tiny decoder, which is verified to transcribe the
     /// same audio correctly.
-    nonisolated private static func switchToOnnxRescueBackend() async {
+    nonisolated private static func switchToOnnxRescueBackend(locale: String) async {
         if kitLock.withLock({ kitCacheKey == onnxRescueKey }) { return }
         if !WhisperModelStore.onnxModelFilesPresent() {
             guard await WhisperModelStore.shared.ensureOnnxRecoveryModel() else { return }
         }
-        guard let recognizer = makeOnnxRecognizer() else {
+        guard let recognizer = makeOnnxRecognizer(locale: locale) else {
             StartupLog.mark("whisper.onnx-rescue-unavailable")
             return
         }
@@ -290,17 +291,17 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
 
     private static let onnxRescueKey = "onnx:tiny-rescue"
 
-    private static func loadKit() async -> Bool {
+    private static func loadKit(locale: String) async -> Bool {
         let usesCoreML = !WhisperModelTier.usesOnnxBackend && WhisperModelTier.supportsWhisperRuntime()
-        let desiredKey = usesCoreML ? "coreml:\(modelName)" : "onnx:tiny"
+        let desiredKey = usesCoreML ? "coreml:\(modelName)" : "onnx:tiny:\(locale)"
         if kitLock.withLock({ kitCache != nil && kitCacheKey == desiredKey }) { return true }
         if !usesCoreML {
-            guard let recognizer = makeOnnxRecognizer() else { return false }
+            guard let recognizer = makeOnnxRecognizer(locale: locale) else { return false }
             kitLock.withLock {
                 kitCache = recognizer
                 kitCacheKey = desiredKey
             }
-            StartupLog.mark("whisper.kit-ready model=tiny backend=onnx-cpu")
+            StartupLog.mark("whisper.kit-ready model=tiny backend=onnx-cpu locale=\(locale)")
             return true
         }
         #if canImport(WhisperKit)
@@ -469,7 +470,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
                     }
                     StartupLog.mark("whisper.coreml-empty-streak count=\(failures)")
                     if failures >= Self.maximumEmptyCoremlDecodes {
-                        await Self.switchToOnnxRescueBackend()
+                        await Self.switchToOnnxRescueBackend(locale: locale)
                         if let rescue = Self.kitLock.withLock({ Self.kitCache as? SherpaOnnxOfflineRecognizer }) {
                             let rescuedText = rescue.decode(samples: samples, sampleRate: 16_000).text
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -626,6 +627,20 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         try await withCheckedThrowingContinuation { (continuationStart: CheckedContinuation<Void, Error>) in
             queue.async {
                 do {
+                    guard let vadModel = Bundle.module.url(forResource: "silero_vad", withExtension: "onnx") else {
+                        throw AudioEngineError.modelUnavailable
+                    }
+                    var vadConfig = sherpaOnnxVadModelConfig(
+                        sileroVad: sherpaOnnxSileroVadModelConfig(
+                            model: vadModel.path, threshold: 0.6,
+                            minSilenceDuration: 0.25, minSpeechDuration: 0.25,
+                            windowSize: 512, maxSpeechDuration: 30
+                        ), numThreads: 1
+                    )
+                    self.speechDetector = SherpaOnnxVoiceActivityDetectorWrapper(
+                        config: &vadConfig, buffer_size_in_seconds: 30
+                    )
+                    StartupLog.mark("whisper.vad-ready backend=silero threshold=0.6")
                     let engine = AVAudioEngine()
                     self.engine = engine
                     let input = engine.inputNode
@@ -684,6 +699,7 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         tapInstalled = false
         engine?.stop()
         engine = nil
+        speechDetector = nil
     }
 
     private static func monoFloats(_ buffer: AVAudioPCMBuffer) -> [Float] {
@@ -735,9 +751,9 @@ final class WhisperSpeechEngine: @unchecked Sendable, SpeechEngine {
         let now = Date().timeIntervalSince1970
         let rms = samples.reduce(0) { $0 + $1 * $1 }
         let rmsValue = sqrt(rms / Float(max(samples.count, 1)))
-        let speech = WhisperDecodePolicy.containsSpeech(
-            rms: rmsValue
-        )
+        speechDetector?.acceptWaveform(samples: samples)
+        let speech = speechDetector?.isSpeechDetected() ?? false
+        while let detector = speechDetector, !detector.isEmpty() { detector.pop() }
 
         let diagnostics: (buffered: Int, fresh: Int, inFlight: Bool)? = stateLock.withLock {
             let admitted = audioWindow.append(samples, isSpeech: speech)
