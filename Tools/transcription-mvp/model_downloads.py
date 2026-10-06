@@ -1,6 +1,6 @@
 """Background, atomic model downloads with progress and explicit failures."""
 import threading
-from urllib.request import Request,urlopen
+from download_file import download_file
 from app_paths import DATA_ROOT,speech_model_dir
 
 class Downloads:
@@ -27,16 +27,7 @@ class Downloads:
             for index,(filename,url) in enumerate(files.items()):
                 final=target/filename
                 if final.is_file() and final.stat().st_size>1000:continue
-                temporary=target/(filename+'.part')
-                with urlopen(Request(url,headers={'User-Agent':'LingoClass'}),timeout=30) as response,temporary.open('wb') as output:
-                    total=int(response.headers.get('Content-Length',0));copied=0
-                    while True:
-                        block=response.read(1024*1024)
-                        if not block:break
-                        output.write(block);copied+=len(block)
-                        self.update(name,file=filename,progress=round((index+(copied/total if total else 0))/4*100),bytes=copied)
-                    if not copied or (total and copied!=total):raise ValueError('模型下载不完整，请重试')
-                temporary.replace(final)
+                download_file(url,final,lambda copied,total,retry:self.update(name,file=filename,progress=round((index+(copied/total if total else 0))/4*100),bytes=copied,retry=retry))
             self.update(name,status='done',progress=100)
         except Exception as error:self.update(name,status='error',error=str(error))
 DOWNLOADS=Downloads()

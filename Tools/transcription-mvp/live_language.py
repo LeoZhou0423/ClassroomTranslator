@@ -70,6 +70,7 @@ class LiveLanguage:
         self.lock = threading.RLock()
         self.wake = threading.Event()
         self.pending = {}
+        self.inflight = set()
         self.results = {}
         self.generation = 0
         self.cache = {}
@@ -92,12 +93,13 @@ class LiveLanguage:
                 self.key=json.loads(private.read_text(encoding='utf-8')).get('qwen_key','')
         self.url = os.getenv('DASHSCOPE_BASE_URL', 'https://maas.qianwenaiapi.com/compatible-mode/v1')
         self.closed=threading.Event()
-        self.worker=threading.Thread(target=self.run, daemon=True)
-        self.worker.start()
+        self.workers=[threading.Thread(target=self.run, daemon=True) for _ in range(3)]
+        self.worker=self.workers[0]
+        for worker in self.workers: worker.start()
 
     def close(self):
         self.closed.set();self.wake.set()
-        self.worker.join()
+        for worker in self.workers: worker.join()
 
     def reset(self, directory=None):
         with self.lock:
@@ -128,7 +130,7 @@ class LiveLanguage:
                     previous['source_confirmed']=confirmed
                     continue
                 self.results[row['id']] = {'id':row['id'],'original':row['text'],'english':row['text'],
-                    'members':row['members'],'chinese':previous.get('chinese','') if previous else '', 'translation_stale':bool(previous and previous.get('chinese')), 'status':'queued', 'source_confirmed':confirmed, 'ack':'accepted'}
+                    'members':row['members'],'chinese':'', 'translation_stale':False, 'status':'queued', 'source_confirmed':confirmed, 'ack':'accepted'}
                 self.pending[row['id']] = (self.generation, row['text'])
                 self.updated[row['id']] = time.monotonic()
                 self.first_seen.setdefault(row['id'],time.monotonic())
@@ -142,16 +144,16 @@ class LiveLanguage:
         return confirmed or identifier in self.flush_ids or now-self.updated.get(identifier,now)>=10
 
     def take_next(self):
-        # Never let a later ready sentence overtake an earlier pending one.
-        # Source confirmation wakes the worker immediately; the timeout is
-        # only a fallback for an unconfirmed fragment, never a normal delay.
+        # Dispatch independent ready rows; presentation retains source order.
+        # One active job per row prevents duplicate paid requests on revisions.
         with self.lock:
-            identifier=next((k for k in self.results if k in self.pending),None)
+            identifier=next((k for k in self.results if k in self.pending and k not in self.inflight and self.ready(k,self.pending[k][1])),None)
             if identifier is None: return None
             value=self.pending[identifier]
             if not self.ready(identifier,value[1]): return None
             self.results[identifier]['dispatch_reason']='confirmed' if self.results[identifier].get('source_confirmed') else 'timeout'
             self.pending.pop(identifier)
+            self.inflight.add(identifier)
             return identifier,value
 
     def snapshot(self):
@@ -267,6 +269,9 @@ class LiveLanguage:
                 self.publish(identifier,generation,original,chinese=chinese,status='done',ack='completed',translation_stale=False,processing_seconds=round(time.monotonic()-started,3))
             except Exception as error:
                 self.publish(identifier,generation,original,status='error',ack='failed',error=str(error))
+            finally:
+                with self.lock: self.inflight.discard(identifier)
+                self.wake.set()
 
 
 LANGUAGE = LiveLanguage()

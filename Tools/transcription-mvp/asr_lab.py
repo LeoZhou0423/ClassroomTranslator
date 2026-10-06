@@ -481,8 +481,16 @@ class Handler(BaseHTTPRequestHandler):
             path=urlparse(self.path).path
             if path == "/api/courses":
                 return self.reply(STORE.create_course(json.loads(body)))
+            elif path in ('/api/edit-course','/api/delete-course'):
+                value=json.loads(body)
+                if LAB.phase in ('loading','recording','paused','stopping'): raise ValueError('请先结束并保存当前课堂')
+                return self.reply(STORE.edit_course(value['id'],value) if path=='/api/edit-course' else STORE.delete_course(value['id']))
             elif path == '/api/rename-record':
                 value=json.loads(body);return self.reply(STORE.rename_record(value['id'],value['title']))
+            elif path == '/api/edit-content':
+                value=json.loads(body);return self.reply(STORE.edit_content(value['id'],value['row_id'],value))
+            elif path == '/api/edit-classroom':
+                value=json.loads(body);return self.reply(STORE.edit_classroom(value['id'],value['rows'],value['speaker_names']))
             elif path == '/api/download-model':
                 return self.reply(DOWNLOADS.start(json.loads(body)['model']))
             elif path == '/api/export-text':
@@ -585,11 +593,13 @@ def apply_overlay_material(window):
     class Data(ctypes.Structure):
         _fields_=[('attribute',ctypes.c_int),('data',ctypes.c_void_p),('size',ctypes.c_size_t)]
     hwnd=int(window.native.Handle.ToInt64())
-    accent=Accent(4,2,0x99251f1c,0)
+    accent=Accent(4,0,0x99251f1c,0)
     data=Data(19,ctypes.addressof(accent),ctypes.sizeof(accent))
     ctypes.windll.user32.SetWindowCompositionAttribute(ctypes.c_void_p(hwnd),ctypes.byref(data))
     corner=ctypes.c_int(2)
     ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd),33,ctypes.byref(corner),4)
+    border=ctypes.c_uint(0xfffffffe) # DWMWA_COLOR_NONE: no native outline.
+    ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd),34,ctypes.byref(border),4)
 
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument("--port",type=int,default=8785); parser.add_argument("--open-browser",action="store_true"); parser.add_argument("--desktop",action="store_true"); args=parser.parse_args()
@@ -605,7 +615,9 @@ def main():
         threading.Thread(target=serve,daemon=True).start()
         import webview
         import sys
-        webview.create_window("LingoClass",f"http://127.0.0.1:{args.port}",width=1000,height=650,min_size=(800,550),background_color="#ffffff",vibrancy=sys.platform=='darwin',text_select=True)
+        main_window=webview.create_window("LingoClass",f"http://127.0.0.1:{args.port}",width=1000,height=650,min_size=(800,550),background_color="#ffffff",vibrancy=sys.platform=='darwin',text_select=True)
+        from windows_identity import apply_to_window
+        main_window.events.shown += lambda: apply_to_window(main_window)
         icon_path=ICON_PATH
         try: webview.start(icon=str(icon_path) if icon_path.is_file() else None)
         finally:

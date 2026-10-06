@@ -10,3 +10,23 @@ html.overlay-root,html.overlay-root body,html.overlay-root #root{background:tran
 @media(max-width:650px){.courses-home{padding:20px 15px}.course-card{padding:15px;gap:10px}.course-card h2{font-size:15px}.active-classroom{font-size:0;padding:10px;justify-content:center}.active-classroom span:last-child{display:none}.toolbar-actions{gap:5px}.toolbar-actions button{padding:5px 8px}.toolbar-title{max-width:45%}.transcript-scroll{padding:16px}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 .overlay-provisional p{color:#fff;font-size:16px}.overlay-provisional p span{opacity:.65;margin-left:4px}
+
+/* The native window owns the glass and its rounded silhouette. */
+html.overlay-root,html.overlay-root body,html.overlay-root #root{overflow:hidden}
+.subtitle-window{height:100dvh;overflow:hidden;border:0;border-radius:0;box-shadow:none;background:rgba(24,29,39,.32);padding:35px 26px 18px;backdrop-filter:blur(24px) saturate(135%)}
+.subtitle-viewport{width:100%;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;overscroll-behavior:contain;scroll-behavior:smooth;overflow-anchor:none}
+.subtitle-viewport::-webkit-scrollbar{display:none}
+.subtitle-current{padding:0!important;animation:subtitle-enter .22s cubic-bezier(.2,.7,.2,1) both}
+.subtitle-current p{font-size:17px;line-height:1.5;margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:#f1f3f8}
+.subtitle-current strong{display:block;font-size:21px;line-height:1.5;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;color:#fff}
+.subtitle-empty{font-size:14px;color:#d1d5de}
+.overlay-handle{opacity:.25;transition:opacity .16s}
+.subtitle-window:hover .overlay-handle,.subtitle-window:focus-within .overlay-handle{opacity:1}
+@keyframes subtitle-enter{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.subtitle-current{animation:none}.subtitle-viewport{scroll-behavior:auto}.overlay-handle{transition:none}}
+
+.record-list-row{display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}.record-list-row .record-item{flex:1;min-width:0;border-bottom:0}.record-edit-button{flex-shrink:0;margin-right:8px}
+
+.caption-edit{float:right;font-size:11px;margin-left:12px}.sheet-form textarea{font:inherit;line-height:1.6;resize:vertical;border:1px solid var(--border);border-radius:7px;padding:9px;background:var(--group);color:var(--text)}
+
+.classroom-editor{width:960px;max-height:90vh;display:flex;flex-direction:column}.classroom-editor .sheet-form{overflow:auto;min-height:0}.classroom-edit-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:12px 0;border-top:1px solid var(--border)}@media(max-width:650px){.classroom-edit-row{grid-template-columns:1fr}}

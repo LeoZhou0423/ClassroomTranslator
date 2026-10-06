@@ -8,6 +8,34 @@ from live_language import caption_english
 
 
 class LanguageTests(unittest.TestCase):
+    def test_slow_translation_does_not_block_later_sentence(self):
+        first_started=threading.Event();release=threading.Event();second_done=threading.Event()
+        def translate(worker,text,emit):
+            if text=='This is the first sentence.':
+                first_started.set();release.wait(3)
+            else: second_done.set()
+            return 'translated '+text
+        with patch.object(LiveLanguage,'translate',translate):
+            worker=LiveLanguage()
+            try:
+                worker.submit([{'id':'0','text':'This is the first sentence.','final':True}])
+                self.assertTrue(first_started.wait(2))
+                worker.submit([{'id':'0','text':'This is the first sentence.','final':True},
+                               {'id':'1','text':'This is the second sentence.','final':True}])
+                self.assertTrue(second_done.wait(2))
+                self.assertEqual(list(worker.snapshot()),['0','1'])
+            finally:
+                release.set();worker.close()
+
+    def test_revision_waits_for_same_row_and_rejects_old_job(self):
+        worker=self.make();worker.submit([{'id':'0','text':'This is the old sentence.','final':True}])
+        worker.take_next()
+        worker.submit([{'id':'0','text':'This is the revised sentence.','final':True}])
+        self.assertIsNone(worker.take_next())
+        self.assertFalse(worker.publish('0',0,'This is the old sentence.',chinese='old'))
+        worker.inflight.discard('0')
+        self.assertEqual(worker.take_next()[1][1],'This is the revised sentence.')
+
     def test_incomplete_fragment_uses_timeout_protection(self):
         worker=self.make();worker.submit([{'id':'0:0','text':'And the very first thing I want--','final':True}])
         worker.updated['0:0']-=30;worker.first_seen['0:0']-=30
@@ -23,15 +51,15 @@ class LanguageTests(unittest.TestCase):
         self.assertEqual(worker.take_next()[0],'0')
         self.assertEqual(worker.snapshot()['0']['dispatch_reason'],'confirmed')
 
-    def test_fifo_and_ten_second_protection(self):
+    def test_ready_sentence_bypasses_unconfirmed_fragment(self):
         worker=self.make()
         worker.submit([{'id':'0','text':'That is.','final':True},
                        {'id':'1','text':'This is a complete sentence.','final':True}])
-        self.assertIsNone(worker.take_next())
+        self.assertEqual(worker.take_next()[0],'1')
         worker.updated['0']-=10.1
         self.assertEqual(worker.take_next()[0],'0')
         self.assertEqual(worker.snapshot()['0']['dispatch_reason'],'timeout')
-        self.assertEqual(worker.take_next()[0],'1')
+        self.assertIsNone(worker.take_next())
 
     def test_explicit_confirmation_wakes_pending_fragment(self):
         worker=self.make()
@@ -95,12 +123,12 @@ class LanguageTests(unittest.TestCase):
         worker=self.make();worker.key=''
         with self.assertRaises(ValueError):worker.translate('Hello.',lambda s:None)
 
-    def test_translation_remains_visible_during_revision(self):
+    def test_revised_source_does_not_display_old_translation(self):
         worker=self.make();worker.submit([{'id':'0:0','text':'Hello.'}])
         worker.publish('0:0',0,'Hello.',chinese='你好',status='done')
         worker.submit([{'id':'0:0','text':'Hello there.'}])
-        self.assertEqual(worker.snapshot()['0:0']['chinese'],'你好')
-        self.assertTrue(worker.snapshot()['0:0']['translation_stale'])
+        self.assertEqual(worker.snapshot()['0:0']['chinese'],'')
+        self.assertFalse(worker.publish('0:0',0,'Hello.',chinese='旧译文'))
 
     def test_boundary_wait_and_deadline(self):
         worker=self.make();worker.submit([{'id':'0:0','text':'during office.'}])
