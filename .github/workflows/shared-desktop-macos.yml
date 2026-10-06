@@ -37,11 +37,13 @@ jobs:
               Path('Build').mkdir(exist_ok=True)
               Path('Build/private-config.json').write_text(json.dumps({'qwen_key':os.environ['QWEN_API_KEY']}))
           PY
-      - name: Build app and installer
-        run: bash Tools/transcription-mvp/build-macos.sh
+      - name: Install test dependencies
+        run: python3 -m pip install -r Tools/transcription-mvp/requirements-desktop.txt
       - name: Test shared logic
         working-directory: Tools/transcription-mvp
         run: python3 -m unittest test_noise_reduction test_word_export test_desktop_store test_speaker_core test_live_language test_core test_asr_lab test_asr_runtime test_grammar_model test_local_revision
+      - name: Build app and installer
+        run: bash Tools/transcription-mvp/build-macos.sh
       - name: Verify packaged resources
         run: |
           codesign --verify --deep --strict Releases/macOS/LingoClass.app

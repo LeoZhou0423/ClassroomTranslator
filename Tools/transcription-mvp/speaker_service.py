@@ -8,7 +8,13 @@ class SpeakerService:
     def __init__(self):
         self.lock=threading.RLock();self.generation=0;self.rows={};self.directory=None
         self.jobs=queue.Queue();self.error=None
-        threading.Thread(target=self.run,daemon=True).start()
+        self.closed=threading.Event()
+        self.worker=threading.Thread(target=self.run,daemon=True)
+        self.worker.start()
+
+    def close(self):
+        self.closed.set();self.jobs.put(None)
+        self.worker.join()
 
     def reset(self,directory):
         with self.lock:
@@ -22,8 +28,11 @@ class SpeakerService:
 
     def run(self):
         generation=-1;analyzer=None;items=[];ids=[]
-        while True:
-            job_generation,identifier,audio,text=self.jobs.get()
+        while not self.closed.is_set():
+            job=self.jobs.get()
+            if job is None:
+                self.jobs.task_done();break
+            job_generation,identifier,audio,text=job
             try:
                 if job_generation!=self.generation:continue
                 if generation!=job_generation:
@@ -47,3 +56,5 @@ class SpeakerService:
             finally:self.jobs.task_done()
 
 SPEAKERS=SpeakerService()
+import atexit
+atexit.register(SPEAKERS.close)

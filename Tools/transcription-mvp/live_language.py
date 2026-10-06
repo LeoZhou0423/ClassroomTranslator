@@ -91,7 +91,13 @@ class LiveLanguage:
             if private.is_file():
                 self.key=json.loads(private.read_text(encoding='utf-8')).get('qwen_key','')
         self.url = os.getenv('DASHSCOPE_BASE_URL', 'https://maas.qianwenaiapi.com/compatible-mode/v1')
-        threading.Thread(target=self.run, daemon=True).start()
+        self.closed=threading.Event()
+        self.worker=threading.Thread(target=self.run, daemon=True)
+        self.worker.start()
+
+    def close(self):
+        self.closed.set();self.wake.set()
+        self.worker.join()
 
     def reset(self, directory=None):
         with self.lock:
@@ -231,7 +237,7 @@ class LiveLanguage:
             return output
 
     def run(self):
-        while True:
+        while not self.closed.is_set():
             item = self.take_next()
             if not item:
                 self.wake.wait(.1)
@@ -264,3 +270,5 @@ class LiveLanguage:
 
 
 LANGUAGE = LiveLanguage()
+import atexit
+atexit.register(LANGUAGE.close)

@@ -610,6 +610,7 @@ def main():
         finally:
             LAB.stop()
             if LAB.worker: LAB.worker.join(timeout=60)
+            SPEAKERS.close();LANGUAGE.close()
             server.shutdown(); server.server_close()
         return
     if args.open_browser:
@@ -620,6 +621,7 @@ def main():
     finally:
         LAB.stop()
         if LAB.worker: LAB.worker.join()
+        SPEAKERS.close();LANGUAGE.close()
         server.server_close()
 
 

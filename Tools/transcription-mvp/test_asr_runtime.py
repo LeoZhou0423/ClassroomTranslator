@@ -32,6 +32,9 @@ class RuntimeTests(unittest.TestCase):
         mocked.snapshot.return_value = {}
         mocked.usage = {}
         self.addCleanup(language.stop)
+        speakers=patch.object(asr_lab,'SPEAKERS')
+        speakers.start().snapshot.return_value={}
+        self.addCleanup(speakers.stop)
 
     def test_stop_during_decode_drains_final_and_saves_same_text(self):
         entered,release = threading.Event(),threading.Event()
