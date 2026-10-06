@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: shared-macos-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   package:
     runs-on: macos-14
@@ -46,6 +49,8 @@ jobs:
           test -f Releases/macOS/LingoClass.app/Contents/Info.plist
           find Releases/macOS/LingoClass.app -name gtcrn_simple.onnx | grep .
           find Releases/macOS/LingoClass.app -name small-encoder.int8.onnx | grep .
+      - name: Launch packaged app
+        run: python3 Packaging/smoke_macos.py
       - uses: actions/upload-artifact@v4
         with:
           name: LingoClass-macOS-AppleSilicon
