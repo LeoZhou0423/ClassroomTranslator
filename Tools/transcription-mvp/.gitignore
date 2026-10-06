@@ -2,3 +2,8 @@ models/
 __pycache__/
 *.pyc
 what-is-love-*.wav
+
+sessions/
+
+library.json
+library.*.tmp

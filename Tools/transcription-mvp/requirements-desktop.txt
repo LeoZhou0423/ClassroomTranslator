@@ -1,0 +1,6 @@
+-r requirements-asr.txt
+pywebview>=5.4,<7
+keyring>=25,<26
+onnxruntime>=1.20,<2
+pyobjc-framework-Cocoa; sys_platform == 'darwin'
+pyobjc-framework-WebKit; sys_platform == 'darwin'

@@ -1,0 +1,54 @@
+name: Build shared LingoClass macOS
+on:
+  push:
+    branches: [codex/shared-macos-package]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Prepare bundled models
+        run: |
+          python3 -m pip install requests
+          python3 Tools/transcription-mvp/download_models.py --model small
+          python3 Tools/transcription-mvp/download_grammar.py
+          python3 Packaging/restore_models.py
+      - name: Prepare private configuration
+        env:
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os,json
+          from pathlib import Path
+          if os.environ.get('QWEN_API_KEY'):
+              Path('Build').mkdir(exist_ok=True)
+              Path('Build/private-config.json').write_text(json.dumps({'qwen_key':os.environ['QWEN_API_KEY']}))
+          PY
+      - name: Build app and installer
+        run: bash Tools/transcription-mvp/build-macos.sh
+      - name: Test shared logic
+        working-directory: Tools/transcription-mvp
+        run: python3 -m unittest test_noise_reduction test_word_export test_desktop_store test_speaker_core test_live_language test_core test_asr_lab test_asr_runtime test_grammar_model test_local_revision
+      - name: Verify packaged resources
+        run: |
+          codesign --verify --deep --strict Releases/macOS/LingoClass.app
+          pkgutil --check-signature Releases/macOS/LingoClass-Setup.pkg || true
+          test -f Releases/macOS/LingoClass.app/Contents/Info.plist
+          find Releases/macOS/LingoClass.app -name gtcrn_simple.onnx | grep .
+          find Releases/macOS/LingoClass.app -name small-encoder.int8.onnx | grep .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LingoClass-macOS-AppleSilicon
+          path: Releases/macOS/LingoClass-Setup.pkg
+          compression-level: 0
+          retention-days: 7

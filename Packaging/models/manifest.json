@@ -1,0 +1,25 @@
+[
+  {
+    "destination": "Tools/train/role-cls-onnx/model.onnx",
+    "parts": [
+      "role.00.bin",
+      "role.01.bin",
+      "role.02.bin"
+    ],
+    "sha256": "c85ccd39c8bc45330f12ab6ab82ebbd3baf157be0421d4bfa6095c16db5e5c71"
+  },
+  {
+    "destination": "Tools/speaker/models/campplus_zh_en_advanced.onnx",
+    "parts": [
+      "speaker.00.bin"
+    ],
+    "sha256": "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2"
+  },
+  {
+    "destination": "Tools/transcription-mvp/models/denoise/gtcrn_simple.onnx",
+    "parts": [
+      "denoise.00.bin"
+    ],
+    "sha256": "e77603ac0c23dac3227dd2d7135b3a585cbee2679048aecfa886657d3ae1b534"
+  }
+]

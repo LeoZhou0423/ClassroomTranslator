@@ -6,10 +6,11 @@ from pathlib import Path
 
 import numpy as np
 import sherpa_onnx
+from app_paths import BUNDLE_ROOT, FROZEN
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parents[1]
-SPEAKER_MODEL = REPO / "Tools" / "speaker" / "models" / "campplus_zh_en_advanced.onnx"
+SPEAKER_MODEL = (BUNDLE_ROOT/'models'/'speaker'/'campplus_zh_en_advanced.onnx') if FROZEN else REPO / "Tools" / "speaker" / "models" / "campplus_zh_en_advanced.onnx"
 sys.path.insert(0, str(REPO / "Tools" / "speaker"))
 from role_classifier import RoleClassifier  # noqa: E402
 
@@ -141,7 +142,7 @@ class SpeakerRoleAnalyzer:
         config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(SPEAKER_MODEL), num_threads=1)
         self.extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
         self.clusterer = OnlineSpeakerClusterer(threshold, max_speakers)
-        self.role_classifier = RoleClassifier()
+        self.role_classifier = RoleClassifier(BUNDLE_ROOT/'models'/'role' if FROZEN else None)
         self.roles: dict[int, tuple[str, float]] = {}
         self.role_states: dict[int, RevisableRoleState] = {}
         self.role_text_snapshots: dict[int, str] = {}

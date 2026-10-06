@@ -50,3 +50,7 @@ Build/
 .env
 *.pem
 *credentials*
+
+# Local desktop distribution output
+/Releases/
+/Build-package.log

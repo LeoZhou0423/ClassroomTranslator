@@ -29,7 +29,7 @@ def fetch(model_dir: Path, name: str, url: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", choices=("tiny", "small"), default="tiny")
+    parser.add_argument("--model", choices=("tiny", "base", "small", "small.en"), default="small")
     args = parser.parse_args()
     model_dir = ROOT / "models" / f"whisper-{args.model}"
     model_dir.mkdir(parents=True, exist_ok=True)
