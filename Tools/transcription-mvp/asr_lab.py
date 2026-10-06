@@ -597,7 +597,8 @@ def main():
     def warmup():
         try: LAB.decoder('small',4)
         except Exception as error: LAB.log('warmup_error',message=str(error))
-    threading.Thread(target=warmup,daemon=True).start()
+    # Model construction must finish before Python tears down native libraries.
+    threading.Thread(target=warmup,daemon=False).start()
     print(f"LingoClass ASR MVP: http://127.0.0.1:{args.port}",flush=True)
     if args.desktop:
         def serve(): server.serve_forever()
