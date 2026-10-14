@@ -4,6 +4,8 @@ import re
 from difflib import SequenceMatcher
 from dataclasses import dataclass, field
 from transcription_core import clean, acceptable, LocalAgreement
+from asr_quality import retain_missing_edges
+from caption_text import strip_annotations
 
 
 def token_spans(text):
@@ -60,6 +62,7 @@ def preserve_snapshot(previous, current):
 
 
 def accepted_english(text):
+    text = strip_annotations(text)
     text = re.sub(r"[\[(](?:music|noise|silence|applause|laughter|inaudible|video playback|static|audio out|blank_audio|no_speech)[\])]", "", text, flags=re.I)
     text = clean(text)
     if text.lower().strip(".!? ") in {"music", "noise", "silence", "inaudible"}: return ""
@@ -84,6 +87,19 @@ def sentence_units(text, include_tail=True):
     return units
 
 
+def bounded_units(text,limit=40):
+    result=[]
+    for sentence in sentence_units(text):
+        spans=token_spans(sentence)
+        while len(spans)>limit:
+            cuts=[i for i in range(18,limit) if spans[i-1].group().endswith((',', ';', '—')) or spans[i].group().lower() in {'and','but','so','which','because'}]
+            count=cuts[-1] if cuts else limit
+            end=spans[count].start()
+            result.append(sentence[:end].strip());sentence=sentence[end:].strip();spans=token_spans(sentence)
+        if sentence:result.append(sentence)
+    return result
+
+
 @dataclass
 class Utterance:
     identifier: int
@@ -91,6 +107,8 @@ class Utterance:
     best: str = ""
     stable: str = ""
     final: bool = False
+    review_status: str = ''
+    annotation_suppressed: bool = False
     agreement: LocalAgreement = field(default_factory=LocalAgreement)
 
     def update(self, text, final=False, revision=False, full_window=False, allow_trim=False):
@@ -103,6 +121,8 @@ class Utterance:
             # The decoder has re-read the same audio origin: this is a
             # replacement snapshot, never an incremental text fragment.
             new = clean(text)
+            if final and not allow_trim:
+                new = retain_missing_edges(self.best, new)
             old_words,new_words = normalized(self.best),normalized(new)
             # A severe suffix-only result is not a complete replacement. Keep
             # the displayed prefix if the final decoder returns only its tail.
@@ -145,9 +165,13 @@ class Utterance:
             self.agreement.stable = self.stable
 
     def display(self):
+        if self.annotation_suppressed:return [],{'id':self.identifier,'stable':'','unstable':''}
         committed = self.best if self.final else " ".join(sentence_units(self.stable, False))
-        rows = [{"id": f"{self.identifier}:{i}", "text": text, "utterance": self.identifier, "start": self.start, "final": self.final}
-                for i, text in enumerate(sentence_units(committed))]
+        if not self.final and len(token_spans(self.stable))>=28:committed=self.stable
+        units=bounded_units(committed)
+        rows = [{"id": f"{self.identifier}:{i}", "text": text, "utterance": self.identifier, "start": self.start, "final": self.final, "stable":True,
+                 "language_ready":self.final or (len(token_spans(text))>=6 and (i<len(units)-1 or bool(re.search(r'[.!?][\"\']?$',text)))) ,"review_status":self.review_status}
+                for i, text in enumerate(units)]
         spans = token_spans(self.best)
         count = len(token_spans(committed))
         tail = self.best[spans[count].start():] if count < len(spans) else ""
@@ -168,7 +192,7 @@ class TranscriptLedger:
         rows, live = [], []
         for item in sorted(self.entries.values(), key=lambda x: x.identifier):
             pieces, tail = item.display()
-            if rows and pieces and rows[-1]["final"] and pieces[0]["final"] and (rows[-1]["text"].rstrip().endswith(("...","…","--","—")) or not re.search(r"[.!?。！？][\"']?$",rows[-1]["text"])):
+            if rows and pieces and rows[-1]["final"] and pieces[0]["final"] and len(token_spans(rows[-1]['text']))+len(token_spans(pieces[0]['text']))<=40 and (rows[-1]["text"].rstrip().endswith(("...","…","--","—")) or not re.search(r"[.!?。！？][\"']?$",rows[-1]["text"])):
                 # An audio window ending is not a sentence boundary.
                 rows[-1]["text"] = rows[-1]["text"].rstrip("-—… ").removesuffix("...")+" "+pieces.pop(0)["text"]
             rows.extend(pieces)
@@ -180,4 +204,4 @@ class TranscriptLedger:
         # Export in audio order, including unfinished text in its own position.
         # Moving all live tails after all final rows silently reorders speech.
         return "\n".join("\n".join(sentence_units(item.best)) for item in
-                         sorted(self.entries.values(),key=lambda x:x.identifier) if item.best)
+                         sorted(self.entries.values(),key=lambda x:x.identifier) if item.best and not item.annotation_suppressed)

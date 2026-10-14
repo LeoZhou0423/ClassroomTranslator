@@ -34,10 +34,10 @@ class DesktopStore:
 
     def settings(self):
         with self.lock:
-            return {'model':'small','device':None,'font_size':15,'auto_scroll':True,'noise_reduction':True, **self._read().get('settings',{})}
+            return {'model':'small','device':None,'font_size':15,'auto_scroll':True,'noise_reduction':True,'background_filter':True,'course_terms':'', **self._read().get('settings',{})}
 
     def update_settings(self, settings):
-        allowed = {'model','device','font_size','auto_scroll','translation_endpoint','noise_reduction'}
+        allowed = {'model','device','font_size','auto_scroll','translation_endpoint','noise_reduction','course_terms','background_filter'}
         with self.lock:
             data = self._read()
             data['settings'].update({k:v for k,v in settings.items() if k in allowed})
@@ -105,6 +105,10 @@ class DesktopStore:
         if language.exists(): record['language_rows'] = json.loads(language.read_text(encoding='utf-8'))
         speakers=path/'speakers.json'
         if speakers.exists(): record['speaker_rows']=json.loads(speakers.read_text(encoding='utf-8'))
+        summary=path/'summary.json'
+        if summary.exists(): record['summary']=json.loads(summary.read_text(encoding='utf-8'))
+        revision=path/'revision.json'
+        if revision.exists(): record['revision']=json.loads(revision.read_text(encoding='utf-8'))
         record['id'] = identifier
         edits=path/'content-edits.json'
         if edits.exists(): record['content_edits']=json.loads(edits.read_text(encoding='utf-8'))

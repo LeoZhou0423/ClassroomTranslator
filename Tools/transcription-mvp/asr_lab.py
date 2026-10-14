@@ -10,6 +10,8 @@ import secrets
 import threading
 import time
 import wave
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,10 +27,14 @@ from app_paths import DATA_ROOT, MODEL_ROOT, WEB_ROOT, ICON_PATH, speech_model_d
 from model_downloads import DOWNLOADS
 from speaker_service import SPEAKERS
 from noise_reduction import NoiseReducer
+from asr_quality import review_reason, select_audio_revision, audio_supports_proposal
+from asr_correction import CORRECTOR
+from caption_text import strip_annotations
+import secrets_store
 
 ROOT = Path(__file__).resolve().parent
 RATE = 16000
-BUILD_VERSION = "20261005-caption-realtime-4"
+BUILD_VERSION = "20261013-auto-classroom-summary-3"
 STORE = DesktopStore(DATA_ROOT)
 
 
@@ -78,9 +84,9 @@ class Lab:
         self.decoder_cache = {}
         self.decoder_lock = threading.Lock()
 
-    def decoder(self, name, threads):
+    def decoder(self, name, threads, purpose="live"):
         with self.decoder_lock:
-            key=(name,threads)
+            key=(name,threads,purpose)
             if key not in self.decoder_cache:
                 directory=speech_model_dir(name)
                 self.decoder_cache[key]=sherpa_onnx.OfflineRecognizer.from_whisper(
@@ -99,9 +105,10 @@ class Lab:
     def state(self):
         with self.lock:
             rows, live = self.ledger.snapshot()
+            language_rows=LANGUAGE.snapshot()
             result = {"version":BUILD_VERSION,"phase":self.phase, "error":self.failure, "rows":rows, "live":live, "transcript":self.ledger.text(), "logs":list(self.logs)[-80:], "metrics":dict(self.metrics),
-                      "config":self.config, "session_dir":str(self.session_dir or ""), "language_rows":LANGUAGE.snapshot(),
-                      "translation_usage":dict(LANGUAGE.usage),'speaker_rows':SPEAKERS.snapshot(),'speaker_error':SPEAKERS.error}
+                      "config":self.config, "session_dir":str(self.session_dir or ""), "language_rows":language_rows, "summary":read_summary(self.session_dir) if self.session_dir else None,
+                      "translation_usage":dict(LANGUAGE.usage),'correction_usage':CORRECTOR.snapshot(),'speaker_rows':SPEAKERS.snapshot(language_rows),'speaker_error':SPEAKERS.error}
         with self.condition: result["metrics"]["pending_finals"] = len(self.finals)
         return result
 
@@ -113,7 +120,7 @@ class Lab:
             if name not in {m["name"] for m in models() if m["ready"]}: raise ValueError("模型尚未下载，请先运行 run.ps1 -Model "+name)
             threshold = float(config.get("vad_threshold", .5))
             silence = float(config.get("silence", .7))
-            interval = float(config.get("partial_interval", 1.5))
+            interval = float(config.get("partial_interval", 1))
             rms = float(config.get("minimum_rms", .004))
             threads = int(config.get("threads", 4))
             if not (.1 <= threshold <= .9 and .3 <= silence <= 2 and 1 <= interval <= 5 and 0 <= rms <= .1 and 1 <= threads <= 8): raise ValueError("参数超出允许范围")
@@ -123,12 +130,16 @@ class Lab:
                            "replay_realtime":bool(config.get("replay_realtime",True))}
             self.config.update({key:config[key] for key in ('course_id','course_name') if key in config})
             self.config['noise_reduction']=bool(config.get('noise_reduction',True))
+            self.config['background_filter']=bool(config.get('background_filter',STORE.settings().get('background_filter',True)))
             self.session_dir = DATA_ROOT / "sessions" / (datetime.now().strftime("%Y%m%d-%H%M%S")+"-"+secrets.token_hex(2))
             self.session_dir.mkdir(parents=True)
             SPEAKERS.reset(self.session_dir)
             (self.session_dir / "config.json").write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding="utf-8")
             self.ledger = TranscriptLedger()
-            LANGUAGE.reset(self.session_dir)
+            terms = config.get('course_terms', STORE.settings().get('course_terms',''))
+            if isinstance(terms,str): terms = [term.strip() for term in terms.split(',') if term.strip()]
+            LANGUAGE.reset(self.session_dir, course_terms=terms[:32])
+            self.config['course_terms']=list(terms[:32])
             self.failure = None
             self.logs.clear()
             self.audio = queue.Queue(maxsize=300)
@@ -256,6 +267,7 @@ class Lab:
                         block = resample_poly(block,RATE//divisor,rate//divisor).astype(np.float32)
                 block = np.asarray(block,dtype=np.float32)
                 original.writeframesraw((np.clip(block,-1,1)*32767).astype('<i2').tobytes())
+                original._file.flush()
                 if reducer:block=reducer.process(block)
                 if not len(block):continue
                 if self.raw:
@@ -295,11 +307,17 @@ class Lab:
         decoder = None
         capture = None
         vad_thread = None
+        reviewer = ThreadPoolExecutor(max_workers=1,thread_name_prefix="asr-review")
+        reviews = []
         try:
             name = self.config["model"]
             directory = speech_model_dir(name)
             began = time.perf_counter()
             decoder = self.decoder(name,self.config['threads'])
+            ready={item['name'] for item in models() if item['ready']}
+            preview_name=next((model for model in ('base','tiny') if model in ready),name) if name in ('small','small.en') else name
+            preview_decoder=self.decoder(preview_name,self.config['threads'],purpose='preview') if preview_name!=name else decoder
+            with self.lock:self.config['preview_model']=preview_name
             self.log("model_ready", model=name,load_seconds=round(time.perf_counter()-began,3))
             if self.stop_event.is_set(): return
             self.raw_sink = (self.session_dir/"audio.wav").open("w+b")
@@ -320,6 +338,8 @@ class Lab:
                         job = self.partials.pop(key)
                     else: break
                 identifier,audio,final,start,queued = job
+                with self.lock:
+                    prior_hypothesis = self.ledger.entries[identifier].best if identifier in self.ledger.entries else ''
                 endpoint = round(start*RATE)+len(audio)
                 # Silero triggers after speech onset, especially for quiet
                 # consonants. Restore captured pre-roll without crossing the
@@ -348,15 +368,36 @@ class Lab:
                     if rms < self.config["minimum_rms"]:
                         decode_audio = np.clip(audio*min(8,.02/max(rms,1e-8)),-1,1)
                         self.log('quiet_speech_gain',utterance=identifier,rms=round(rms,5))
-                    stream = decoder.create_stream(); stream.accept_waveform(RATE,decode_audio); decoder.decode_stream(stream)
+                    active_decoder=decoder if final else preview_decoder
+                    stream = active_decoder.create_stream(); stream.accept_waveform(RATE,decode_audio); active_decoder.decode_stream(stream)
                     raw_text = stream.result.text
                     elapsed = time.perf_counter()-t
                     text = accepted_english(raw_text)
                 with self.lock:
                     self.ledger.update(identifier,text,final,start,revision=True,full_window=True)
+                    self.ledger.entries[identifier].annotation_suppressed=bool(raw_text.strip() and not strip_annotations(raw_text))
                     processed_ends[identifier] = (endpoint,final)
                     self.metrics.update(in_flight=False,decode_seconds=round(elapsed,3),rtf=round(elapsed/max(.001,len(audio)/RATE),3))
                     snapshot = self.ledger.text()
+                # Publish the first decode to the ledger before optional review:
+                # polling UI can render it while the suspect audio is re-read.
+                reason = review_reason(prior_hypothesis, text) if final else ''
+                if raw_text.strip() and not strip_annotations(raw_text):reason=''
+                # Lexical repair now uses text context in LiveLanguage. Raw-audio
+                # review remains useful only for truncated/empty ASR snapshots.
+                if reason:
+                    reviews = [future for future in reviews if not future.done()]
+                    if len(reviews)<2:
+                        with self.lock:
+                            current=self.ledger.entries[identifier]
+                            expected=current.best
+                            context=' '.join(entry.best for key,entry in sorted(self.ledger.entries.items()) if key<identifier)
+                            context=' '.join(context.split()[-48:])
+                            current.review_status='checking'
+                        reviews.append(reviewer.submit(self._review_audio,identifier,prior_hypothesis,expected,pre_start,endpoint,start,reason,context))
+                    else:
+                        with self.lock:self.ledger.entries[identifier].review_status='deferred'
+                        self.log('audio_review_deferred',utterance=identifier,reason=reason,action='retain live text; review queue bounded')
                 if final:
                     try:
                         if last_final is not None:
@@ -399,7 +440,7 @@ class Lab:
                 with self.lock: snapshot = self.ledger.text()
                 with self.lock: self.metrics.update(in_flight=False,stage="idle")
                 self.log("decode", utterance=identifier,final=final,audio_start=start,audio_end=endpoint/RATE,audio_seconds=round(len(audio)/RATE,3),decode_seconds=round(elapsed,3),
-                         queue_seconds=round(time.perf_counter()-queued-elapsed,3),rms=round(rms,5),raw=raw_text,accepted=text,retained_chars=len(snapshot))
+                         queue_seconds=round(time.perf_counter()-queued-elapsed,3),decoder_model=name if final else preview_name,rms=round(rms,5),raw=raw_text,accepted=text,retained_chars=len(snapshot))
                 self._save()
                 if final and text: SPEAKERS.submit(identifier,audio,text)
                 LANGUAGE.submit(self.ledger.snapshot()[0])
@@ -409,6 +450,7 @@ class Lab:
             self.stop_event.set()
             if capture: capture.join(timeout=5)
             if vad_thread: vad_thread.join(timeout=5)
+            reviewer.shutdown(wait=True)
             if self.raw: self.raw.close(); self.raw=None
             if self.raw_sink: self.raw_sink.close(); self.raw_sink=None
             with self.lock:
@@ -418,6 +460,57 @@ class Lab:
             self.log("session_complete", text_chars=len(self.ledger.text()),success=self.failure is None)
             self._save()
             LANGUAGE.submit(self.ledger.snapshot()[0],flush=True)
+            if not self.failure:
+                # Repair the ambiguous lines first so the summary reads the revised text.
+                start_revision(self.session_dir,
+                    on_done=lambda:start_summary(self.session_dir,self.state(),LANGUAGE.key,LANGUAGE.url))
+
+    def _review_audio(self, identifier, previous, primary, begin, end, start, reason, context=''):
+        try:
+            proposal=primary
+            if reason=='semantic':
+                proposal,status=CORRECTOR.correct(primary,context,LANGUAGE.key,LANGUAGE.url,
+                                                  self.config.get('course_terms',()),semantic=True)
+                if proposal==primary:
+                    with self.lock:
+                        item=self.ledger.entries.get(identifier)
+                        if item and item.best==primary:item.review_status='unavailable' if status in ('unconfigured','quota_unavailable') else 'unchanged'
+                    self.log('semantic_review',utterance=identifier,status=status,changed=False)
+                    return
+            dry_path = self.session_dir / 'original.wav'
+            if not dry_path.exists(): raise ValueError('Original audio unavailable for review')
+            with dry_path.open('rb') as source:
+                source.seek(44+begin*2)
+                dry = np.frombuffer(source.read((end-begin)*2),dtype='<i2').astype(np.float32)/32768
+            if len(dry)!=end-begin or not len(dry): raise ValueError('Original audio incomplete for review')
+            # A separate recognizer avoids concurrent access to live inference.
+            decoder = self.decoder(self.config['model'],1,purpose='review')
+            stream = decoder.create_stream();stream.accept_waveform(RATE,dry)
+            began=time.perf_counter();decoder.decode_stream(stream)
+            alternative=accepted_english(stream.result.text)
+            selected=select_audio_revision(previous,primary,alternative)
+            supported=False
+            if reason=='semantic':
+                supported=audio_supports_proposal(primary,proposal,alternative)
+                selected=proposal if supported else primary
+            applied=False
+            with self.lock:
+                item=self.ledger.entries.get(identifier)
+                # Boundary repairs/newer revisions outrank a stale review.
+                if item and item.final and item.best in (primary,previous) and selected!=item.best:
+                    self.ledger.update(identifier,selected,True,start,revision=True,full_window=True)
+                    LANGUAGE.submit(self.ledger.snapshot()[0])
+                    applied=True
+                if item and item.best in (primary,selected):
+                    item.review_status='verified' if applied else 'unverified' if reason=='semantic' else 'unchanged'
+            self.log('audio_review',utterance=identifier,reason=reason,primary=primary,alternative=alternative,
+                     proposal=proposal,selected=selected,applied=applied,audio_supported=supported,
+                     seconds=round(time.perf_counter()-began,3))
+        except Exception as error:
+            with self.lock:
+                item=self.ledger.entries.get(identifier)
+                if item and item.best==primary:item.review_status='unavailable'
+            self.log('audio_review_error',utterance=identifier,message=str(error))
 
     def _save(self):
         if not self.session_dir: return
@@ -427,6 +520,9 @@ class Lab:
         (self.session_dir/"transcript.txt").write_text(text,encoding="utf-8")
         (self.session_dir/"result.json").write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
 
+
+from classroom_summary import start_summary, read_summary
+from classroom_revision import start_revision, read_revision
 
 LAB = Lab()
 TOKEN = secrets.token_urlsafe(24)
@@ -464,6 +560,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception: devices=[]
             return self.reply({"version":BUILD_VERSION,"devices":devices,"models":models(),"session_token":TOKEN,
                                "settings":STORE.settings(),"translation_configured":bool(LANGUAGE.key),
+                               "revision_configured":bool(secrets_store.provider_key('mimo')),
                                "grammar_automatic":True,"translation_automatic":True})
         if path == "/api/export":
             result = LAB.state()
@@ -489,6 +586,22 @@ class Handler(BaseHTTPRequestHandler):
                 value=json.loads(body);return self.reply(STORE.rename_record(value['id'],value['title']))
             elif path == '/api/edit-content':
                 value=json.loads(body);return self.reply(STORE.edit_content(value['id'],value['row_id'],value))
+            elif path == '/api/summarize-record':
+                value=json.loads(body);identifier=value['id']
+                with STORE.lock:
+                    record=STORE.record(identifier);directory=STORE.record_path(identifier)
+                    summary=read_summary(directory)
+                    if not summary or summary.get('status') not in ('pending','generating'):
+                        if not LANGUAGE.key:raise ValueError('请先配置 API Key')
+                        start_summary(directory,record,LANGUAGE.key,LANGUAGE.url,wait_for_language=False)
+                return self.reply(STORE.record(identifier))
+            elif path == '/api/revise-record':
+                value=json.loads(body);identifier=value['id']
+                with STORE.lock:
+                    record=STORE.record(identifier);directory=STORE.record_path(identifier)
+                    start_revision(directory,wait_for_language=False,full=True,
+                        on_done=lambda:start_summary(directory,record,LANGUAGE.key,LANGUAGE.url,wait_for_language=False))
+                return self.reply(STORE.record(identifier))
             elif path == '/api/edit-classroom':
                 value=json.loads(body);return self.reply(STORE.edit_classroom(value['id'],value['rows'],value['speaker_names']))
             elif path == '/api/download-model':
@@ -501,16 +614,17 @@ class Handler(BaseHTTPRequestHandler):
                 import sys
                 webview=sys.modules.get('webview')
                 if webview and webview.windows:
-                    filename=Path(value.get('filename','课堂录音')).stem+'.'+format
-                    paths=webview.windows[0].create_file_dialog(webview.FileDialog.SAVE,save_filename=filename,file_types=('Word 文档 (*.docx)',) if format=='docx' else ('文本文件 (*.txt)',))
-                    if paths:
-                        destination=Path(paths[0]).with_suffix('.'+format)
-                        if format=='docx':
-                            from word_export import word_document
-                            destination.write_bytes(word_document(text,Path(filename).stem))
-                        else:destination.write_text(text,encoding='utf-8-sig')
-                        return self.reply({'native':True,'saved':True})
-                    return self.reply({'native':True,'saved':False})
+                    stem=Path(str(value.get('filename','课堂录音'))).stem.strip() or '课堂录音'
+                    filename=stem+'.'+format
+                    from export_dialog import choose_export
+                    try:destination=choose_export(webview.windows[0],webview,filename,format)
+                    except ValueError as error:return self.reply({'native':True,'saved':False,'error':str(error)})
+                    if destination is None:return self.reply({'native':True,'saved':False})
+                    if format=='docx':
+                        from word_export import word_document
+                        destination.write_bytes(word_document(text,stem))
+                    else:destination.write_text(text,encoding='utf-8-sig')
+                    return self.reply({'native':True,'saved':True,'path':str(destination)})
                 return self.reply({'native':False})
             elif path == '/api/export-word':
                 from word_export import word_document,MIME
@@ -542,24 +656,40 @@ class Handler(BaseHTTPRequestHandler):
                 endpoint=settings.get('endpoint',LANGUAGE.url).rstrip('/')
                 from urllib.parse import urlsplit
                 host=urlsplit(endpoint).hostname or ''
-                if not endpoint.startswith('https://') or not (host.endswith('.aliyuncs.com') or host == 'dashscope.aliyuncs.com' or host == 'maas.qianwenaiapi.com'):
-                    raise ValueError('请使用阿里云官方 HTTPS 接口地址')
+                # Only first-party endpoints: a third-party relay would see the key
+                # and the classroom text, which is exactly what we are avoiding.
+                allowed=('dashscope.aliyuncs.com','maas.qianwenaiapi.com','open.bigmodel.cn')
+                if not endpoint.startswith('https://') or host not in allowed:
+                    raise ValueError('请使用智谱或阿里云官方 HTTPS 接口地址')
+                key=settings.get('key','').strip()
                 with LANGUAGE.lock:
-                    LANGUAGE.key=settings.get('key','').strip() or LANGUAGE.key
+                    LANGUAGE.key=key or LANGUAGE.key
                     LANGUAGE.url=endpoint
                     # Retry queued errors without changing already completed pairs.
                     for identifier,row in LANGUAGE.results.items():
                         if row['status']=='error':
                             LANGUAGE.pending[identifier]=(LANGUAGE.generation,row['original'])
                 persisted=False
-                if settings.get('key','').strip():
+                if key:
+                    account='bigmodel-api-key' if 'bigmodel.cn' in host else 'qwen-api-key'
                     try:
                         import keyring
-                        keyring.set_password('LingoClass','qwen-api-key',LANGUAGE.key)
+                        keyring.set_password('LingoClass',account,LANGUAGE.key)
                         persisted=True
                     except Exception: pass
                 STORE.update_settings({'translation_endpoint':endpoint})
                 return self.reply({'ok':True,'configured':bool(LANGUAGE.key),'persisted':persisted})
+            elif path == "/api/revision-settings":
+                settings=json.loads(body)
+                key=settings.get('key','').strip()
+                persisted=False
+                if key:
+                    try:
+                        import keyring
+                        keyring.set_password('LingoClass','mimo-api-key',key)
+                        persisted=True
+                    except Exception: pass
+                return self.reply({'ok':True,'configured':bool(key),'persisted':persisted})
             elif path == "/api/grammar":
                 from grammar_model import GRAMMAR
                 with LAB.lock:

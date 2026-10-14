@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
+import { sanitizeCaption } from './captionText'
 
 type Caption = {id:string;original:string;translated:string}
 
 export function SubtitleOverlay({caption,onClose}:{caption:Caption|null;onClose:()=>void}) {
+ caption=caption?sanitizeCaption(caption):null
  const viewport=useRef<HTMLDivElement>(null)
  useEffect(()=>{
   const element=viewport.current

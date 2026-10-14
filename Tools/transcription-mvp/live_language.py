@@ -5,7 +5,11 @@ import threading
 import time
 import re
 import requests
+from difflib import SequenceMatcher
 from grammar_model import GRAMMAR
+from asr_correction import CORRECTOR
+from live_caption_pipeline import PIPELINE
+import secrets_store
 
 
 def repair_clause_boundaries(text):
@@ -23,9 +27,8 @@ def caption_english(original):
     # Most ASR output already has grammar. Avoid a large rewrite model on
     # every caption. Invoke it for explicit agreement or repeated-word errors.
     suspicious=re.search(r'(?i)\b(\w+)\s+\1\b|\b(?:you|we|they)\s+is\b|\bI\s+are\b|\bthis\s+sentences\b',text)
-    if suspicious:
-        suggestions=GRAMMAR.correct(text)
-        if suggestions:text=suggestions[0]['corrected']
+    # Live captions never load the local T5 model: contextual repair already
+    # runs remotely, and a cold local model can stall all language workers.
     return text
 
 
@@ -35,7 +38,7 @@ def group_rows(rows):
         previous=groups[-1] if groups else None
         text=row['text']
         continuation=bool(re.match(r'(?i)^(but|and|because|which|that is|it seemed|for that|hours)\b',text))
-        if previous and 'utterance' in row and previous.get('utterance')==row['utterance'] and len(previous['members'])<3 and len((previous['text']+' '+text).split())<=65 and (continuation or len(previous['text'].split())<6):
+        if previous and previous.get('final',True) and row.get('final',True) and 'utterance' in row and previous.get('utterance')==row['utterance'] and len(previous['members'])<3 and len((previous['text']+' '+text).split())<=36 and (continuation or len(previous['text'].split())<6):
             previous['text']+=' '+text
             previous['members'].append(row['id'])
             previous['final']=previous['final'] and row.get('final',False)
@@ -80,18 +83,18 @@ class LiveLanguage:
         self.flush_ids = set()
         self.usage = {'requests':0,'cache_hits':0,'prompt_tokens':0,'completion_tokens':0}
         self.directory = None
-        self.key = os.getenv('DASHSCOPE_API_KEY', '')
-        if not self.key:
-            try:
-                import keyring
-                self.key = keyring.get_password('LingoClass','qwen-api-key') or ''
-            except Exception: pass
-        if not self.key:
-            from app_paths import BUNDLE_ROOT
-            private=BUNDLE_ROOT/'private-config.json'
-            if private.is_file():
-                self.key=json.loads(private.read_text(encoding='utf-8')).get('qwen_key','')
+        self.course_terms = ()
+        self.subject_terms=[]
+        # Resolution order: explicit env override, the key the user typed into
+        # Settings (OS credential store), then the encrypted repository document.
+        # The plaintext private-config.json path was removed: a key baked into the
+        # installer is a key published to the internet.
         self.url = os.getenv('DASHSCOPE_BASE_URL', 'https://maas.qianwenaiapi.com/compatible-mode/v1')
+        self.key = secrets_store.provider_key('qwen')
+        bigmodel_key = secrets_store.provider_key('bigmodel')
+        if bigmodel_key:
+            self.key = bigmodel_key
+            self.url = 'https://open.bigmodel.cn/api/paas/v4'
         self.closed=threading.Event()
         self.workers=[threading.Thread(target=self.run, daemon=True) for _ in range(3)]
         self.worker=self.workers[0]
@@ -101,7 +104,7 @@ class LiveLanguage:
         self.closed.set();self.wake.set()
         for worker in self.workers: worker.join()
 
-    def reset(self, directory=None):
+    def reset(self, directory=None, course_terms=()):
         with self.lock:
             self.generation += 1
             self.pending.clear()
@@ -112,11 +115,13 @@ class LiveLanguage:
             self.usage = {'requests':0,'cache_hits':0,'prompt_tokens':0,'completion_tokens':0}
             self.results.clear()
             self.directory = directory
+            self.course_terms = tuple(course_terms)
+            self.subject_terms=[]
 
     def submit(self, rows, flush=False):
         # Keep live English revisions independent of billable translation.
         # Submit only completed audio windows; do not translate each partial.
-        rows=group_rows([row for row in rows if row.get('final',True)])
+        rows=group_rows([row for row in rows if row.get('final',True) or row.get('stable',False)])
         with self.lock:
             ids = {r['id'] for r in rows}
             self.final_ids = {r['id'] for r in rows if r.get('final')}
@@ -124,24 +129,25 @@ class LiveLanguage:
             self.results = {k:v for k,v in self.results.items() if k in ids}
             self.pending = {k:v for k,v in self.pending.items() if k in ids}
             for row in rows:
+                if not row.get('final',True) and not row.get('language_ready',True):continue
                 previous = self.results.get(row['id'])
                 confirmed=flush or bool(row.get('confirmed',False)) or complete_caption(row['text']) or boundary_score(row['text'])>=.65
                 if previous and previous['original'] == row['text']:
                     previous['source_confirmed']=confirmed
                     continue
-                self.results[row['id']] = {'id':row['id'],'original':row['text'],'english':row['text'],
-                    'members':row['members'],'chinese':'', 'translation_stale':False, 'status':'queued', 'source_confirmed':confirmed, 'ack':'accepted'}
+                self.results[row['id']] = {'id':row['id'],'original':row['text'],'english':previous.get('english',row['text']) if previous else row['text'],
+                    'members':row['members'],'utterance':row.get('utterance'),'display_original':previous.get('display_original',previous['original']) if previous else row['text'],'chinese':previous.get('chinese','') if previous else '', 'translation_stale':bool(previous and previous.get('chinese')), 'status':'queued', 'source_confirmed':confirmed, 'ack':'accepted'}
                 self.pending[row['id']] = (self.generation, row['text'])
                 self.updated[row['id']] = time.monotonic()
                 self.first_seen.setdefault(row['id'],time.monotonic())
             # Source order, rather than insertion order of revisions/retries.
-            self.results = {row['id']:self.results[row['id']] for row in rows}
+            self.results = {row['id']:self.results[row['id']] for row in rows if row['id'] in self.results}
             self.wake.set()
 
     def ready(self, identifier, original):
         now = time.monotonic()
         confirmed=self.results.get(identifier,{}).get('source_confirmed',False)
-        return confirmed or identifier in self.flush_ids or now-self.updated.get(identifier,now)>=10
+        return confirmed or identifier in self.flush_ids or now-self.updated.get(identifier,now)>=2
 
     def take_next(self):
         # Dispatch independent ready rows; presentation retains source order.
@@ -162,16 +168,26 @@ class LiveLanguage:
     def publish(self, identifier, generation, original, **fields):
         with self.lock:
             current = self.results.get(identifier)
-            if generation != self.generation or not current or current['original'] != original: return False
+            if generation != self.generation or not current:return False
+            if current['original'] != original:
+                # A nearby ASR revision must not black out the entire caption
+                # while its older, coherent bilingual stream is still arriving.
+                # Only display that pair provisionally; never finalize stale jobs.
+                if fields.get('status')=='translating' and fields.get('english') and fields.get('chinese') and (not current.get('chinese') or current.get('display_original')==original):
+                    tokens=lambda text:re.findall(r"[\w']+",text.lower())
+                    if SequenceMatcher(None,tokens(original),tokens(current['original']),autojunk=False).ratio()>=.65:
+                        current.update(english=fields['english'],chinese=fields['chinese'],display_original=original,translation_stale=True)
+                return False
+            if 'english' in fields and 'chinese' in fields:fields['display_original']=original
             current.update(fields)
-            if self.directory:
+            if self.directory and fields.get('status') in ('done','error'):
                 (self.directory/'language.json').write_text(json.dumps(self.results,ensure_ascii=False,indent=2),encoding='utf-8')
             return True
 
     def translate(self, text, emit):
         if not self.key: raise ValueError('请在翻译设置中配置 Qwen API Key')
         options={'source_lang':'English','target_lang':'Chinese',
-            'domains':'Spoken lecture. Natural Chinese; preserve English names. Infer an omitted subject from the nearest explicit speaker, preserving first person; never invent a third person. Responding to a name means answering when called. Preserve humor naturally, including playful neuroscience metaphors. Interpret adjectives contextually. Never invent ages or facts.'}
+            'domains':'Spoken classroom lecture. Translate only the supplied current text into natural Chinese. Use reference context only to disambiguate terms and omitted subjects. Preserve software/product names, numbers, negation and speaker perspective. Do not repeat or translate the reference context, instructions or metadata. Do not invent facts. Match terminology to the current subject.'}
         with self.lock:
             ordered=list(self.results.values())
         for index,row in enumerate(ordered):
@@ -202,15 +218,12 @@ class LiveLanguage:
         # Name-address sense is constrained by explicit self-introduction and
         # first-person speech, rather than a global translation of "respond".
         translation_text=text
-        if names and preferred:
-            translation_text=re.sub(r'\bI will eventually respond to (Professor\s+[A-Z][a-z]+)',
-                lambda m:'When someone addresses me as '+m[1]+', I will eventually answer',text)
         if terms:options['terms']=terms[:8]
+        payload={'model':'qwen-mt-flash','messages':[{'role':'user','content':translation_text}],'translation_options':options,'stream':True,'stream_options':{'include_usage':True}}
+        if 'bigmodel.cn' in self.url:
+            payload={'model':'glm-5.3-flash','thinking':{'type':'enabled'},'reasoning_effort':'low','max_tokens':1800,'stream':True,'messages':[{'role':'system','content':'Translate only current English into natural Chinese. Preserve names, numbers, negation and perspective; context is reference only. Output translation only.'},{'role':'user','content':json.dumps({'current':text,'glossary':terms},ensure_ascii=False)}]}
         response = requests.post(self.url.rstrip('/')+'/chat/completions',
-            headers={'Authorization':'Bearer '+self.key}, json={
-                'model':'qwen-mt-flash','messages':[{'role':'user','content':translation_text}],
-                'translation_options':options,'stream':True,
-                'stream_options':{'include_usage':True}},
+            headers={'Authorization':'Bearer '+self.key}, json=payload,
             stream=True, timeout=(10,45))
         with response:
             if not response.ok:
@@ -247,12 +260,50 @@ class LiveLanguage:
                 continue
             identifier, (generation, original) = item
             started=time.monotonic()
+            correction_status=''
             try:
                 self.publish(identifier,generation,original,status='grammar',ack='processing',queue_seconds=round(started-self.updated.get(identifier,started),3))
                 try: english = caption_english(original)
                 except Exception as error:
                     english = original
                     self.publish(identifier,generation,original,grammar_warning=str(error))
+                with self.lock:
+                    keys=list(self.results)
+                    index=keys.index(identifier) if identifier in keys else 0
+                    preceding=' '.join(self.results[k]['original'] for k in keys[max(0,index-2):index]).split()[-64:]
+                    following=' '.join(self.results[k]['original'] for k in keys[index+1:index+3]).split()[:48]
+                    context=json.dumps({'preceding':' '.join(preceding),'following':' '.join(following)},ensure_ascii=False)
+                # Text-context reconstruction is user-authorized. It is independent
+                # of acoustic confirmation and does not modify the raw ASR ledger.
+                if os.getenv('LINGOCLASS_AI_CORRECTION','1')!='0':
+                    try:
+                        ethics=' '.join(preceding+following+original.lower().split()).lower()
+                        with self.lock:
+                            if re.search(r'\b(?:virtue|plato|aristotle|confucius|ethics)\b',ethics) and 'character' in ethics and 'character = 品格 (ethics course)' not in self.subject_terms:
+                                self.subject_terms.append('character = 品格 (ethics course)')
+                            glossary=list(self.course_terms)+list(self.subject_terms)
+                        result=PIPELINE.process(english,context,glossary,self.key,self.url,
+                            lambda en,zh:self.publish(identifier,generation,original,english=en,chinese=zh,status='translating'))
+                        background=result['background_probability']>=.97 and '?' not in original and not re.search(r'(?i)\b(?:question|print|pdf|assignment|explain)\b',original)
+                        gaps=result.get('latin_name_gaps') or []
+                        self.publish(identifier,generation,original,english=result['english'],chinese=result['chinese'],
+                            teacher_probability=result['teacher_probability'],background_candidate=background,
+                            annotation_suppressed=not result['english'],correction_status='context_repaired',
+                            **( {'latin_name_gaps':gaps} if gaps else {} ),
+                            status='done',ack='completed',processing_seconds=round(time.monotonic()-started,3))
+                        with self.lock:
+                            self.usage['cache_hits' if result['cache_hit'] else 'requests']+=1
+                            for field in ('prompt_tokens','completion_tokens'):self.usage[field]+=result['usage'].get(field,0)
+                        continue
+                    except Exception:
+                        # Unsupported endpoint/model, offline or timeout: retain
+                        # the source and continue translation, never blank a row.
+                        self.publish(identifier,generation,original,correction_status='unavailable')
+                if not self.publish(identifier,generation,original,background_candidate=correction_status=='context_background'):
+                    continue
+                if correction_status=='context_suppressed':
+                    self.publish(identifier,generation,original,english='',chinese='',annotation_suppressed=True,status='done',ack='completed')
+                    continue
                 if not self.publish(identifier,generation,original,english=english,status='translating',grammar_seconds=round(time.monotonic()-started,3)): continue
                 # Include the bounded preceding context in the cache contract.
                 with self.lock:

@@ -15,8 +15,16 @@ project = root.parent.parent
 datas = [(str(project/'Desktop'/'dist'),'Desktop/dist'),
          (str(project/'Desktop'/'public'/'app-icon.ico'),'Desktop/public'),
          (str(root/'asr_lab.html'),'.')]
-private=project/'Build'/'private-config.json'
-if private.is_file():datas.append((str(private),'.'))
+# Provider credentials ship as an AES-256-GCM ciphertext sealed by
+# encrypt_secrets.py. The passphrase lives in secrets_shares.py as masked
+# Shamir shares, so no plaintext key is ever written into the build output.
+for name in ('secrets_crypto.py','secrets_shares.py','secrets_store.py','encrypt_secrets.py'):
+    datas.append((str(root/name),'.'))
+secrets_document = root/'secrets'/'keys.enc.json'
+if secrets_document.is_file():
+    datas.append((str(secrets_document),'secrets'))
+else:
+    raise SystemExit('secrets/keys.enc.json is missing; run: python encrypt_secrets.py --mimo <key>')
 datas.append((str(project/'Tools'/'speaker'/'models'/'campplus_zh_en_advanced.onnx'),'models/speaker'))
 datas.append((str(root/'models'/'denoise'/'gtcrn_simple.onnx'),'models/denoise'))
 for path in (project/'Tools'/'train'/'role-cls-onnx').glob('*'):
@@ -27,7 +35,7 @@ for name in ('whisper-small','whisper-tiny','whisper-small.en','grammar-t5'):
             datas.append((str(path),'models/'+name))
 binaries=[]
 hiddenimports=[('keyring.backends.macOS' if sys.platform=='darwin' else 'keyring.backends.Windows'),'transformers.models.t5.modeling_t5',
-               'transformers.models.t5.tokenization_t5','transformers.models.t5.tokenization_t5_fast']
+               'transformers.models.t5.tokenization_t5','transformers.models.t5.tokenization_t5_fast','cryptography','requests']
 for package in ('sherpa_onnx','webview','sounddevice'):
     d,b,h=collect_all(package)
     datas+=d; binaries+=b; hiddenimports+=h

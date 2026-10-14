@@ -54,3 +54,7 @@ Build/
 # Local desktop distribution output
 /Releases/
 /Build-package.log
+
+# Runtime logs
+Tools/local-macos/*.log
+/Build-download-tests.log

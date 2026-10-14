@@ -18,7 +18,7 @@ class SpeakerCoreTests(unittest.TestCase):
         clusterer.assign(np.array([1.0, 0.0], np.float32), 0)
         provisional, _ = clusterer.assign(np.array([0.0, 1.0], np.float32), 1)
         confirmed, backfill = clusterer.assign(np.array([0.05, 0.98], np.float32), 2)
-        self.assertEqual(provisional, 0)
+        self.assertIsNone(provisional)
         self.assertEqual(confirmed, 1)
         self.assertEqual(backfill, 1)
 
@@ -46,19 +46,36 @@ class SpeakerCoreTests(unittest.TestCase):
 
     def test_one_opposing_result_does_not_flip_role(self):
         state = RevisableRoleState()
-        state.update(0.95)
+        for _ in range(3):state.update(0.95)
         changed = state.update(0.10)
         self.assertFalse(changed)
         self.assertEqual(state.label, "teacher")
 
     def test_sustained_opposing_evidence_corrects_old_role(self):
         state = RevisableRoleState()
-        state.update(0.95)
+        for _ in range(3):state.update(0.95)
         state.update(0.10)
         changed = state.update(0.08)
         self.assertTrue(changed)
         self.assertEqual(state.label, "student")
         self.assertGreaterEqual(state.score, 0.9)
+
+    def test_default_student_and_teacher_requires_sustained_high_evidence(self):
+        state=RevisableRoleState()
+        self.assertEqual(state.label,'student')
+        for _ in range(5):state.update(.90)
+        self.assertEqual(state.label,'student')
+        state.update(.97);state.update(.96)
+        self.assertEqual(state.label,'student')
+        state.update(.98)
+        self.assertEqual(state.label,'teacher')
+
+    def test_instruction_keyword_does_not_promote_student(self):
+        self.assertEqual(correct_role_with_cues('Make sure you save the PDF.','student',.8)[0],'student')
+
+    def test_missing_voiceprint_is_not_last_teacher(self):
+        clusterer=OnlineSpeakerClusterer();clusterer.assign(np.array([1.,0.]),0)
+        self.assertEqual(clusterer.assign(np.zeros(2),1),(None,None))
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+import os
 import threading
 import unittest
 from unittest.mock import patch
@@ -8,6 +9,15 @@ from live_language import caption_english
 
 
 class LanguageTests(unittest.TestCase):
+    def setUp(self):
+        # A key stored on the build host must never turn a unit test into a paid request:
+        # these cases assert queueing and revision semantics against a patched translate.
+        self._correction_disabled = patch.dict(os.environ, {'LINGOCLASS_AI_CORRECTION': '0'})
+        self._correction_disabled.start()
+
+    def tearDown(self):
+        self._correction_disabled.stop()
+
     def test_slow_translation_does_not_block_later_sentence(self):
         first_started=threading.Event();release=threading.Event();second_done=threading.Event()
         def translate(worker,text,emit):
@@ -80,6 +90,11 @@ class LanguageTests(unittest.TestCase):
         worker.submit([{'id':'0:0','utterance':0,'text':'A complete sentence about philosophy.','final':True}])
         self.assertIn('0:0',worker.pending)
 
+    def test_stable_sentence_dispatches_before_audio_window_finishes(self):
+        worker=self.make()
+        worker.submit([{'id':'0:0','utterance':0,'text':'This is a complete lecture sentence.','final':False,'stable':True}])
+        self.assertEqual(worker.take_next()[0],'0:0')
+
     def test_completed_windows_do_not_remerge(self):
         worker=self.make()
         first={'id':'0:0','utterance':0,'text':'Hello there.','final':True}
@@ -127,20 +142,21 @@ class LanguageTests(unittest.TestCase):
         worker=self.make();worker.submit([{'id':'0:0','text':'Hello.'}])
         worker.publish('0:0',0,'Hello.',chinese='你好',status='done')
         worker.submit([{'id':'0:0','text':'Hello there.'}])
-        self.assertEqual(worker.snapshot()['0:0']['chinese'],'')
+        self.assertEqual(worker.snapshot()['0:0']['chinese'],'你好')
+        self.assertTrue(worker.snapshot()['0:0']['translation_stale'])
         self.assertFalse(worker.publish('0:0',0,'Hello.',chinese='旧译文'))
 
     def test_boundary_wait_and_deadline(self):
         worker=self.make();worker.submit([{'id':'0:0','text':'during office.'}])
-        worker.updated['0:0']-=3
+        worker.updated['0:0']-=.5
         self.assertFalse(worker.ready('0:0','during office.'))
-        worker.updated['0:0']-=8
+        worker.updated['0:0']-=2
         self.assertTrue(worker.ready('0:0','during office.'))
         self.assertLess(boundary_score('This is something that.'),.65)
         self.assertGreaterEqual(boundary_score('This is a complete sentence about philosophy.'),.65)
 
     def test_incremental_sse(self):
-        worker=self.make();worker.key='test'
+        worker=self.make();worker.key='test';worker.url='https://example.com/v1'
         from unittest.mock import MagicMock
         response=MagicMock();response.ok=True
         response.iter_lines.return_value=[b'data: {"choices":[{"delta":{"content":"Hello"}}]}', b'data: {"choices":[{"delta":{"content":" world"}}]}',b'data: [DONE]']
@@ -150,7 +166,7 @@ class LanguageTests(unittest.TestCase):
         self.assertEqual(parts,['Hello','Hello world'])
 
     def test_name_address_disambiguation_preserves_source(self):
-        worker=self.make();worker.key='test'
+        worker=self.make();worker.key='test';worker.url='https://example.com/v1'
         original='I will eventually respond to Professor Kagan.'
         worker.submit([{'id':'0','text':'My name is Shelly Kagan. Please call me Shelly.','final':True},
                        {'id':'1','text':original,'final':True}])
@@ -160,13 +176,16 @@ class LanguageTests(unittest.TestCase):
         with patch('live_language.requests.post',return_value=response) as request:
             worker.translate(original,lambda s:None)
         sent=request.call_args.kwargs['json']['messages'][0]['content']
-        self.assertIn('When someone addresses me as Professor Kagan',sent)
+        self.assertEqual(sent,original)
+        domains=request.call_args.kwargs['json']['translation_options']['domains']
+        self.assertIn('call me Shelly',domains)
+        self.assertNotIn('neuroscience',domains)
         self.assertEqual(worker.snapshot()['1']['original'],original)
 
     def test_august_glossary_does_not_change_months(self):
         from unittest.mock import MagicMock
         for text,expected in [("Now I'm gray and august.",True),('We meet in July and August.',False)]:
-            worker=self.make();worker.key='test';worker.submit([{'id':'0','text':text,'final':True}])
+            worker=self.make();worker.key='test';worker.url='https://example.com/v1';worker.submit([{'id':'0','text':text,'final':True}])
             response=MagicMock();response.ok=True
             response.iter_lines.return_value=[b'data: {"choices":[{"delta":{"content":"translation"}}]}',b'data: [DONE]']
             with patch('live_language.requests.post',return_value=response) as request:

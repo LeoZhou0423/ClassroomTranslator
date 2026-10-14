@@ -15,16 +15,23 @@ class DesktopFeaturesTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as directory:
                 target=Path(directory)/'lecture.txt'
-                choices=[(str(target),),None]
+                choices=[(str(target),),None,('',),[]]
                 window=SimpleNamespace(create_file_dialog=lambda *args,**kwargs:choices.pop(0))
                 fake=SimpleNamespace(windows=[window],FileDialog=SimpleNamespace(SAVE=30))
                 with patch.dict('sys.modules',{'webview':fake}):
                     url=f'http://127.0.0.1:{server.server_port}/api/export-text'
                     headers={'X-Lingo-Token':TOKEN}
                     body={'filename':'lecture.txt','text':'Teacher: Hello.\n你好。'}
-                    self.assertTrue(requests.post(url,headers=headers,json=body,timeout=3).json()['saved'])
+                    ok=requests.post(url,headers=headers,json=body,timeout=3).json()
+                    self.assertTrue(ok['saved'])
                     self.assertEqual(target.read_text(encoding='utf-8-sig'),body['text'])
-                    self.assertFalse(requests.post(url,headers=headers,json=body,timeout=3).json()['saved'])
+                    self.assertTrue(ok.get('path','').endswith('lecture.txt'))
+                    cancelled=requests.post(url,headers=headers,json=body,timeout=3).json()
+                    self.assertFalse(cancelled['saved'])
+                    self.assertNotIn('error',cancelled)
+                    empty=requests.post(url,headers=headers,json=body,timeout=3).json()
+                    self.assertFalse(empty['saved'])
+                    self.assertIn('error',empty)
                     self.assertEqual(requests.post(url,json=body,timeout=3).status_code,403)
         finally:server.shutdown();server.server_close()
 

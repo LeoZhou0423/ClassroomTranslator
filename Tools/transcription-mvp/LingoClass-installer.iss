@@ -7,7 +7,7 @@
 [Setup]
 AppId={{F86029F4-7066-48B6-8942-04B2C935B53B}
 AppName=LingoClass
-AppVersion=2026.10.06
+AppVersion=2026.10.14
 DefaultDirName={localappdata}\Programs\LingoClass
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible

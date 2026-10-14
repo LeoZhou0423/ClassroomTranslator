@@ -43,15 +43,15 @@ struct ExportManager {
 
         let panel = NSSavePanel()
         panel.title = String(localized: "Export Transcript")
-        panel.nameFieldStringValue = "\(record.title).txt"
+        panel.nameFieldStringValue = "\(safeFilename(record.title)).txt"
         panel.allowedContentTypes = [.plainText]
 
         panel.begin { result in
-            guard result == .OK, let url = panel.url else {
+            guard result == .OK, let url = panel.url, !url.path.isEmpty else {
                 completion?(.failure(ExportError.cancelled))
                 return
             }
-            
+
             do {
                 try content.write(to: url, atomically: true, encoding: .utf8)
                 completion?(.success(url))
@@ -60,7 +60,7 @@ struct ExportManager {
             }
         }
     }
-    
+
     static func exportBatch(records: [TranscriptRecord], completion: ((Result<URL, Error>) -> Void)? = nil) {
         // 同 exportSingle：面板非模态，先取快照避免回调里访问已被删除的 SwiftData 对象。
         let headerTitle = String(localized: "Classroom Transcripts Export")
@@ -92,11 +92,11 @@ struct ExportManager {
         panel.allowedContentTypes = [.plainText]
 
         panel.begin { result in
-            guard result == .OK, let url = panel.url else {
+            guard result == .OK, let url = panel.url, !url.path.isEmpty else {
                 completion?(.failure(ExportError.cancelled))
                 return
             }
-            
+
             do {
                 try content.write(to: url, atomically: true, encoding: .utf8)
                 completion?(.success(url))
@@ -124,7 +124,7 @@ struct ExportManager {
             panel.allowedContentTypes = [wordType]
         }
         panel.begin { result in
-            guard result == .OK, let url = panel.url else {
+            guard result == .OK, let url = panel.url, !url.path.isEmpty else {
                 completion?(.failure(ExportError.cancelled))
                 return
             }

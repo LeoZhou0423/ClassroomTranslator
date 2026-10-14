@@ -23,15 +23,15 @@ class TranscriptItem:
 
 @dataclass
 class RevisableRoleState:
-    label: str | None = None
-    score: float = 0.0
+    label: str | None = 'student'
+    score: float = 0.5
     opposing_label: str | None = None
     opposing_count: int = 0
 
     def update(self, teacher_probability: float) -> bool:
         """Apply hysteresis while allowing sustained contrary evidence to relabel."""
         teacher_probability = min(max(teacher_probability, 0.0), 1.0)
-        candidate = "teacher" if teacher_probability >= 0.72 else "student" if teacher_probability <= 0.28 else None
+        candidate = "teacher" if teacher_probability >= 0.93 else "student" if teacher_probability <= 0.75 else None
         candidate_score = teacher_probability if candidate == "teacher" else 1.0 - teacher_probability
         if candidate is None:
             self.opposing_label = None
@@ -50,7 +50,7 @@ class RevisableRoleState:
         else:
             self.opposing_label = candidate
             self.opposing_count = 1
-        if self.opposing_count < 2:
+        if self.opposing_count < (3 if candidate=='teacher' else 2):
             return False
         self.label, self.score = candidate, candidate_score
         self.opposing_label = None
@@ -82,8 +82,8 @@ def correct_role_with_cues(text: str, label: str, score: float) -> tuple[str, fl
         return "student", max(score if label == "student" else 0.85, 0.85)
     if student_hits and not teacher_hits:
         return "student", max(score if label == "student" else 0.85, 0.85)
-    if teacher_hits and not student_hits:
-        return "teacher", max(score if label == "teacher" else 0.85, 0.85)
+    # A student can repeat teaching instructions; a keyword never promotes
+    # the model's result to teacher on its own.
     return label, score
 
 
@@ -97,16 +97,16 @@ class OnlineSpeakerClusterer:
 
     def __init__(self, threshold: float = 0.60, max_speakers: int = 4):
         self.threshold = min(max(threshold, 0.45), 0.75)
-        self.merge_floor = self.threshold - 0.12
+        self.merge_floor = self.threshold
         self.max_speakers = min(max(max_speakers, 2), 4)
         self.centroids: list[np.ndarray] = []
         self.pending: tuple[np.ndarray, int] | None = None
         self.last_speaker: int | None = None
 
-    def assign(self, embedding: np.ndarray, item_index: int) -> tuple[int, int | None]:
+    def assign(self, embedding: np.ndarray, item_index: int) -> tuple[int | None, int | None]:
         unit = normalize(embedding)
         if unit is None:
-            return self.last_speaker or 0, None
+            return None, None
         if not self.centroids:
             self.centroids.append(unit)
             self.last_speaker = 0
@@ -132,9 +132,9 @@ class OnlineSpeakerClusterer:
                 self.last_speaker = new_id
                 return new_id, backfill
             self.pending = (unit, item_index)
-
-        self.last_speaker = best
-        return best, None
+        # Do not temporarily attach an unfamiliar bystander's voice to the
+        # nearest established teacher. Backfill only after a second match.
+        return None, None
 
 
 class SpeakerRoleAnalyzer:
@@ -157,7 +157,7 @@ class SpeakerRoleAnalyzer:
     def assign(self, samples: np.ndarray, item_index: int) -> tuple[int | None, int | None]:
         embedding = self.embedding(samples)
         if embedding is None:
-            return self.clusterer.last_speaker, None
+            return None, None
         return self.clusterer.assign(embedding, item_index)
 
     def update_roles(self, items: list[TranscriptItem]) -> None:
@@ -167,7 +167,7 @@ class SpeakerRoleAnalyzer:
                 grouped.setdefault(item.speaker_id, []).append(item.text)
         for speaker_id, utterances in grouped.items():
             combined = " ".join(utterances)
-            if len(utterances) < 2 or len(combined) < 12:
+            if len(utterances) < 3 or len(combined) < 40:
                 continue
             if self.role_text_snapshots.get(speaker_id) == combined:
                 continue
@@ -179,6 +179,9 @@ class SpeakerRoleAnalyzer:
             recent_probs = np.asarray([self._teacher_probability(text) for text in recent])
             recent_weighted = float(np.average(recent_probs, weights=weights))
             probability = 0.15 * cumulative + 0.65 * recent_context + 0.20 * recent_weighted
+            strong_cues=('today we','we are going to','our objective','this lesson','this class','your assignment','your project','by the end','please open','make sure','remember to','i will show','you need to','you should')
+            distinct_cues=sum(cue in combined.lower() for cue in strong_cues)
+            if distinct_cues<2:probability=min(probability,.75)
             state = self.role_states.setdefault(speaker_id, RevisableRoleState())
             state.update(probability)
             if state.label is not None:
@@ -194,10 +197,10 @@ class SpeakerRoleAnalyzer:
     def names(self, speaker_ids: set[int]) -> dict[int, str]:
         groups: dict[str, list[int]] = {"teacher": [], "student": [], "speaker": []}
         for speaker_id in sorted(speaker_ids):
-            role = self.roles.get(speaker_id, ("speaker", 0))[0]
+            role = self.roles.get(speaker_id, ("student", .5))[0]
             groups[role if role in ("teacher", "student") else "speaker"].append(speaker_id)
         names: dict[int, str] = {}
-        labels = {"teacher": "教授", "student": "学生", "speaker": "说话人"}
+        labels = {"teacher": "老师", "student": "学生", "speaker": "学生"}
         for role, ids in groups.items():
             for rank, speaker_id in enumerate(ids, 1):
                 names[speaker_id] = labels[role] + (str(rank) if len(ids) > 1 else "")
