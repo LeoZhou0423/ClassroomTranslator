@@ -31,6 +31,7 @@ jobs:
         run: |
           python -c "import secrets_store; keys=secrets_store.load(allow_remote=False); print('providers:', sorted(keys))"
       - name: Verify no plaintext key is committed
+        shell: bash
         run: |
           if grep -rqE 'sk-[A-Za-z0-9]{24,}' --include='*.json' --include='*.py' --include='*.ps1' --include='*.sh' . ; then
             echo 'A plaintext API key is committed to the repository.'
