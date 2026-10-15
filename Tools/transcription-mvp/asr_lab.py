@@ -20,7 +20,7 @@ import numpy as np
 import sherpa_onnx
 import sounddevice as sd
 from scipy.signal import resample_poly
-from asr_core import TranscriptLedger, accepted_english, reconcile_boundary, AudioWindowOwners
+from asr_core import decode_window_start, TranscriptLedger, accepted_english, reconcile_boundary, AudioWindowOwners
 from live_language import LANGUAGE
 from desktop_store import DesktopStore
 from app_paths import DATA_ROOT, MODEL_ROOT, WEB_ROOT, ICON_PATH, speech_model_dir
@@ -29,12 +29,13 @@ from speaker_service import SPEAKERS
 from noise_reduction import NoiseReducer
 from asr_quality import review_reason, select_audio_revision, audio_supports_proposal
 from asr_correction import CORRECTOR
+from caption_presentation import CaptionPresentation
 from caption_text import strip_annotations
 import secrets_store
 
 ROOT = Path(__file__).resolve().parent
 RATE = 16000
-BUILD_VERSION = "20261015-whisper-only-1"
+BUILD_VERSION = "20261015-session-summary-8"
 STORE = DesktopStore(DATA_ROOT)
 
 
@@ -83,6 +84,7 @@ class Lab:
         self.raw_sink = None
         self.decoder_cache = {}
         self.decoder_lock = threading.Lock()
+        self.presentation = CaptionPresentation()
         self.finalized_ids = set()
         self.save_lock = threading.Lock()
 
@@ -111,6 +113,12 @@ class Lab:
             result = {"version":BUILD_VERSION,"phase":self.phase, "error":self.failure, "rows":rows, "live":live, "transcript":self.ledger.text(), "logs":list(self.logs)[-80:], "metrics":dict(self.metrics),
                       "config":dict(self.config), "session_dir":str(self.session_dir or ""), "language_rows":language_rows, "summary":read_summary(self.session_dir) if self.session_dir else None,
                       "translation_usage":dict(LANGUAGE.usage),'correction_usage':CORRECTOR.snapshot(),'speaker_rows':SPEAKERS.snapshot(language_rows),'speaker_error':SPEAKERS.error}
+            if self.phase not in ('done','error'):
+                result['summary']=None
+            result['presentation']=self.presentation.snapshot(rows,language_rows,result['speaker_rows'],live,self.phase,paused=not self.metrics.get('speech',False) and not self.metrics.get('in_flight',False))
+            self.ledger.sealed_ids=set(self.presentation.consumed)
+            with LANGUAGE.lock:
+                LANGUAGE.sealed_ids=set(self.presentation.consumed)
         with self.condition: result["metrics"]["pending_finals"] = len(self.finals)
         if not include_logs:
             result.pop('logs', None)
@@ -150,6 +158,7 @@ class Lab:
             self.audio = queue.Queue(maxsize=300)
             self.finals.clear(); self.partials.clear()
             self.finalized_ids.clear()
+            self.presentation.reset()
             self.vad_done = False
             self.stop_event.clear(); self.capture_done.clear()
             self.pause_event.clear()
@@ -354,7 +363,7 @@ class Lab:
                 # preceding finalized window or changing this window's owner.
                 onset=round(start*RATE)
                 floor=last_final[2] if last_final is not None and last_final[0]!=identifier else 0
-                pre_start=max(floor,onset-int(1.2*RATE))
+                pre_start=decode_window_start(onset,floor if last_final is not None and last_final[0]!=identifier else None,RATE)
                 if pre_start<onset:
                     with (self.session_dir/'audio.wav').open('rb') as source:
                         source.seek(44+pre_start*2)
@@ -373,9 +382,8 @@ class Lab:
                 if rms >= .0002:
                     t = time.perf_counter()
                     decode_audio = audio
-                    if rms < self.config["minimum_rms"]:
-                        decode_audio = np.clip(audio*min(8,.02/max(rms,1e-8)),-1,1)
-                        self.log('quiet_speech_gain',utterance=identifier,rms=round(rms,5))
+                    # Whisper normalizes log-mel features itself. Whole-window
+                    # amplification can suppress quiet phrases beside louder words.
                     active_decoder=decoder if final else preview_decoder
                     stream = active_decoder.create_stream(); stream.accept_waveform(RATE,decode_audio); active_decoder.decode_stream(stream)
                     raw_text = stream.result.text
@@ -472,8 +480,17 @@ class Lab:
             LANGUAGE.submit(self.ledger.snapshot()[0],flush=True)
             if not self.failure:
                 # Repair the ambiguous lines first so the summary reads the revised text.
-                start_revision(self.session_dir,
-                    on_done=lambda:start_summary(self.session_dir,self.state(),LANGUAGE.key,LANGUAGE.url))
+                self._start_postprocessing()
+
+    def _start_postprocessing(self):
+        # Background work outlives this session. Never read mutable Lab state
+        # from its delayed callback after another recording has started.
+        with self.lock:
+            directory=self.session_dir
+            state=self.state()
+            key,url=LANGUAGE.key,LANGUAGE.url
+        start_revision(directory,
+            on_done=lambda:start_summary(directory,state,key,url))
 
     def _review_audio(self, identifier, previous, primary, begin, end, start, reason, context=''):
         try:

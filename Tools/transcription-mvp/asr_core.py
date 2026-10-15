@@ -8,6 +8,13 @@ from asr_quality import retain_missing_edges
 from caption_text import strip_annotations
 
 
+def decode_window_start(onset, previous_end, rate=16000):
+    """Keep short inter-segment gaps: VAD is not proof that no words were spoken."""
+    if previous_end is not None and 0 <= onset-previous_end <= 12*rate:
+        return previous_end
+    return max(previous_end or 0, onset-int(1.2*rate))
+
+
 def token_spans(text):
     return list(re.finditer(r"\S+", text))
 
@@ -182,7 +189,7 @@ class Utterance:
 
 
 class TranscriptLedger:
-    def __init__(self): self.entries = {}
+    def __init__(self): self.entries = {}; self.sealed_ids = set()
     def update(self, identifier, text, final=False, start=0.0, revision=False, full_window=False, allow_trim=False):
         item = self.entries.setdefault(identifier, Utterance(identifier, start=start))
         item.update(text, final, revision, full_window, allow_trim)
@@ -192,9 +199,12 @@ class TranscriptLedger:
         rows, live = [], []
         for item in sorted(self.entries.values(), key=lambda x: x.identifier):
             pieces, tail = item.display()
-            if rows and pieces and rows[-1]["final"] and pieces[0]["final"] and len(token_spans(rows[-1]['text']))+len(token_spans(pieces[0]['text']))<=40 and (rows[-1]["text"].rstrip().endswith(("...","…","--","—")) or not re.search(r"[.!?。！？][\"']?$",rows[-1]["text"])):
+            for piece in pieces:piece['source_members']=[piece['id']]
+            if rows and pieces and rows[-1]["id"] not in self.sealed_ids and rows[-1]["final"] and pieces[0]["final"] and len(token_spans(rows[-1]['text']))+len(token_spans(pieces[0]['text']))<=40 and (rows[-1]["text"].rstrip().endswith(("...","…","--","—")) or not re.search(r"[.!?。！？][\"']?$",rows[-1]["text"])):
                 # An audio window ending is not a sentence boundary.
-                rows[-1]["text"] = rows[-1]["text"].rstrip("-—… ").removesuffix("...")+" "+pieces.pop(0)["text"]
+                continuation=pieces.pop(0)
+                rows[-1]["text"] = rows[-1]["text"].rstrip("-—… ").removesuffix("...")+" "+continuation["text"]
+                rows[-1]['source_members'].extend(continuation['source_members'])
             rows.extend(pieces)
             if tail["stable"] or tail["unstable"]: live.append(tail)
         return rows, live

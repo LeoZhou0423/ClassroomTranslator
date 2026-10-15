@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements-desktop.txt keyring requests cryptography
       - name: Run tests
-        run: python -m unittest test_caption_text test_live_caption_pipeline test_live_language test_classroom_summary test_classroom_revision
+        run: python -m unittest test_caption_text test_caption_presentation test_live_caption_pipeline test_live_language test_asr_runtime test_classroom_summary test_classroom_revision
       - name: Verify the sealed credential document opens
         env:
           LINGOCLASS_ALLOW_DEBUG: '1'

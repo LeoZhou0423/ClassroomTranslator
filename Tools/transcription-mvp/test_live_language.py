@@ -134,6 +134,27 @@ class LanguageTests(unittest.TestCase):
                            {'id':'1','text':'Yes it is.','final':True,'speaker_id':2}])
         self.assertEqual(len(groups),2)
 
+    def test_default_worker_repairs_before_translating_and_keeps_role_evidence(self):
+        worker=self.make()
+        worker.key='test';worker.url='https://open.bigmodel.cn/api/paas/v4'
+        source='The character section of the um course is about virtue.'
+        worker.submit([{'id':'0:0','utterance':0,'text':source,'final':True}])
+        def repaired(*args,**kwargs):
+            worker.closed.set()
+            return {'english':'The character section of the course is about virtue.',
+                    'chinese':'课程中的品格部分讨论美德。','teacher_probability':.98,
+                    'background_probability':0,'cache_hit':False,'usage':{}}
+        with patch.dict(os.environ):
+            os.environ.pop('LINGOCLASS_AI_CORRECTION',None)
+            with patch('live_language.PIPELINE.process',side_effect=repaired) as pipeline, patch.object(worker,'translate',side_effect=AssertionError('raw translation bypassed correction')):
+                worker.run()
+        self.assertEqual(pipeline.call_count,1)
+        row=worker.snapshot()['0:0']
+        self.assertEqual(row['correction_status'],'context_repaired')
+        self.assertEqual(row['teacher_probability'],.98)
+        self.assertNotIn('um',row['english'])
+        self.assertIn('character = 品格 (ethics course)',pipeline.call_args.args[2])
+
     def make(self):
         with patch.object(threading.Thread,'start'):
             return LiveLanguage()

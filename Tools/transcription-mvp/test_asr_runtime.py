@@ -13,6 +13,29 @@ import numpy as np
 import asr_lab
 
 class RuntimeTests(unittest.TestCase):
+    def test_delayed_revision_callback_cannot_summarize_next_recording(self):
+        lab=asr_lab.Lab()
+        old_directory=Path('completed-class')
+        lab.session_dir=old_directory;lab.phase='done'
+        old_state={'phase':'done','transcript':'First class content.'}
+        with patch.object(lab,'state',return_value=old_state), patch.object(asr_lab,'start_revision') as revision, patch.object(asr_lab,'start_summary') as summary:
+            lab._start_postprocessing()
+            callback=revision.call_args.kwargs['on_done']
+            lab.session_dir=Path('new-live-class');lab.phase='recording'
+            callback()
+        self.assertEqual(summary.call_args.args[0],old_directory)
+        self.assertIs(summary.call_args.args[1],old_state)
+        self.assertEqual(revision.call_args.args[0],old_directory)
+
+    def test_summary_is_hidden_during_capture_but_available_after_stop(self):
+        lab=asr_lab.Lab();lab.session_dir=Path('test-class')
+        with patch.object(asr_lab,'read_summary',return_value={'status':'done','text':'stale summary'}):
+            for phase in ('loading','recording','paused','stopping'):
+                lab.phase=phase
+                self.assertIsNone(lab.state()['summary'])
+            lab.phase='done'
+            self.assertEqual(lab.state()['summary']['text'],'stale summary')
+
     def test_pause_is_same_session_and_stop_can_drain_it(self):
         lab=asr_lab.Lab();lab.phase='recording'
         lab.pause()

@@ -10,6 +10,7 @@ from grammar_model import GRAMMAR
 from asr_correction import CORRECTOR
 from live_caption_pipeline import PIPELINE
 import secrets_store
+from sentence_boundary import boundary_state, continues_previous
 
 
 def repair_clause_boundaries(text):
@@ -34,6 +35,7 @@ def caption_english(original):
 
 def unfinished_clause(text):
     # Audio-window finalization and ASR punctuation do not prove a sentence ended.
+    if boundary_state(text)=='incomplete':return True
     words=re.findall(r"[a-z']+",text.lower())
     if not words:return False
     if text.rstrip().endswith(('...', '…', '--', '—')):return True
@@ -41,23 +43,23 @@ def unfinished_clause(text):
     return words[-1] in {'the','a','an','of','into','onto','with','whose','who','which','whether','because','his','their','our','your','my'}
 
 
-def group_rows(rows):
+def group_rows(rows, sealed_ids=()):
     groups=[]
     for row in rows:
         previous=groups[-1] if groups else None
         text=row['text']
         continuation=bool(re.match(r'(?i)^(but|and|because|which|that is|it seemed|for that|hours)\b',text))
         same_window=previous and 'utterance' in row and previous.get('utterance')==row['utterance']
-        unfinished=previous and unfinished_clause(previous['text'])
+        unfinished=previous and (unfinished_clause(previous['text']) or continues_previous(previous['text'],text))
         speaker_changed=previous and previous.get('speaker_id') is not None and row.get('speaker_id') is not None and previous['speaker_id']!=row['speaker_id']
-        can_join=previous and previous.get('final',True) and row.get('final',True) and not speaker_changed and len(previous['members'])<4
+        can_join=previous and previous['id'] not in sealed_ids and previous.get('final',True) and row.get('final',True) and not speaker_changed and len(previous['members'])<4
         within_limit=previous and len((previous['text']+' '+text).split()) <= (100 if unfinished else 36)
         if can_join and within_limit and (unfinished or (same_window and (continuation or len(previous['text'].split())<6))):
             previous['text']=previous['text'].rstrip('.…—- ')+' '+text if unfinished else previous['text']+' '+text
-            previous['members'].append(row['id'])
+            previous['members'].extend(row.get('source_members') or [row['id']])
             previous['final']=previous.get('final',True) and row.get('final',True)
         else:
-            groups.append({**row,'members':[row['id']]})
+            groups.append({**row,'members':list(row.get('source_members') or [row['id']])})
     return groups
 
 
@@ -86,6 +88,7 @@ class LiveLanguage:
     def __init__(self):
         self.lock = threading.RLock()
         self.wake = threading.Event()
+        self.sealed_ids = set()
         self.pending = {}
         self.inflight = set()
         self.results = {}
@@ -122,6 +125,7 @@ class LiveLanguage:
         with self.lock:
             self.generation += 1
             self.pending.clear()
+            self.sealed_ids.clear()
             self.updated.clear()
             self.first_seen.clear()
             self.final_ids.clear()
@@ -135,7 +139,7 @@ class LiveLanguage:
     def submit(self, rows, flush=False):
         # Keep live English revisions independent of billable translation.
         # Submit only completed audio windows; do not translate each partial.
-        rows=group_rows([row for row in rows if row.get('final',True) or row.get('stable',False)])
+        rows=group_rows([row for row in rows if row.get('final',True) or row.get('stable',False)], self.sealed_ids)
         with self.lock:
             ids = {r['id'] for r in rows}
             self.final_ids = {r['id'] for r in rows if r.get('final')}
@@ -299,7 +303,7 @@ class LiveLanguage:
                     context=json.dumps({'preceding':' '.join(preceding),'following':' '.join(following)},ensure_ascii=False)
                 # Text-context reconstruction is user-authorized. It is independent
                 # of acoustic confirmation and does not modify the raw ASR ledger.
-                if os.getenv('LINGOCLASS_AI_CORRECTION','0')!='0':
+                if os.getenv('LINGOCLASS_AI_CORRECTION','1')!='0':
                     try:
                         ethics=' '.join(preceding+following+original.lower().split()).lower()
                         with self.lock:
@@ -311,18 +315,18 @@ class LiveLanguage:
                         background=result['background_probability']>=.97 and '?' not in original and not re.search(r'(?i)\b(?:question|print|pdf|assignment|explain)\b',original)
                         gaps=result.get('latin_name_gaps') or []
                         self.publish(identifier,generation,original,english=result['english'],chinese=result['chinese'],
-                            teacher_probability=result['teacher_probability'],background_candidate=background,
-                            annotation_suppressed=not result['english'],correction_status='context_repaired',
+                            teacher_probability=result['teacher_probability'],uncertain=bool(result.get('uncertain')),background_candidate=background,
+                            annotation_suppressed=not result['english'],correction_status='context_repaired',translation_stale=False,
                             **( {'latin_name_gaps':gaps} if gaps else {} ),
                             status='done',ack='completed',processing_seconds=round(time.monotonic()-started,3))
                         with self.lock:
                             self.usage['cache_hits' if result['cache_hit'] else 'requests']+=1
                             for field in ('prompt_tokens','completion_tokens'):self.usage[field]+=result['usage'].get(field,0)
                         continue
-                    except Exception:
+                    except Exception as error:
                         # Unsupported endpoint/model, offline or timeout: retain
                         # the source and continue translation, never blank a row.
-                        self.publish(identifier,generation,original,correction_status='unavailable')
+                        self.publish(identifier,generation,original,correction_status='unavailable',correction_warning=type(error).__name__)
                 if not self.publish(identifier,generation,original,background_candidate=correction_status=='context_background'):
                     continue
                 if correction_status=='context_suppressed':
