@@ -56,6 +56,13 @@ jobs:
           cd Desktop
           npm ci
           npm run build
+      - name: Prepare bundled models
+        run: |
+          python3 -m pip install requests
+          python3 Tools/transcription-mvp/download_models.py --model small
+          python3 Tools/transcription-mvp/download_models.py --model tiny
+          python3 Tools/transcription-mvp/download_grammar.py
+          python3 Packaging/restore_models.py
       - name: Build and sign the desktop package
         run: bash Tools/transcription-mvp/build-macos.sh
       - name: Verify the package holds no plaintext credential

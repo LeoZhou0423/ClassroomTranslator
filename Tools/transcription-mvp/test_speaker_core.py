@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from speaker_core import OnlineSpeakerClusterer, RevisableRoleState, correct_role_with_cues
+from speaker_core import OnlineSpeakerClusterer, RevisableRoleState, correct_role_with_cues, SpeakerRoleAnalyzer, TranscriptItem
 
 
 class SpeakerCoreTests(unittest.TestCase):
@@ -60,15 +60,46 @@ class SpeakerCoreTests(unittest.TestCase):
         self.assertEqual(state.label, "student")
         self.assertGreaterEqual(state.score, 0.9)
 
-    def test_default_student_and_teacher_requires_sustained_high_evidence(self):
-        state=RevisableRoleState()
-        self.assertEqual(state.label,'student')
-        for _ in range(5):state.update(.90)
-        self.assertEqual(state.label,'student')
-        state.update(.97);state.update(.96)
-        self.assertEqual(state.label,'student')
-        state.update(.98)
-        self.assertEqual(state.label,'teacher')
+    def test_unknown_role_and_ordinary_lecture_evidence(self):
+        state = RevisableRoleState()
+        self.assertIsNone(state.label)
+        state.update(.5)
+        self.assertIsNone(state.label)
+        state.update(.90)
+        self.assertEqual(state.label, 'teacher')
+        state.update(.6)
+        self.assertEqual(state.label, 'teacher')
+
+    def test_voice_variation_does_not_create_second_person(self):
+        clusterer = OnlineSpeakerClusterer()
+        clusterer.assign(np.array([1., 0.]), 0)
+        speaker, _ = clusterer.assign(np.array([.55, .835]), 1)
+        self.assertEqual(speaker, 0)
+        self.assertEqual(len(clusterer.centroids), 1)
+
+    def test_recognized_voice_clears_stale_candidate(self):
+        clusterer = OnlineSpeakerClusterer()
+        clusterer.assign(np.array([1., 0.]), 0)
+        clusterer.assign(np.array([0., 1.]), 1)
+        clusterer.assign(np.array([1., 0.]), 2)
+        self.assertEqual(clusterer.assign(np.array([0., 1.]), 3), (None, None))
+        self.assertEqual(len(clusterer.centroids), 1)
+
+    def test_teacher_personal_aside_is_not_student_keyword(self):
+        self.assertEqual(correct_role_with_cues("I think this is a useful example.", "teacher", .94)[0], 'teacher')
+
+    def test_lecture_without_instruction_keywords_can_be_teacher(self):
+        analyzer = SpeakerRoleAnalyzer.__new__(SpeakerRoleAnalyzer)
+        analyzer.roles = {}
+        analyzer.role_states = {}
+        analyzer.role_text_snapshots = {}
+        analyzer._teacher_probability = lambda text: .91
+        items = [TranscriptItem(text, 0) for text in (
+            "Plato distinguishes knowledge from opinion.",
+            "Consider the argument about the nature of justice.",
+            "The conclusion depends on the earlier premise.")]
+        analyzer.update_roles(items)
+        self.assertEqual(analyzer.roles[0][0], 'teacher')
 
     def test_instruction_keyword_does_not_promote_student(self):
         self.assertEqual(correct_role_with_cues('Make sure you save the PDF.','student',.8)[0],'student')

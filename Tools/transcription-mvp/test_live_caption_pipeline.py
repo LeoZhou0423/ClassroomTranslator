@@ -37,12 +37,12 @@ class StreamedCaptionTests(unittest.TestCase):
         self.assertTrue(all(len(part.split())<=40 for part in units))
         self.assertEqual(normalized(' '.join(units)),normalized(text))
 
-    def test_lecture_role_hints_are_per_voice_and_need_three_windows(self):
+    def test_lecture_role_hints_are_per_voice_and_need_two_windows(self):
         with patch.object(threading.Thread,'start'):service=SpeakerService()
         service.rows={i:{'speaker_id':0 if i<3 else 1,'label':'学生','role':'student','role_score':.5} for i in range(4)}
-        hints={str(i):{'utterance':i,'teacher_probability':.98} for i in range(2)}
+        hints={str(i):{'utterance':i,'teacher_probability':.98} for i in range(1)}
         self.assertEqual(service.snapshot(hints)[0]['role'],'student')
-        hints['2']={'utterance':2,'teacher_probability':.99}
+        hints['1']={'utterance':1,'teacher_probability':.89}
         result=service.snapshot(hints)
         self.assertEqual(result[0]['label'],'老师')
         self.assertEqual(result[2]['role'],'teacher')

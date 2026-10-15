@@ -8,6 +8,14 @@ class CaptionAnnotationTests(unittest.TestCase):
         self.assertEqual(strip_annotations('[MUSIC PLAYING] Hello [Spanish] everyone. [SIDE CONVERSATION]'),'Hello everyone.')
         self.assertEqual(strip_annotations('请保存【音乐响起】你的作品。'),'请保存你的作品。')
 
+    def test_parenthetical_sound_descriptions(self):
+        for text in ('(upbeat music)','(soft music playing)','（欢快的音乐）','(APPLAUSE)'):
+            self.assertEqual(strip_annotations(text),'')
+            self.assertEqual(accepted_english(text),'')
+        self.assertEqual(strip_annotations('(upbeat music) Welcome back everyone.'),'Welcome back everyone.')
+        self.assertEqual(strip_annotations('The subject (music theory) is interesting.'),'The subject (music theory) is interesting.')
+        self.assertEqual(strip_annotations('品格（ethos）与命运有关。'),'品格（ethos）与命运有关。')
+
     def test_unclear_segment_is_hidden(self):
         self.assertEqual(strip_annotations('[Unclear] Some guessed sentence.'),'')
         self.assertEqual(strip_annotations('Words [ unclear ] more words.'),'')

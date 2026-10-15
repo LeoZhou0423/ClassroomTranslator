@@ -34,7 +34,7 @@ class DesktopStore:
 
     def settings(self):
         with self.lock:
-            return {'model':'small','device':None,'font_size':15,'auto_scroll':True,'noise_reduction':True,'background_filter':True,'course_terms':'', **self._read().get('settings',{})}
+            return {'model':'small','device':None,'font_size':15,'auto_scroll':True,'noise_reduction':True,'background_filter':True,'course_terms':'', **self._read().get('settings',{}), 'realtime_preview':False}
 
     def update_settings(self, settings):
         allowed = {'model','device','font_size','auto_scroll','translation_endpoint','noise_reduction','course_terms','background_filter'}

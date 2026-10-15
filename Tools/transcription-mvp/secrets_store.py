@@ -37,6 +37,8 @@ PROVIDER_ALIASES = {
 
 _lock = threading.Lock()
 _cache = {}
+_keyring_cache = {}
+_keyring_lock = threading.Lock()
 _cache_path = Path(__file__).resolve().parent / CACHE_NAME
 _state = {'loaded': False, 'epoch': 0, 'source': None, 'error': None}
 
@@ -237,15 +239,23 @@ def _from_environment(name):
 
 
 def _from_keyring(name):
-    try:
-        import keyring
-    except Exception:
-        return ''
-    for alias in PROVIDER_ALIASES.get(name, (name,)):
-        value = keyring.get_password(KEYRING_SERVICE, '%s-api-key' % alias)
-        if value:
-            return value.strip()
-    return ''
+    # Status polling must never repeatedly prompt for Keychain authorization.
+    # Cache missing/denied results too; retry only after an explicit refresh.
+    with _keyring_lock:
+        if name in _keyring_cache:
+            return _keyring_cache[name]
+        value = ''
+        try:
+            import keyring
+            for alias in PROVIDER_ALIASES.get(name, (name,)):
+                candidate = keyring.get_password(KEYRING_SERVICE, '%s-api-key' % alias)
+                if candidate:
+                    value = candidate.strip()
+                    break
+        except Exception:
+            pass
+        _keyring_cache[name] = value
+        return value
 
 
 def provider_key(name, refresh=False):
@@ -253,9 +263,15 @@ def provider_key(name, refresh=False):
     canonical = _canonical(name)
     if not canonical:
         return ''
-    for source in (_from_environment(canonical), _from_keyring(canonical)):
-        if source:
-            return source
+    source = _from_environment(canonical)
+    if source:
+        return source
+    if refresh:
+        with _keyring_lock:
+            _keyring_cache.pop(canonical, None)
+    source = _from_keyring(canonical)
+    if source:
+        return source
     try:
         credentials = load(refresh=refresh)
     except Exception:
@@ -281,6 +297,8 @@ def persist_to_keyring(name, key):
     try:
         import keyring
         keyring.set_password(KEYRING_SERVICE, '%s-api-key' % _canonical(name), key)
+        with _keyring_lock:
+            _keyring_cache[_canonical(name)] = key.strip()
         return True
     except Exception:
         return False

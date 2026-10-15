@@ -34,7 +34,7 @@ import secrets_store
 
 ROOT = Path(__file__).resolve().parent
 RATE = 16000
-BUILD_VERSION = "20261013-auto-classroom-summary-3"
+BUILD_VERSION = "20261015-whisper-only-1"
 STORE = DesktopStore(DATA_ROOT)
 
 
@@ -83,6 +83,8 @@ class Lab:
         self.raw_sink = None
         self.decoder_cache = {}
         self.decoder_lock = threading.Lock()
+        self.finalized_ids = set()
+        self.save_lock = threading.Lock()
 
     def decoder(self, name, threads, purpose="live"):
         with self.decoder_lock:
@@ -102,14 +104,16 @@ class Lab:
             if self.session_dir:
                 with (self.session_dir / "events.jsonl").open("a", encoding="utf-8") as out: out.write(json.dumps(entry, ensure_ascii=False)+"\n")
 
-    def state(self):
+    def state(self, include_logs=True):
         with self.lock:
             rows, live = self.ledger.snapshot()
             language_rows=LANGUAGE.snapshot()
             result = {"version":BUILD_VERSION,"phase":self.phase, "error":self.failure, "rows":rows, "live":live, "transcript":self.ledger.text(), "logs":list(self.logs)[-80:], "metrics":dict(self.metrics),
-                      "config":self.config, "session_dir":str(self.session_dir or ""), "language_rows":language_rows, "summary":read_summary(self.session_dir) if self.session_dir else None,
+                      "config":dict(self.config), "session_dir":str(self.session_dir or ""), "language_rows":language_rows, "summary":read_summary(self.session_dir) if self.session_dir else None,
                       "translation_usage":dict(LANGUAGE.usage),'correction_usage':CORRECTOR.snapshot(),'speaker_rows':SPEAKERS.snapshot(language_rows),'speaker_error':SPEAKERS.error}
         with self.condition: result["metrics"]["pending_finals"] = len(self.finals)
+        if not include_logs:
+            result.pop('logs', None)
         return result
 
     def start(self, config, samples=None):
@@ -130,6 +134,7 @@ class Lab:
                            "replay_realtime":bool(config.get("replay_realtime",True))}
             self.config.update({key:config[key] for key in ('course_id','course_name') if key in config})
             self.config['noise_reduction']=bool(config.get('noise_reduction',True))
+            self.config['realtime_preview']=False  # Legacy settings cannot enable the removed experiment.
             self.config['background_filter']=bool(config.get('background_filter',STORE.settings().get('background_filter',True)))
             self.session_dir = DATA_ROOT / "sessions" / (datetime.now().strftime("%Y%m%d-%H%M%S")+"-"+secrets.token_hex(2))
             self.session_dir.mkdir(parents=True)
@@ -144,6 +149,7 @@ class Lab:
             self.logs.clear()
             self.audio = queue.Queue(maxsize=300)
             self.finals.clear(); self.partials.clear()
+            self.finalized_ids.clear()
             self.vad_done = False
             self.stop_event.clear(); self.capture_done.clear()
             self.pause_event.clear()
@@ -283,7 +289,9 @@ class Lab:
                     current = np.asarray(vad.current_segment.samples,dtype=np.float32)
                     # Bound full-window work to six seconds, while continuing
                     # previews through the whole window. Pending previews coalesce.
-                    if len(current) >= RATE and len(current)-last_partial >= RATE*(1 if last_partial == 0 else self.config["partial_interval"]):
+                    minimum = 1
+                    interval = self.config['partial_interval']
+                    if len(current) >= RATE*minimum and len(current)-last_partial >= RATE*(minimum if last_partial == 0 else interval):
                         last_partial = len(current)
                         start = int(vad.current_segment.start)
                         self._submit(owners.owner(start),current,False,start/RATE)
@@ -375,6 +383,8 @@ class Lab:
                     text = accepted_english(raw_text)
                 with self.lock:
                     self.ledger.update(identifier,text,final,start,revision=True,full_window=True)
+                    if final:
+                        self.finalized_ids.add(identifier)
                     self.ledger.entries[identifier].annotation_suppressed=bool(raw_text.strip() and not strip_annotations(raw_text))
                     processed_ends[identifier] = (endpoint,final)
                     self.metrics.update(in_flight=False,decode_seconds=round(elapsed,3),rtf=round(elapsed/max(.001,len(audio)/RATE),3))
@@ -514,11 +524,14 @@ class Lab:
 
     def _save(self):
         if not self.session_dir: return
-        with self.lock:
-            state = self.state()
-            text = self.ledger.text()
-        (self.session_dir/"transcript.txt").write_text(text,encoding="utf-8")
-        (self.session_dir/"result.json").write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+        with self.save_lock:
+            with self.lock:
+                state = self.state()
+                text = self.ledger.text()
+            for filename, content in (('transcript.txt',text),('result.json',json.dumps(state,ensure_ascii=False,indent=2))):
+                temporary = self.session_dir/(filename+'.tmp')
+                temporary.write_text(content,encoding='utf-8')
+                temporary.replace(self.session_dir/filename)
 
 
 from classroom_summary import start_summary, read_summary
@@ -537,6 +550,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control","no-store"); self.send_header("X-Content-Type-Options","nosniff"); self.end_headers(); self.wfile.write(data)
     def do_GET(self):
         path=urlparse(self.path).path
+        if path == '/api/events':
+            self.send_response(200)
+            self.send_header('Content-Type','text/event-stream; charset=utf-8')
+            self.send_header('Cache-Control','no-cache')
+            self.send_header('X-Content-Type-Options','nosniff')
+            self.end_headers()
+            previous = None
+            heartbeat = time.monotonic()
+            try:
+                while not getattr(self.server,'closing',False):
+                    payload=json.dumps(LAB.state(include_logs=False),ensure_ascii=False,separators=(',',':'))
+                    if payload != previous:
+                        self.wfile.write(('data: '+payload+'\n\n').encode('utf-8'))
+                        self.wfile.flush()
+                        previous=payload
+                        heartbeat=time.monotonic()
+                    elif time.monotonic()-heartbeat>5:
+                        self.wfile.write(b': heartbeat\n\n');self.wfile.flush();heartbeat=time.monotonic()
+                    time.sleep(.12)
+            except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError,OSError):
+                pass
+            return
         if path == "/api/library": return self.reply(STORE.library())
         if path.startswith("/api/records/"):
             try: return self.reply(STORE.record(path.rsplit('/',1)[-1]))
@@ -671,12 +706,8 @@ class Handler(BaseHTTPRequestHandler):
                             LANGUAGE.pending[identifier]=(LANGUAGE.generation,row['original'])
                 persisted=False
                 if key:
-                    account='bigmodel-api-key' if 'bigmodel.cn' in host else 'qwen-api-key'
-                    try:
-                        import keyring
-                        keyring.set_password('LingoClass',account,LANGUAGE.key)
-                        persisted=True
-                    except Exception: pass
+                    provider='bigmodel' if 'bigmodel.cn' in host else 'qwen'
+                    persisted=secrets_store.persist_to_keyring(provider,LANGUAGE.key)
                 STORE.update_settings({'translation_endpoint':endpoint})
                 return self.reply({'ok':True,'configured':bool(LANGUAGE.key),'persisted':persisted})
             elif path == "/api/revision-settings":
@@ -684,11 +715,7 @@ class Handler(BaseHTTPRequestHandler):
                 key=settings.get('key','').strip()
                 persisted=False
                 if key:
-                    try:
-                        import keyring
-                        keyring.set_password('LingoClass','mimo-api-key',key)
-                        persisted=True
-                    except Exception: pass
+                    persisted=secrets_store.persist_to_keyring('mimo',key)
                 return self.reply({'ok':True,'configured':bool(key),'persisted':persisted})
             elif path == "/api/grammar":
                 from grammar_model import GRAMMAR

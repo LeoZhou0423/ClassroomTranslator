@@ -1,7 +1,5 @@
 name: Build shared LingoClass macOS
 on:
-  push:
-    branches: [codex/shared-macos-package]
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,17 +24,6 @@ jobs:
           python3 Tools/transcription-mvp/download_models.py --model small
           python3 Tools/transcription-mvp/download_grammar.py
           python3 Packaging/restore_models.py
-      - name: Prepare private configuration
-        env:
-          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
-        run: |
-          python3 - <<'PY'
-          import os,json
-          from pathlib import Path
-          if os.environ.get('QWEN_API_KEY'):
-              Path('Build').mkdir(exist_ok=True)
-              Path('Build/private-config.json').write_text(json.dumps({'qwen_key':os.environ['QWEN_API_KEY']}))
-          PY
       - name: Install test dependencies
         run: python3 -m pip install -r Tools/transcription-mvp/requirements-desktop.txt
       - name: Test shared logic

@@ -32,16 +32,30 @@ def caption_english(original):
     return text
 
 
+def unfinished_clause(text):
+    # Audio-window finalization and ASR punctuation do not prove a sentence ended.
+    words=re.findall(r"[a-z']+",text.lower())
+    if not words:return False
+    if text.rstrip().endswith(('...', '…', '--', '—')):return True
+    if not re.search(r'[.!?]["\']?$',text.strip()):return True
+    return words[-1] in {'the','a','an','of','into','onto','with','whose','who','which','whether','because','his','their','our','your','my'}
+
+
 def group_rows(rows):
     groups=[]
     for row in rows:
         previous=groups[-1] if groups else None
         text=row['text']
         continuation=bool(re.match(r'(?i)^(but|and|because|which|that is|it seemed|for that|hours)\b',text))
-        if previous and previous.get('final',True) and row.get('final',True) and 'utterance' in row and previous.get('utterance')==row['utterance'] and len(previous['members'])<3 and len((previous['text']+' '+text).split())<=36 and (continuation or len(previous['text'].split())<6):
-            previous['text']+=' '+text
+        same_window=previous and 'utterance' in row and previous.get('utterance')==row['utterance']
+        unfinished=previous and unfinished_clause(previous['text'])
+        speaker_changed=previous and previous.get('speaker_id') is not None and row.get('speaker_id') is not None and previous['speaker_id']!=row['speaker_id']
+        can_join=previous and previous.get('final',True) and row.get('final',True) and not speaker_changed and len(previous['members'])<4
+        within_limit=previous and len((previous['text']+' '+text).split()) <= (100 if unfinished else 36)
+        if can_join and within_limit and (unfinished or (same_window and (continuation or len(previous['text'].split())<6))):
+            previous['text']=previous['text'].rstrip('.…—- ')+' '+text if unfinished else previous['text']+' '+text
             previous['members'].append(row['id'])
-            previous['final']=previous['final'] and row.get('final',False)
+            previous['final']=previous.get('final',True) and row.get('final',True)
         else:
             groups.append({**row,'members':[row['id']]})
     return groups
@@ -136,7 +150,7 @@ class LiveLanguage:
                     previous['source_confirmed']=confirmed
                     continue
                 self.results[row['id']] = {'id':row['id'],'original':row['text'],'english':previous.get('english',row['text']) if previous else row['text'],
-                    'members':row['members'],'utterance':row.get('utterance'),'display_original':previous.get('display_original',previous['original']) if previous else row['text'],'chinese':previous.get('chinese','') if previous else '', 'translation_stale':bool(previous and previous.get('chinese')), 'status':'queued', 'source_confirmed':confirmed, 'ack':'accepted'}
+                    'members':row['members'],'utterance':row.get('utterance'),'live_preview':bool(row.get('provisional')),'display_original':previous.get('display_original',previous['original']) if previous else row['text'],'chinese':previous.get('chinese','') if previous else '', 'translation_stale':bool(previous and previous.get('chinese')), 'status':'queued', 'source_confirmed':confirmed, 'ack':'accepted'}
                 self.pending[row['id']] = (self.generation, row['text'])
                 self.updated[row['id']] = time.monotonic()
                 self.first_seen.setdefault(row['id'],time.monotonic())
@@ -147,6 +161,11 @@ class LiveLanguage:
     def ready(self, identifier, original):
         now = time.monotonic()
         confirmed=self.results.get(identifier,{}).get('source_confirmed',False)
+        if self.results.get(identifier,{}).get('live_preview'):
+            # Growing speech may never pause for two seconds. Bound the wait,
+            # while coalescing revisions and allowing only one request per row.
+            age = now-self.first_seen.get(identifier,now)
+            return confirmed or (age>=.8 and now-self.updated.get(identifier,now)>=.25) or age>=1.5
         return confirmed or identifier in self.flush_ids or now-self.updated.get(identifier,now)>=2
 
     def take_next(self):
@@ -196,6 +215,11 @@ class LiveLanguage:
                 break
         names=re.findall(r'(?i:my name is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})',' '.join(r['original'] for r in ordered))
         terms=[]
+        for term in self.course_terms:
+            if '=' in term:
+                source, target = term.split('=', 1)
+                if source.strip() and target.strip():
+                    terms.append({'source':source.strip(),'target':target.strip()})
         all_text=' '.join(r['original'] for r in ordered)
         preferred=re.findall(r'(?i:call me)\s+([A-Z][a-z]+)',all_text)
         for name in names:
@@ -221,7 +245,7 @@ class LiveLanguage:
         if terms:options['terms']=terms[:8]
         payload={'model':'qwen-mt-flash','messages':[{'role':'user','content':translation_text}],'translation_options':options,'stream':True,'stream_options':{'include_usage':True}}
         if 'bigmodel.cn' in self.url:
-            payload={'model':'glm-5.3-flash','thinking':{'type':'enabled'},'reasoning_effort':'low','max_tokens':1800,'stream':True,'messages':[{'role':'system','content':'Translate only current English into natural Chinese. Preserve names, numbers, negation and perspective; context is reference only. Output translation only.'},{'role':'user','content':json.dumps({'current':text,'glossary':terms},ensure_ascii=False)}]}
+            payload={'model':'glm-5.3-flash','thinking':{'type':'enabled'},'reasoning_effort':'low','max_tokens':900,'stream':True,'stream_options':{'include_usage':True},'messages':[{'role':'system','content':'Translate only current English into natural Chinese. Preserve all names in Latin letters, titles, numbers, negation and perspective. Reference context must never replace current facts. In a self-introduction, respond to a name means responding when addressed by that name. Output translation only, no notes.'},{'role':'user','content':json.dumps({'current':text,'reference_context':options.get('domains',''),'glossary':terms},ensure_ascii=False)}]}
         response = requests.post(self.url.rstrip('/')+'/chat/completions',
             headers={'Authorization':'Bearer '+self.key}, json=payload,
             stream=True, timeout=(10,45))
@@ -275,7 +299,7 @@ class LiveLanguage:
                     context=json.dumps({'preceding':' '.join(preceding),'following':' '.join(following)},ensure_ascii=False)
                 # Text-context reconstruction is user-authorized. It is independent
                 # of acoustic confirmation and does not modify the raw ASR ledger.
-                if os.getenv('LINGOCLASS_AI_CORRECTION','1')!='0':
+                if os.getenv('LINGOCLASS_AI_CORRECTION','0')!='0':
                     try:
                         ethics=' '.join(preceding+following+original.lower().split()).lower()
                         with self.lock:

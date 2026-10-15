@@ -72,6 +72,25 @@ class StoreTests(unittest.TestCase):
                 patch.object(secrets_store, 'load', side_effect=AssertionError('repository was consulted')):
             self.assertEqual(secrets_store.provider_key('mimo'), 'sk-from-environment')
 
+    def test_environment_key_does_not_access_keychain(self):
+        import secrets_store
+        with patch.dict(os.environ, {'LINGOCLASS_MIMO_KEY': 'test-env'}), patch.object(secrets_store, '_from_keyring', side_effect=AssertionError('keychain accessed')):
+            self.assertEqual(secrets_store.provider_key('mimo'), 'test-env')
+
+    def test_denied_keychain_is_not_retried_by_status_polling(self):
+        import secrets_store
+        with patch.dict(secrets_store._keyring_cache, {}, clear=True), patch('keyring.get_password', side_effect=RuntimeError('denied')) as read:
+            for _ in range(10):
+                self.assertEqual(secrets_store._from_keyring('mimo'), '')
+            self.assertEqual(read.call_count, 1)
+
+    def test_successful_keychain_read_is_cached(self):
+        import secrets_store
+        with patch.dict(secrets_store._keyring_cache, {}, clear=True), patch('keyring.get_password', return_value='test-key') as read:
+            for _ in range(10):
+                self.assertEqual(secrets_store._from_keyring('mimo'), 'test-key')
+            self.assertEqual(read.call_count, 1)
+
     def test_unknown_provider_resolves_to_empty(self):
         import secrets_store
         with patch.dict(os.environ, {}, clear=False):

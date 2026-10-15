@@ -110,6 +110,30 @@ class LanguageTests(unittest.TestCase):
         repaired=repair_clause_boundaries(groups[0]['text'])
         self.assertIn('Shelly. When I was young, it seemed',repaired)
 
+    def test_cross_window_relative_clause_retranslates_as_one(self):
+        worker=self.make()
+        first={'id':'0:0','utterance':0,'text':"But it is also the demon who.",'final':True}
+        worker.submit([first])
+        worker.publish('0:0',0,first['text'],chinese='unfinished',status='done')
+        worker.submit([first,{'id':'1:0','utterance':1,'text':'Sort of looks over you during your life.','final':True}])
+        row=worker.results['0:0']
+        self.assertEqual(row['members'],['0:0','1:0'])
+        self.assertIn('who Sort of looks',row['original'])
+        self.assertIn('0:0',worker.pending)
+        self.assertTrue(row['translation_stale'])
+        self.assertFalse(worker.publish('0:0',0,first['text'],chinese='old',status='done'))
+
+    def test_cross_window_possessive_continuation(self):
+        groups=group_rows([{'id':'0','utterance':0,'text':'Heraclitus as part of his','final':True},
+                           {'id':'1','utterance':1,'text':"Of Raphael's painting of the School of Athens.",'final':True}])
+        self.assertEqual(len(groups),1)
+        self.assertEqual(groups[0]['members'],['0','1'])
+
+    def test_cross_window_known_speaker_change_stays_separate(self):
+        groups=group_rows([{'id':'0','text':'Tell me whether','final':True,'speaker_id':1},
+                           {'id':'1','text':'Yes it is.','final':True,'speaker_id':2}])
+        self.assertEqual(len(groups),2)
+
     def make(self):
         with patch.object(threading.Thread,'start'):
             return LiveLanguage()
