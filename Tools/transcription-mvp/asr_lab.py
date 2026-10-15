@@ -35,7 +35,7 @@ import secrets_store
 
 ROOT = Path(__file__).resolve().parent
 RATE = 16000
-BUILD_VERSION = "20261015-session-summary-8"
+BUILD_VERSION = "20261016-summary-validation-9"
 STORE = DesktopStore(DATA_ROOT)
 
 
