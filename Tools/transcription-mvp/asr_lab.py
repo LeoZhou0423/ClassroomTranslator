@@ -35,7 +35,7 @@ import secrets_store
 
 ROOT = Path(__file__).resolve().parent
 RATE = 16000
-BUILD_VERSION = "20261016-summary-validation-9"
+BUILD_VERSION = "20261016-summary-preflight-10"
 STORE = DesktopStore(DATA_ROOT)
 
 
@@ -489,6 +489,9 @@ class Lab:
             directory=self.session_dir
             state=self.state()
             key,url=LANGUAGE.key,LANGUAGE.url
+        from classroom_summary import summary_text
+        if not summary_text(state,state.get('language_rows',{})).strip():
+            return
         start_revision(directory,
             on_done=lambda:start_summary(directory,state,key,url))
 

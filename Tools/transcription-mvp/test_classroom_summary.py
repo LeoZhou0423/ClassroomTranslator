@@ -3,9 +3,29 @@ import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch,Mock
-from classroom_summary import summary_text,generate,read_summary,validate_summary
+from classroom_summary import summary_text,generate,read_summary,validate_summary,start_summary,SummaryError
 
 class SummaryTests(unittest.TestCase):
+    def test_empty_class_does_not_start_summary_worker_or_create_pending_file(self):
+        with tempfile.TemporaryDirectory() as folder, patch('classroom_summary.threading.Thread') as thread, patch('classroom_summary.requests.post') as post:
+            path=Path(folder)
+            self.assertFalse(start_summary(path,{'rows':[]},'key','https://example.com'))
+            self.assertFalse((path/'summary.json').exists())
+            thread.assert_not_called();post.assert_not_called()
+
+    def test_input_present_but_model_asks_for_input_has_distinct_error(self):
+        response=Mock(status_code=200)
+        response.json.return_value={'choices':[{'message':{'content':'请提供需要整理的课堂记录。'}}]}
+        events=[]
+        with patch('classroom_summary.requests.post',return_value=response) as post:
+            with self.assertRaises(SummaryError) as caught:
+                generate('The class discusses virtue.','key','https://example.com',audit=events.append)
+        self.assertEqual(caught.exception.code,'missing_input_reply')
+        self.assertEqual(events[0]['source_characters'],len('The class discusses virtue.'))
+        self.assertEqual(len(events[0]['body_sha256']),64)
+        sent=json.loads(post.call_args.kwargs['json']['messages'][1]['content'])
+        self.assertEqual(sent['transcript'],'The class discusses virtue.')
+
     def test_real_assignment_is_not_mistaken_for_a_missing_input_reply(self):
         text='## 作业\n老师要求：请提供实验数据，并于周五提交报告。'
         self.assertEqual(validate_summary(text),text)

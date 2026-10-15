@@ -13,11 +13,17 @@ import numpy as np
 import asr_lab
 
 class RuntimeTests(unittest.TestCase):
+    def test_empty_class_does_not_start_postprocessing(self):
+        lab=asr_lab.Lab();lab.phase='done'
+        with patch.object(lab,'state',return_value={'rows':[]}), patch.object(asr_lab,'start_revision') as revision, patch.object(asr_lab,'start_summary') as summary:
+            lab._start_postprocessing()
+            revision.assert_not_called();summary.assert_not_called()
+
     def test_delayed_revision_callback_cannot_summarize_next_recording(self):
         lab=asr_lab.Lab()
         old_directory=Path('completed-class')
         lab.session_dir=old_directory;lab.phase='done'
-        old_state={'phase':'done','transcript':'First class content.'}
+        old_state={'phase':'done','transcript':'First class content.','rows':[{'id':'0:0','text':'First class content.'}]}
         with patch.object(lab,'state',return_value=old_state), patch.object(asr_lab,'start_revision') as revision, patch.object(asr_lab,'start_summary') as summary:
             lab._start_postprocessing()
             callback=revision.call_args.kwargs['on_done']
