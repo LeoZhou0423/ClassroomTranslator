@@ -56,6 +56,11 @@ class RuntimeTests(unittest.TestCase):
 
     def setUp(self):
         # Audio lifecycle tests do not run the independent language models.
+        # A delayed real revision callback can otherwise escape this test and
+        # create a summary thread inside a later test's global Thread spy.
+        revision=patch.object(asr_lab,'start_revision')
+        revision.start()
+        self.addCleanup(revision.stop)
         language = patch.object(asr_lab, 'LANGUAGE')
         mocked = language.start()
         mocked.snapshot.return_value = {}
