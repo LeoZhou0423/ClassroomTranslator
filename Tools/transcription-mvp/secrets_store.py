@@ -12,27 +12,27 @@ Nothing in step 3 is plaintext on disk: the passphrase is split across
 :mod:`secrets_shares`, the AES key comes from scrypt, and the result is cached in
 the OS credential store rather than in a file this project controls.
 """
-import base64
+
 import json
+import logging
 import os
 import sys
 import threading
-import time
 from pathlib import Path
 
 import secrets_crypto
 
-REPO_SLUG = os.getenv('LINGOCLASS_SECRETS_REPO', 'LeoZhou0423/ClassroomTranslator')
-DEFAULT_REF = os.getenv('LINGOCLASS_SECRETS_REF', 'codex/shared-macos-package')
+REPO_SLUG = os.getenv("LINGOCLASS_SECRETS_REPO", "LeoZhou0423/ClassroomTranslator")
+DEFAULT_REF = os.getenv("LINGOCLASS_SECRETS_REF", "codex/shared-macos-package")
 REMOTE_TIMEOUT = (5, 12)
-CACHE_NAME = 'secrets-cache.json'
-KEYRING_SERVICE = 'LingoClass'
+CACHE_NAME = "secrets-cache.json"
+KEYRING_SERVICE = "LingoClass"
 SHARE_QUORUM = 3
 
 PROVIDER_ALIASES = {
-    'bigmodel': ('bigmodel', 'glm', 'zhipu'),
-    'mimo': ('mimo', 'xiaomimimo'),
-    'qwen': ('qwen', 'dashscope'),
+    "bigmodel": ("bigmodel", "glm", "zhipu"),
+    "mimo": ("mimo", "xiaomimimo"),
+    "qwen": ("qwen", "dashscope"),
 }
 
 _lock = threading.Lock()
@@ -40,7 +40,7 @@ _cache = {}
 _keyring_cache = {}
 _keyring_lock = threading.Lock()
 _cache_path = Path(__file__).resolve().parent / CACHE_NAME
-_state = {'loaded': False, 'epoch': 0, 'source': None, 'error': None}
+_state = {"loaded": False, "epoch": 0, "source": None, "error": None}
 
 
 class CredentialError(RuntimeError):
@@ -55,26 +55,37 @@ def _debugger_attached():
     try:
         if sys.gettrace() is not None:
             return True
-    except Exception:
-        pass
-    if sys.platform.startswith('win'):
+    except Exception as error:
+        logging.getLogger(__name__).debug(
+            "debugger_check_unavailable kind=%s", type(error).__name__
+        )
+    if sys.platform.startswith("win"):
         try:
             import ctypes
+
             if ctypes.windll.kernel32.IsDebuggerPresent():
                 return True
             # PEB.BeingDebugged survives a patched IsDebuggerPresent.
             being_debugged = ctypes.c_int32(0)
             ctypes.windll.kernel32.CheckRemoteDebuggerPresent(
-                ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(being_debugged))
+                ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(being_debugged)
+            )
             return bool(being_debugged.value)
         except Exception:
             return False
-    if sys.platform == 'darwin':
+    if sys.platform == "darwin":
         try:
             import ctypes
-            libc = ctypes.CDLL('libc.dylib', use_errno=True)
-            libc.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint,
-                                    ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t), None, ctypes.c_size_t]
+
+            libc = ctypes.CDLL("libc.dylib", use_errno=True)
+            libc.sysctl.argtypes = [
+                ctypes.POINTER(ctypes.c_int),
+                ctypes.c_uint,
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_size_t),
+                None,
+                ctypes.c_size_t,
+            ]
             request = (ctypes.c_int * 4)(1, 14, 1, 0)  # CTL_KERN, KERN_PROC, KERN_PROC_PID, 0
             size = ctypes.c_size_t(0)
             if libc.sysctl(request, 4, None, ctypes.byref(size), None, 0) == 0 and size.value:
@@ -90,14 +101,14 @@ def _debugger_attached():
 
 def _library_injected():
     """True when a preloaded library could be intercepting our TLS calls."""
-    for variable in ('LD_PRELOAD', 'DYLD_INSERT_LIBRARIES'):
+    for variable in ("LD_PRELOAD", "DYLD_INSERT_LIBRARIES"):
         if os.environ.get(variable):
             return True
     return False
 
 
 def _tamper_detected():
-    if os.getenv('LINGOCLASS_ALLOW_DEBUG') == '1':
+    if os.getenv("LINGOCLASS_ALLOW_DEBUG") == "1":
         return False
     return _debugger_attached() or _library_injected()
 
@@ -109,13 +120,13 @@ def _reconstruct_passphrase():
     try:
         import secrets_shares
     except Exception as error:  # pragma: no cover - build packaging fault
-        raise CredentialError('credential shares are missing: %s' % error)
+        raise CredentialError("credential shares are missing: %s" % error)
     shares = secrets_shares.unmasked_shares()
     if len(shares) < SHARE_QUORUM:
-        raise CredentialError('insufficient credential shares')
+        raise CredentialError("insufficient credential shares")
     passphrase = secrets_crypto.combine_shares(shares[:SHARE_QUORUM], minimum=SHARE_QUORUM)
     if not passphrase:
-        raise CredentialError('credential passphrase reconstructed empty')
+        raise CredentialError("credential passphrase reconstructed empty")
     return bytearray(passphrase)
 
 
@@ -123,32 +134,38 @@ def _reconstruct_passphrase():
 # Document retrieval
 # --------------------------------------------------------------------------
 def _remote_url(reference):
-    return 'https://raw.githubusercontent.com/%s/%s/secrets/keys.enc.json' % (REPO_SLUG, reference)
+    return "https://raw.githubusercontent.com/%s/%s/secrets/keys.enc.json" % (REPO_SLUG, reference)
 
 
 def _fetch_remote(reference):
     import requests
-    response = requests.get(_remote_url(reference), timeout=REMOTE_TIMEOUT,
-                            headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'})
+
+    response = requests.get(
+        _remote_url(reference),
+        timeout=REMOTE_TIMEOUT,
+        headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+    )
     if response.status_code != 200:
-        raise CredentialError('remote credential document unavailable (HTTP %s)' % response.status_code)
+        raise CredentialError(
+            "remote credential document unavailable (HTTP %s)" % response.status_code
+        )
     return json.loads(response.text)
 
 
 def _bundled_document():
-    for directory in (Path(__file__).resolve().parent / 'secrets', Path(__file__).resolve().parent):
-        candidate = directory / 'keys.enc.json'
+    for directory in (Path(__file__).resolve().parent / "secrets", Path(__file__).resolve().parent):
+        candidate = directory / "keys.enc.json"
         if candidate.is_file():
             try:
-                return json.loads(candidate.read_text(encoding='utf-8'))
+                return json.loads(candidate.read_text(encoding="utf-8"))
             except (OSError, ValueError) as error:
-                raise CredentialError('bundled credential document unreadable: %s' % error)
-    raise CredentialError('no bundled credential document')
+                raise CredentialError("bundled credential document unreadable: %s" % error)
+    raise CredentialError("no bundled credential document")
 
 
 def _read_cache():
     try:
-        return json.loads(_cache_path.read_text(encoding='utf-8'))
+        return json.loads(_cache_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
@@ -156,8 +173,8 @@ def _read_cache():
 def _write_cache(document):
     """Keep only the sealed document. The decrypted keys never touch the disk."""
     try:
-        temporary = _cache_path.with_suffix('.tmp')
-        temporary.write_text(json.dumps(document), encoding='utf-8')
+        temporary = _cache_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(document), encoding="utf-8")
         temporary.replace(_cache_path)
     except OSError:
         pass
@@ -166,11 +183,11 @@ def _write_cache(document):
 def _newer(candidate, current):
     if not current:
         return True
-    return int(candidate.get('epoch', 0)) > int(current.get('epoch', 0))
+    return int(candidate.get("epoch", 0)) > int(current.get("epoch", 0))
 
 
 def _load_document(allow_remote=True):
-    reference = os.getenv('LINGOCLASS_SECRETS_REF', DEFAULT_REF)
+    reference = os.getenv("LINGOCLASS_SECRETS_REF", DEFAULT_REF)
     cached = _read_cache()
     document = None
     if allow_remote and not _tamper_detected():
@@ -194,8 +211,8 @@ def _load_document(allow_remote=True):
 def load(refresh=False, allow_remote=True):
     """Decrypt and return the credential mapping, or raise :class:`CredentialError`."""
     with _lock:
-        if _cache.get('credentials') and not refresh:
-            return _cache['credentials']
+        if _cache.get("credentials") and not refresh:
+            return _cache["credentials"]
         passphrase = _reconstruct_passphrase()
         try:
             document = _load_document(allow_remote=allow_remote)
@@ -204,14 +221,14 @@ def load(refresh=False, allow_remote=True):
             for index in range(len(passphrase)):
                 passphrase[index] = 0
         try:
-            credentials = json.loads(payload.decode('utf-8'))
+            credentials = json.loads(payload.decode("utf-8"))
         except ValueError as error:
-            raise CredentialError('decrypted payload is not valid JSON: %s' % error)
+            raise CredentialError("decrypted payload is not valid JSON: %s" % error)
         if not isinstance(credentials, dict):
-            raise CredentialError('decrypted payload is not a mapping')
-        _cache['credentials'] = credentials
-        _cache['epoch'] = epoch
-        _cache['source'] = document.get('source', 'repository')
+            raise CredentialError("decrypted payload is not a mapping")
+        _cache["credentials"] = credentials
+        _cache["epoch"] = epoch
+        _cache["source"] = document.get("source", "repository")
         _state.update(loaded=True, epoch=epoch, error=None)
         return credentials
 
@@ -222,7 +239,7 @@ def state():
 
 
 def _canonical(name):
-    name = (name or '').strip().lower()
+    name = (name or "").strip().lower()
     for canonical, aliases in PROVIDER_ALIASES.items():
         if name in aliases:
             return canonical
@@ -231,11 +248,11 @@ def _canonical(name):
 
 def _from_environment(name):
     for alias in PROVIDER_ALIASES.get(name, (name,)):
-        for form in (alias.upper(), alias.upper().replace('-', '_')):
-            value = os.getenv('LINGOCLASS_%s_KEY' % form) or os.getenv('%s_API_KEY' % form)
+        for form in (alias.upper(), alias.upper().replace("-", "_")):
+            value = os.getenv("LINGOCLASS_%s_KEY" % form) or os.getenv("%s_API_KEY" % form)
             if value:
                 return value.strip()
-    return ''
+    return ""
 
 
 def _from_keyring(name):
@@ -244,16 +261,19 @@ def _from_keyring(name):
     with _keyring_lock:
         if name in _keyring_cache:
             return _keyring_cache[name]
-        value = ''
+        value = ""
         try:
             import keyring
+
             for alias in PROVIDER_ALIASES.get(name, (name,)):
-                candidate = keyring.get_password(KEYRING_SERVICE, '%s-api-key' % alias)
+                candidate = keyring.get_password(KEYRING_SERVICE, "%s-api-key" % alias)
                 if candidate:
                     value = candidate.strip()
                     break
-        except Exception:
-            pass
+        except Exception as error:
+            logging.getLogger(__name__).warning(
+                "keyring_unavailable provider=%s kind=%s", name, type(error).__name__
+            )
         _keyring_cache[name] = value
         return value
 
@@ -262,7 +282,7 @@ def provider_key(name, refresh=False):
     """Resolve one provider's key, or an empty string when nothing is configured."""
     canonical = _canonical(name)
     if not canonical:
-        return ''
+        return ""
     source = _from_environment(canonical)
     if source:
         return source
@@ -275,12 +295,12 @@ def provider_key(name, refresh=False):
     try:
         credentials = load(refresh=refresh)
     except Exception:
-        return ''
+        return ""
     for alias in PROVIDER_ALIASES.get(canonical, (canonical,)):
         value = credentials.get(alias)
         if value:
             return str(value).strip()
-    return ''
+    return ""
 
 
 def configured_providers():
@@ -296,7 +316,8 @@ def persist_to_keyring(name, key):
     """Cache a decrypted key in the OS credential store so scrypt runs once."""
     try:
         import keyring
-        keyring.set_password(KEYRING_SERVICE, '%s-api-key' % _canonical(name), key)
+
+        keyring.set_password(KEYRING_SERVICE, "%s-api-key" % _canonical(name), key)
         with _keyring_lock:
             _keyring_cache[_canonical(name)] = key.strip()
         return True
@@ -305,8 +326,8 @@ def persist_to_keyring(name, key):
 
 
 def epoch():
-    return _state.get('epoch', 0)
+    return _state.get("epoch", 0)
 
 
 def last_error():
-    return _state.get('error')
+    return _state.get("error")

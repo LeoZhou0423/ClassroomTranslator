@@ -1,8 +1,13 @@
 import unittest
 
 import numpy as np
-
-from speaker_core import OnlineSpeakerClusterer, RevisableRoleState, correct_role_with_cues, SpeakerRoleAnalyzer, TranscriptItem
+from speaker_core import (
+    OnlineSpeakerClusterer,
+    RevisableRoleState,
+    SpeakerRoleAnalyzer,
+    TranscriptItem,
+    correct_role_with_cues,
+)
 
 
 class SpeakerCoreTests(unittest.TestCase):
@@ -46,14 +51,16 @@ class SpeakerCoreTests(unittest.TestCase):
 
     def test_one_opposing_result_does_not_flip_role(self):
         state = RevisableRoleState()
-        for _ in range(3):state.update(0.95)
+        for _ in range(3):
+            state.update(0.95)
         changed = state.update(0.10)
         self.assertFalse(changed)
         self.assertEqual(state.label, "teacher")
 
     def test_sustained_opposing_evidence_corrects_old_role(self):
         state = RevisableRoleState()
-        for _ in range(3):state.update(0.95)
+        for _ in range(3):
+            state.update(0.95)
         state.update(0.10)
         changed = state.update(0.08)
         self.assertTrue(changed)
@@ -63,50 +70,60 @@ class SpeakerCoreTests(unittest.TestCase):
     def test_unknown_role_and_ordinary_lecture_evidence(self):
         state = RevisableRoleState()
         self.assertIsNone(state.label)
-        state.update(.5)
+        state.update(0.5)
         self.assertIsNone(state.label)
-        state.update(.90)
-        self.assertEqual(state.label, 'teacher')
-        state.update(.6)
-        self.assertEqual(state.label, 'teacher')
+        state.update(0.90)
+        self.assertEqual(state.label, "teacher")
+        state.update(0.6)
+        self.assertEqual(state.label, "teacher")
 
     def test_voice_variation_does_not_create_second_person(self):
         clusterer = OnlineSpeakerClusterer()
-        clusterer.assign(np.array([1., 0.]), 0)
-        speaker, _ = clusterer.assign(np.array([.55, .835]), 1)
+        clusterer.assign(np.array([1.0, 0.0]), 0)
+        speaker, _ = clusterer.assign(np.array([0.55, 0.835]), 1)
         self.assertEqual(speaker, 0)
         self.assertEqual(len(clusterer.centroids), 1)
 
     def test_recognized_voice_clears_stale_candidate(self):
         clusterer = OnlineSpeakerClusterer()
-        clusterer.assign(np.array([1., 0.]), 0)
-        clusterer.assign(np.array([0., 1.]), 1)
-        clusterer.assign(np.array([1., 0.]), 2)
-        self.assertEqual(clusterer.assign(np.array([0., 1.]), 3), (None, None))
+        clusterer.assign(np.array([1.0, 0.0]), 0)
+        clusterer.assign(np.array([0.0, 1.0]), 1)
+        clusterer.assign(np.array([1.0, 0.0]), 2)
+        self.assertEqual(clusterer.assign(np.array([0.0, 1.0]), 3), (None, None))
         self.assertEqual(len(clusterer.centroids), 1)
 
     def test_teacher_personal_aside_is_not_student_keyword(self):
-        self.assertEqual(correct_role_with_cues("I think this is a useful example.", "teacher", .94)[0], 'teacher')
+        self.assertEqual(
+            correct_role_with_cues("I think this is a useful example.", "teacher", 0.94)[0],
+            "teacher",
+        )
 
     def test_lecture_without_instruction_keywords_can_be_teacher(self):
         analyzer = SpeakerRoleAnalyzer.__new__(SpeakerRoleAnalyzer)
         analyzer.roles = {}
         analyzer.role_states = {}
         analyzer.role_text_snapshots = {}
-        analyzer._teacher_probability = lambda text: .91
-        items = [TranscriptItem(text, 0) for text in (
-            "Plato distinguishes knowledge from opinion.",
-            "Consider the argument about the nature of justice.",
-            "The conclusion depends on the earlier premise.")]
+        analyzer._teacher_probability = lambda text: 0.91
+        items = [
+            TranscriptItem(text, 0)
+            for text in (
+                "Plato distinguishes knowledge from opinion.",
+                "Consider the argument about the nature of justice.",
+                "The conclusion depends on the earlier premise.",
+            )
+        ]
         analyzer.update_roles(items)
-        self.assertEqual(analyzer.roles[0][0], 'teacher')
+        self.assertEqual(analyzer.roles[0][0], "teacher")
 
     def test_instruction_keyword_does_not_promote_student(self):
-        self.assertEqual(correct_role_with_cues('Make sure you save the PDF.','student',.8)[0],'student')
+        self.assertEqual(
+            correct_role_with_cues("Make sure you save the PDF.", "student", 0.8)[0], "student"
+        )
 
     def test_missing_voiceprint_is_not_last_teacher(self):
-        clusterer=OnlineSpeakerClusterer();clusterer.assign(np.array([1.,0.]),0)
-        self.assertEqual(clusterer.assign(np.zeros(2),1),(None,None))
+        clusterer = OnlineSpeakerClusterer()
+        clusterer.assign(np.array([1.0, 0.0]), 0)
+        self.assertEqual(clusterer.assign(np.zeros(2), 1), (None, None))
 
 
 if __name__ == "__main__":

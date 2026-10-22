@@ -58,3 +58,24 @@ Build/
 # Runtime logs
 Tools/local-macos/*.log
 /Build-download-tests.log
+.ruff_cache/
+
+# Local test/build artifacts and large binaries (never commit; GitHub 100MB limit)
+/Artifacts/
+/.playwright-cli/
+/.workbuddy/
+/macos-pkg-test.zip
+/macos-screen.png
+/Build-gui-source.log
+/Build-gui-source-error.log
+/Build-package-current.log
+*.bak
+*.zip
+*.dmg
+*.exe
+*.wav
+*.mp3
+*.mp4
+*.ppm
+*.log
+/Desktop/_test_fence.mjs

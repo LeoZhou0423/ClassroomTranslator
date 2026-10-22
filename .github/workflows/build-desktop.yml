@@ -22,9 +22,14 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: python -m pip install -r requirements-desktop.txt keyring requests cryptography
+        run: python -m pip install -r requirements-desktop.txt -r requirements-dev.txt keyring requests cryptography
+      - name: Verify Python quality
+        run: |
+          python -m ruff check .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m ruff format --check .
       - name: Run tests
-        run: python -m unittest test_caption_text test_caption_presentation test_live_caption_pipeline test_live_language test_asr_runtime test_classroom_summary test_classroom_revision
+        run: python -m unittest discover -p "test_*.py" -q
       - name: Verify the sealed credential document opens
         env:
           LINGOCLASS_ALLOW_DEBUG: '1'
@@ -47,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -55,6 +60,9 @@ jobs:
         run: |
           cd Desktop
           npm ci
+          npm run format:check
+          npm run lint
+          npm test
           npm run build
       - name: Prepare bundled models
         run: |

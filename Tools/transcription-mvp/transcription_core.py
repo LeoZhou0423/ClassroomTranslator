@@ -34,7 +34,7 @@ def merge_overlap(previous: str, current: str, minimum: int = 2) -> str:
         return current
     if not current:
         return previous
-    old, new = previous.split(), current.split()
+    _old, new = previous.split(), current.split()
     old_norm, new_norm = words(previous), words(current)
     if new_norm[: len(old_norm)] == old_norm:
         return current
@@ -79,7 +79,7 @@ def strip_committed_prefix(hypothesis: str, committed: str) -> str:
     for actual, expected in zip(hypothesis_parts, committed_parts):
         if words(actual) != words(expected):
             return hypothesis
-    return " ".join(hypothesis_parts[len(committed_parts):])
+    return " ".join(hypothesis_parts[len(committed_parts) :])
 
 
 def reconcile_final_segment(committed_preview: str, final_hypothesis: str) -> str:
@@ -107,7 +107,7 @@ class LocalAgreement:
         if len(common) > len(self.stable.split()):
             self.stable = " ".join(common)
         self.previous = hypothesis
-        volatile = " ".join(right[len(self.stable.split()):])
+        volatile = " ".join(right[len(self.stable.split()) :])
         return self.stable, volatile
 
     def reset(self) -> None:

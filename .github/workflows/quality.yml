@@ -1,0 +1,46 @@
+name: Engineering quality
+
+on:
+  push:
+    paths: ['Desktop/**', 'Tools/transcription-mvp/**', 'pyproject.toml', '.github/workflows/quality.yml']
+  pull_request:
+    paths: ['Desktop/**', 'Tools/transcription-mvp/**', 'pyproject.toml', '.github/workflows/quality.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: Desktop/package-lock.json
+      - name: Install Python dependencies
+        run: python -m pip install -r Tools/transcription-mvp/requirements-desktop.txt -r Tools/transcription-mvp/requirements-dev.txt requests
+      - name: Python static checks and formatting
+        run: |
+          python -m ruff check Tools/transcription-mvp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m ruff format --check Tools/transcription-mvp
+      - name: Python regression and fault tests
+        run: python -m unittest discover -s Tools/transcription-mvp -p "test_*.py" -q
+      - name: Frontend checks
+        working-directory: Desktop
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run format:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build

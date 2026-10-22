@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+
 from download_file import download_file
 
 ROOT = Path(__file__).resolve().parent
@@ -10,7 +11,17 @@ def fetch(model_dir: Path, name: str, url: str) -> None:
     if target.exists() and target.stat().st_size > 100_000:
         print(f"已有 {name} ({target.stat().st_size / 1e6:.1f} MB)")
         return
-    download_file(url, target, lambda copied,total,retry: print(f"\r{name}: {copied * 100 // total}%" if total else f"\r{name}: 重试 {retry}，已保留 {copied} 字节", end="", flush=True))
+    download_file(
+        url,
+        target,
+        lambda copied, total, retry: print(
+            f"\r{name}: {copied * 100 // total}%"
+            if total
+            else f"\r{name}: 重试 {retry}，已保留 {copied} 字节",
+            end="",
+            flush=True,
+        ),
+    )
     print(f"\r完成 {name} ({target.stat().st_size / 1e6:.1f} MB)")
 
 

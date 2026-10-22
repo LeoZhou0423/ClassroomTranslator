@@ -6,12 +6,18 @@ from pathlib import Path
 
 import numpy as np
 import sherpa_onnx
-
 from transcription_core import acceptable, clean
 
 ROOT = Path(__file__).resolve().parent
 MODEL = ROOT / "models" / "whisper-tiny"
-SAMPLE = ROOT.parent / "sherpa" / "models" / "sherpa-onnx-streaming-zipformer-en-2023-06-26" / "test_wavs" / "0.wav"
+SAMPLE = (
+    ROOT.parent
+    / "sherpa"
+    / "models"
+    / "sherpa-onnx-streaming-zipformer-en-2023-06-26"
+    / "test_wavs"
+    / "0.wav"
+)
 RATE = 16_000
 
 
@@ -20,7 +26,10 @@ def read_wav(path: Path) -> np.ndarray:
         assert source.getnchannels() == 1
         assert source.getsampwidth() == 2
         assert source.getframerate() == RATE
-        return np.frombuffer(source.readframes(source.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+        return (
+            np.frombuffer(source.readframes(source.getnframes()), dtype=np.int16).astype(np.float32)
+            / 32768.0
+        )
 
 
 def main() -> None:
@@ -32,7 +41,9 @@ def main() -> None:
         encoder=str(MODEL / "tiny-encoder.int8.onnx"),
         decoder=str(MODEL / "tiny-decoder.int8.onnx"),
         tokens=str(MODEL / "tiny-tokens.txt"),
-        language="", task="transcribe", num_threads=2,
+        language="",
+        task="transcribe",
+        num_threads=2,
     )
     stream = recognizer.create_stream()
     stream.accept_waveform(RATE, samples)

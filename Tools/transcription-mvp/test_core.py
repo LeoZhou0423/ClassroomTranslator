@@ -1,4 +1,5 @@
 import unittest
+
 from transcription_core import (
     LocalAgreement,
     acceptable,
@@ -32,7 +33,9 @@ class CoreTests(unittest.TestCase):
 
     def test_committed_prefix_is_removed_from_later_hypothesis(self):
         self.assertEqual(
-            strip_committed_prefix("Today we discuss data structures in detail", "Today we discuss data structures"),
+            strip_committed_prefix(
+                "Today we discuss data structures in detail", "Today we discuss data structures"
+            ),
             "in detail",
         )
 
@@ -73,4 +76,5 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(reconcile_final_segment(partial, final), final)
 
 
-if __name__ == "__main__": unittest.main()
+if __name__ == "__main__":
+    unittest.main()

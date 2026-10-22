@@ -4,10 +4,13 @@
 #ifndef OutputDir
   #define OutputDir "..\..\Releases\Installers"
 #endif
+#ifndef AppVersion
+  #error AppVersion must be supplied by build-installer.ps1
+#endif
 [Setup]
 AppId={{F86029F4-7066-48B6-8942-04B2C935B53B}
 AppName=LingoClass
-AppVersion=2026.10.16
+AppVersion={#AppVersion}
 DefaultDirName={localappdata}\Programs\LingoClass
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible

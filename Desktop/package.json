@@ -1,13 +1,16 @@
 {
-  "name": "desktop",
+  "name": "@lingoclass/desktop",
   "private": true,
-  "version": "0.0.0",
+  "version": "2026.10.18",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
+    "lint": "oxlint --deny-warnings",
+    "preview": "vite preview",
+    "format": "prettier --write src index.html vite.config.ts package.json",
+    "format:check": "prettier --check src index.html vite.config.ts package.json",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "dependencies": {
     "lucide-react": "^1.52.0",
@@ -20,6 +23,7 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
+    "prettier": "3.9.10",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   }

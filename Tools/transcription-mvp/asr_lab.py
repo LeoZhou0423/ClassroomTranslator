@@ -1,54 +1,70 @@
 from __future__ import annotations
+
 import argparse
 import collections
 import io
 import json
-import mimetypes
 import math
+import mimetypes
 import queue
 import secrets
 import threading
 import time
 import wave
-import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
+
 import numpy as np
+import secrets_store
 import sherpa_onnx
 import sounddevice as sd
-from scipy.signal import resample_poly
-from asr_core import decode_window_start, TranscriptLedger, accepted_english, reconcile_boundary, AudioWindowOwners
-from live_language import LANGUAGE
-from desktop_store import DesktopStore
-from app_paths import DATA_ROOT, MODEL_ROOT, WEB_ROOT, ICON_PATH, speech_model_dir
-from model_downloads import DOWNLOADS
-from speaker_service import SPEAKERS
-from noise_reduction import NoiseReducer
-from asr_quality import review_reason, select_audio_revision, audio_supports_proposal
+from app_errors import LOGGER, AppError, classify_error, error_response
+from app_paths import DATA_ROOT, ICON_PATH, WEB_ROOT, speech_model_dir
+from app_version import BUILD_ID
+from asr_core import (
+    AudioWindowOwners,
+    TranscriptLedger,
+    accepted_english,
+    decode_window_start,
+    reconcile_boundary,
+)
 from asr_correction import CORRECTOR
+from asr_quality import audio_supports_proposal, review_reason, select_audio_revision
 from caption_presentation import CaptionPresentation
 from caption_text import strip_annotations
-import secrets_store
+from desktop_store import DesktopStore
+from json_storage import atomic_write_json
+from live_language import LANGUAGE
+from model_downloads import DOWNLOADS
+from noise_reduction import NoiseReducer
+from scipy.signal import resample_poly
+from speaker_service import SPEAKERS
 
 ROOT = Path(__file__).resolve().parent
 RATE = 16000
-BUILD_VERSION = "20261016-summary-preflight-10"
+BUILD_VERSION = BUILD_ID
 STORE = DesktopStore(DATA_ROOT)
 
 
 def read_wav(data):
     with wave.open(io.BytesIO(data), "rb") as source:
         channels, width, rate = source.getnchannels(), source.getsampwidth(), source.getframerate()
-        if width not in (2, 4): raise ValueError("请使用 PCM 16-bit 或 PCM 32-bit WAV 文件")
-        raw = np.frombuffer(source.readframes(source.getnframes()), dtype="<i2" if width == 2 else "<i4")
-        audio = raw.reshape(-1, channels).astype(np.float32).mean(axis=1) / (32768.0 if width == 2 else 2147483648.0)
+        if width not in (2, 4):
+            raise ValueError("请使用 PCM 16-bit 或 PCM 32-bit WAV 文件")
+        raw = np.frombuffer(
+            source.readframes(source.getnframes()), dtype="<i2" if width == 2 else "<i4"
+        )
+        audio = raw.reshape(-1, channels).astype(np.float32).mean(axis=1) / (
+            32768.0 if width == 2 else 2147483648.0
+        )
     if rate != RATE:
         divisor = math.gcd(rate, RATE)
-        audio = resample_poly(audio, RATE//divisor, rate//divisor).astype(np.float32)
-    if not len(audio): raise ValueError("音频文件为空")
+        audio = resample_poly(audio, RATE // divisor, rate // divisor).astype(np.float32)
+    if not len(audio):
+        raise ValueError("音频文件为空")
     return audio
 
 
@@ -56,12 +72,17 @@ def models():
     result = []
     for name in ("tiny", "base", "small", "small.en"):
         directory = speech_model_dir(name)
-        files = [f"{name}-encoder.int8.onnx", f"{name}-decoder.int8.onnx", f"{name}-tokens.txt", "silero_vad.int8.onnx"]
-        result.append({"name":name, "ready":all((directory / f).is_file() for f in files)})
+        files = [
+            f"{name}-encoder.int8.onnx",
+            f"{name}-decoder.int8.onnx",
+            f"{name}-tokens.txt",
+            "silero_vad.int8.onnx",
+        ]
+        result.append({"name": name, "ready": all((directory / f).is_file() for f in files)})
     return result
 
 
-class Lab:
+class TranscriptionSession:
     def __init__(self):
         self.lock = threading.RLock()
         self.condition = threading.Condition()
@@ -78,7 +99,15 @@ class Lab:
         self.logs = collections.deque(maxlen=500)
         self.session_dir = None
         self.config = {}
-        self.metrics = {"rms":0, "speech":False, "captured_seconds":0, "decode_seconds":0, "rtf":0, "dropped_blocks":0, "in_flight":False}
+        self.metrics = {
+            "rms": 0,
+            "speech": False,
+            "captured_seconds": 0,
+            "decode_seconds": 0,
+            "rtf": 0,
+            "dropped_blocks": 0,
+            "in_flight": False,
+        }
         self.worker = None
         self.raw = None
         self.raw_sink = None
@@ -90,81 +119,174 @@ class Lab:
 
     def decoder(self, name, threads, purpose="live"):
         with self.decoder_lock:
-            key=(name,threads,purpose)
+            key = (name, threads, purpose)
             if key not in self.decoder_cache:
-                directory=speech_model_dir(name)
-                self.decoder_cache[key]=sherpa_onnx.OfflineRecognizer.from_whisper(
-                    encoder=str(directory/f'{name}-encoder.int8.onnx'),decoder=str(directory/f'{name}-decoder.int8.onnx'),
-                    tokens=str(directory/f'{name}-tokens.txt'),language='en',task='transcribe',num_threads=threads)
+                directory = speech_model_dir(name)
+                self.decoder_cache[key] = sherpa_onnx.OfflineRecognizer.from_whisper(
+                    encoder=str(directory / f"{name}-encoder.int8.onnx"),
+                    decoder=str(directory / f"{name}-decoder.int8.onnx"),
+                    tokens=str(directory / f"{name}-tokens.txt"),
+                    language="en",
+                    task="transcribe",
+                    num_threads=threads,
+                )
             return self.decoder_cache[key]
 
     def log(self, event, **fields):
-        entry = {"time":datetime.now().isoformat(timespec="milliseconds"), "event":event, **fields}
+        entry = {
+            "time": datetime.now().isoformat(timespec="milliseconds"),
+            "event": event,
+            **fields,
+        }
         with self.lock:
-            if event in {"capture_error","vad_error","worker_error"}: self.failure = fields.get("message",event)
+            if event in {"capture_error", "vad_error", "worker_error"}:
+                self.failure = fields.get("message", event)
             self.logs.append(entry)
             if self.session_dir:
-                with (self.session_dir / "events.jsonl").open("a", encoding="utf-8") as out: out.write(json.dumps(entry, ensure_ascii=False)+"\n")
+                try:
+                    with (self.session_dir / "events.jsonl").open("a", encoding="utf-8") as out:
+                        out.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                except OSError as error:
+                    self.failure = classify_error(error).message
+                    self.stop_event.set()
+                    LOGGER.error("recording_log_write_failed kind=%s", type(error).__name__)
 
     def state(self, include_logs=True):
         with self.lock:
             rows, live = self.ledger.snapshot()
-            language_rows=LANGUAGE.snapshot()
-            result = {"version":BUILD_VERSION,"phase":self.phase, "error":self.failure, "rows":rows, "live":live, "transcript":self.ledger.text(), "logs":list(self.logs)[-80:], "metrics":dict(self.metrics),
-                      "config":dict(self.config), "session_dir":str(self.session_dir or ""), "language_rows":language_rows, "summary":read_summary(self.session_dir) if self.session_dir else None,
-                      "translation_usage":dict(LANGUAGE.usage),'correction_usage':CORRECTOR.snapshot(),'speaker_rows':SPEAKERS.snapshot(language_rows),'speaker_error':SPEAKERS.error}
-            if self.phase not in ('done','error'):
-                result['summary']=None
-            result['presentation']=self.presentation.snapshot(rows,language_rows,result['speaker_rows'],live,self.phase,paused=not self.metrics.get('speech',False) and not self.metrics.get('in_flight',False))
-            self.ledger.sealed_ids=set(self.presentation.consumed)
+            language_rows = LANGUAGE.snapshot()
+            result = {
+                "version": BUILD_VERSION,
+                "phase": self.phase,
+                "error": self.failure,
+                "rows": rows,
+                "live": live,
+                "transcript": self.ledger.text(),
+                "logs": list(self.logs)[-80:],
+                "metrics": dict(self.metrics),
+                "config": dict(self.config),
+                "session_dir": str(self.session_dir or ""),
+                "language_rows": language_rows,
+                "summary": read_summary(self.session_dir) if self.session_dir else None,
+                "translation_usage": dict(LANGUAGE.usage),
+                "correction_usage": CORRECTOR.snapshot(),
+                "speaker_rows": SPEAKERS.snapshot(language_rows),
+                "speaker_error": SPEAKERS.error,
+            }
+            result["warnings"] = []
+            if self.metrics.get("dropped_blocks", 0):
+                result["warnings"].append(
+                    "音频处理跟不上，部分声音未能保存。请关闭高负载程序后重试。"
+                )
+            warning = getattr(LANGUAGE, "persistence_error", None)
+            if isinstance(warning, str) and warning:
+                result["warnings"].append(warning)
+            if SPEAKERS.error:
+                result["warnings"].append("说话人分析暂不可用，字幕继续生成。")
+            if self.phase not in ("done", "error"):
+                result["summary"] = None
+            result["presentation"] = self.presentation.snapshot(
+                rows,
+                language_rows,
+                result["speaker_rows"],
+                live,
+                self.phase,
+                paused=not self.metrics.get("speech", False)
+                and not self.metrics.get("in_flight", False),
+            )
+            self.ledger.sealed_ids = set(self.presentation.consumed)
             with LANGUAGE.lock:
-                LANGUAGE.sealed_ids=set(self.presentation.consumed)
-        with self.condition: result["metrics"]["pending_finals"] = len(self.finals)
+                LANGUAGE.sealed_ids = set(self.presentation.consumed)
+        with self.condition:
+            result["metrics"]["pending_finals"] = len(self.finals)
         if not include_logs:
-            result.pop('logs', None)
+            result.pop("logs", None)
         return result
 
     def start(self, config, samples=None):
         with self.lock:
-            if self.phase in ("loading", "recording", "paused", "stopping"): raise ValueError("上次录音仍在收尾，请等待完成")
-            if self.worker and self.worker.is_alive(): raise ValueError("解码线程仍在收尾")
+            if self.phase in ("loading", "recording", "paused", "stopping"):
+                raise AppError("FAILED_PRECONDITION", "上次录音仍在收尾，请等待完成。", 409)
+            if self.worker and self.worker.is_alive():
+                raise AppError("FAILED_PRECONDITION", "解码任务仍在收尾，请等待完成。", 409)
             name = config.get("model", "small")
-            if name not in {m["name"] for m in models() if m["ready"]}: raise ValueError("模型尚未下载，请先运行 run.ps1 -Model "+name)
-            threshold = float(config.get("vad_threshold", .5))
-            silence = float(config.get("silence", .7))
+            if name not in {m["name"] for m in models() if m["ready"]}:
+                raise AppError("MODEL_NOT_READY", "模型尚未下载，请先在设置中下载语音模型。", 409)
+            threshold = float(config.get("vad_threshold", 0.5))
+            silence = float(config.get("silence", 0.7))
             interval = float(config.get("partial_interval", 1))
-            rms = float(config.get("minimum_rms", .004))
+            rms = float(config.get("minimum_rms", 0.004))
             threads = int(config.get("threads", 4))
-            if not (.1 <= threshold <= .9 and .3 <= silence <= 2 and 1 <= interval <= 5 and 0 <= rms <= .1 and 1 <= threads <= 8): raise ValueError("参数超出允许范围")
+            if not (
+                0.1 <= threshold <= 0.9
+                and 0.3 <= silence <= 2
+                and 1 <= interval <= 5
+                and 0 <= rms <= 0.1
+                and 1 <= threads <= 8
+            ):
+                raise ValueError("参数超出允许范围")
             device = config.get("device")
-            self.config = {"model":name,"language":"en","backend":"sherpa-onnx CPU INT8", "vad_threshold":threshold,"silence":silence,
-                           "partial_interval":interval,"minimum_rms":rms,"threads":threads,"device":device,"source":"wav" if samples is not None else "microphone",
-                           "replay_realtime":bool(config.get("replay_realtime",True))}
-            self.config.update({key:config[key] for key in ('course_id','course_name') if key in config})
-            self.config['noise_reduction']=bool(config.get('noise_reduction',True))
-            self.config['realtime_preview']=False  # Legacy settings cannot enable the removed experiment.
-            self.config['background_filter']=bool(config.get('background_filter',STORE.settings().get('background_filter',True)))
-            self.session_dir = DATA_ROOT / "sessions" / (datetime.now().strftime("%Y%m%d-%H%M%S")+"-"+secrets.token_hex(2))
+            self.config = {
+                "model": name,
+                "language": "en",
+                "backend": "sherpa-onnx CPU INT8",
+                "vad_threshold": threshold,
+                "silence": silence,
+                "partial_interval": interval,
+                "minimum_rms": rms,
+                "threads": threads,
+                "device": device,
+                "source": "wav" if samples is not None else "microphone",
+                "replay_realtime": bool(config.get("replay_realtime", True)),
+            }
+            self.config.update(
+                {key: config[key] for key in ("course_id", "course_name") if key in config}
+            )
+            self.config["noise_reduction"] = bool(config.get("noise_reduction", True))
+            self.config["realtime_preview"] = (
+                False  # Legacy settings cannot enable the removed experiment.
+            )
+            self.config["background_filter"] = bool(
+                config.get("background_filter", STORE.settings().get("background_filter", True))
+            )
+            self.session_dir = (
+                DATA_ROOT
+                / "sessions"
+                / (datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2))
+            )
             self.session_dir.mkdir(parents=True)
             SPEAKERS.reset(self.session_dir)
-            (self.session_dir / "config.json").write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding="utf-8")
+            (self.session_dir / "config.json").write_text(
+                json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             self.ledger = TranscriptLedger()
-            terms = config.get('course_terms', STORE.settings().get('course_terms',''))
-            if isinstance(terms,str): terms = [term.strip() for term in terms.split(',') if term.strip()]
+            terms = config.get("course_terms", STORE.settings().get("course_terms", ""))
+            if isinstance(terms, str):
+                terms = [term.strip() for term in terms.split(",") if term.strip()]
             LANGUAGE.reset(self.session_dir, course_terms=terms[:32])
-            self.config['course_terms']=list(terms[:32])
+            self.config["course_terms"] = list(terms[:32])
             self.failure = None
             self.logs.clear()
             self.audio = queue.Queue(maxsize=300)
-            self.finals.clear(); self.partials.clear()
+            self.finals.clear()
+            self.partials.clear()
             self.finalized_ids.clear()
             self.presentation.reset()
             self.vad_done = False
-            self.stop_event.clear(); self.capture_done.clear()
+            self.stop_event.clear()
+            self.capture_done.clear()
             self.pause_event.clear()
-            self.metrics = {"rms":0,"speech":False,"captured_seconds":0,"decode_seconds":0,"rtf":0,"dropped_blocks":0,"in_flight":False}
+            self.metrics = {
+                "rms": 0,
+                "speech": False,
+                "captured_seconds": 0,
+                "decode_seconds": 0,
+                "rtf": 0,
+                "dropped_blocks": 0,
+                "in_flight": False,
+            }
             self.phase = "loading"
-            self.worker = threading.Thread(target=self._run,args=(samples,),daemon=True)
+            self.worker = threading.Thread(target=self._run, args=(samples,), daemon=True)
             self.worker.start()
 
     def stop(self):
@@ -176,54 +298,85 @@ class Lab:
 
     def pause(self):
         with self.lock:
-            if self.phase != 'recording': raise ValueError('当前不在录音中')
+            if self.phase != "recording":
+                raise ValueError("当前不在录音中")
             self.pause_event.set()
             # A marked synthetic gap closes the current VAD window. It is saved
             # in the audio timeline but excluded from captured speaking time.
-            try: self.audio.put_nowait({'pause':np.zeros(RATE,dtype=np.float32)})
+            try:
+                self.audio.put_nowait({"pause": np.zeros(RATE, dtype=np.float32)})
             except queue.Full:
                 self.pause_event.clear()
-                raise ValueError('音频正在收尾，请稍后暂停')
-            self.phase='paused'
-            self.log('recording_paused',synthetic_gap_seconds=1)
+                raise ValueError("音频正在收尾，请稍后暂停")
+            self.phase = "paused"
+            self.log("recording_paused", synthetic_gap_seconds=1)
 
     def resume(self):
         with self.lock:
-            if self.phase != 'paused': raise ValueError('当前录音未暂停')
-            self.phase='recording'; self.pause_event.clear()
-            self.log('recording_resumed')
+            if self.phase != "paused":
+                raise ValueError("当前录音未暂停")
+            self.phase = "recording"
+            self.pause_event.clear()
+            self.log("recording_resumed")
 
     def _capture(self, samples):
         try:
             if samples is not None:
                 start = time.perf_counter()
-                for offset in range(0,len(samples),512):
-                    waiting=time.perf_counter()
-                    while self.pause_event.is_set() and not self.stop_event.wait(.05): pass
-                    start += time.perf_counter()-waiting
-                    if self.stop_event.is_set(): break
-                    block = samples[offset:offset+512].copy()
+                for offset in range(0, len(samples), 512):
+                    waiting = time.perf_counter()
+                    while self.pause_event.is_set() and not self.stop_event.wait(0.05):
+                        pass
+                    start += time.perf_counter() - waiting
+                    if self.stop_event.is_set():
+                        break
+                    block = samples[offset : offset + 512].copy()
                     while not self.stop_event.is_set():
-                        try: self.audio.put(block,timeout=.1); break
-                        except queue.Full: continue
-                    if self.stop_event.is_set(): break
-                    if self.config.get("replay_realtime",True):
-                        self.stop_event.wait(max(0,(offset+512)/RATE-(time.perf_counter()-start)))
+                        try:
+                            self.audio.put(block, timeout=0.1)
+                            break
+                        except queue.Full:
+                            continue
+                    if self.stop_event.is_set():
+                        break
+                    if self.config.get("replay_realtime", True):
+                        self.stop_event.wait(
+                            max(0, (offset + 512) / RATE - (time.perf_counter() - start))
+                        )
             else:
                 device = self.config["device"]
                 input_rate = RATE
-                try: sd.check_input_settings(device=device,channels=1,samplerate=RATE)
-                except sd.PortAudioError: input_rate = int(sd.query_devices(device,"input")["default_samplerate"])
+                try:
+                    sd.check_input_settings(device=device, channels=1, samplerate=RATE)
+                except sd.PortAudioError:
+                    input_rate = int(sd.query_devices(device, "input")["default_samplerate"])
                 self.log("input_format", sample_rate=input_rate, channels=1)
+
                 def callback(data, frames, timing, status):
-                    if self.pause_event.is_set(): return
-                    if status: self.log("audio_status", status=str(status))
-                    try: self.audio.put_nowait((data[:,0].copy(),input_rate))
+                    if self.pause_event.is_set():
+                        return
+                    if status:
+                        self.log("audio_status", status=str(status))
+                    try:
+                        self.audio.put_nowait((data[:, 0].copy(), input_rate))
                     except queue.Full:
-                        with self.lock: self.metrics["dropped_blocks"] += 1
-                        self.log("audio_overflow", warning="captured audio was dropped; this session is not lossless")
-                with sd.InputStream(device=device,channels=1,samplerate=input_rate,dtype="float32",blocksize=int(input_rate*.032),callback=callback):
-                    while not self.stop_event.wait(.05): pass
+                        with self.lock:
+                            self.metrics["dropped_blocks"] += 1
+                        self.log(
+                            "audio_overflow",
+                            warning="captured audio was dropped; this session is not lossless",
+                        )
+
+                with sd.InputStream(
+                    device=device,
+                    channels=1,
+                    samplerate=input_rate,
+                    dtype="float32",
+                    blocksize=int(input_rate * 0.032),
+                    callback=callback,
+                ):
+                    while not self.stop_event.wait(0.05):
+                        pass
         except Exception as error:
             self.log("capture_error", message=str(error))
             self.stop_event.set()
@@ -231,253 +384,416 @@ class Lab:
             self.capture_done.set()
 
     def _submit(self, identifier, samples, final, start):
-        if not len(samples): return
-        job = (identifier,samples.copy(),final,start,time.perf_counter())
+        if not len(samples):
+            return
+        job = (identifier, samples.copy(), final, start, time.perf_counter())
         with self.condition:
             if final:
-                self.partials.pop(identifier,None)
+                self.partials.pop(identifier, None)
                 self.finals.append(job)  # Finals are never discarded/coalesced.
-            else: self.partials[identifier] = job
+            else:
+                self.partials[identifier] = job
             self.condition.notify()
 
     def _vad(self, directory):
-        original=None
+        original = None
         try:
-            reducer=None
-            if self.config.get('noise_reduction',True):
-                try:reducer=NoiseReducer()
+            reducer = None
+            if self.config.get("noise_reduction", True):
+                try:
+                    reducer = NoiseReducer()
                 except Exception as error:
-                    self.log('noise_reduction_unavailable',message=str(error))
-                    with self.lock:self.metrics['noise_warning']=str(error)
-            with self.lock:self.metrics['noise_reduction']=reducer is not None
-            original=wave.open(str(self.session_dir/'original.wav'),'wb')
-            original.setnchannels(1);original.setsampwidth(2);original.setframerate(RATE)
+                    self.log("noise_reduction_unavailable", message=str(error))
+                    with self.lock:
+                        self.metrics["noise_warning"] = str(error)
+            with self.lock:
+                self.metrics["noise_reduction"] = reducer is not None
+            original = wave.open(str(self.session_dir / "original.wav"), "wb")
+            original.setnchannels(1)
+            original.setsampwidth(2)
+            original.setframerate(RATE)
             config = sherpa_onnx.VadModelConfig()
             config.silero_vad.model = str(directory / "silero_vad.int8.onnx")
             config.silero_vad.threshold = self.config["vad_threshold"]
             config.silero_vad.min_silence_duration = self.config["silence"]
-            config.silero_vad.min_speech_duration = .3
+            config.silero_vad.min_speech_duration = 0.3
             config.silero_vad.max_speech_duration = 6.0
             config.sample_rate = RATE
-            vad = sherpa_onnx.VoiceActivityDetector(config,buffer_size_in_seconds=30)
+            vad = sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=30)
             last_partial, total, pause_padding = 0, 0, 0
             owners = AudioWindowOwners()
+
             def collect():
                 nonlocal last_partial
                 while not vad.empty():
                     segment = vad.front
-                    value = np.asarray(segment.samples,dtype=np.float32).copy()
+                    value = np.asarray(segment.samples, dtype=np.float32).copy()
                     start = int(segment.start)
-                    self._submit(owners.owner(start),value,True,start/RATE)
-                    vad.pop(); last_partial = 0
+                    self._submit(owners.owner(start), value, True, start / RATE)
+                    vad.pop()
+                    last_partial = 0
+
             while not self.capture_done.is_set() or not self.audio.empty():
-                try: block = self.audio.get(timeout=.1)
-                except queue.Empty: continue
-                if isinstance(block,dict):
-                    block=block['pause']; pause_padding += len(block)
-                if isinstance(block,tuple):
-                    block,rate = block
+                try:
+                    block = self.audio.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if isinstance(block, dict):
+                    block = block["pause"]
+                    pause_padding += len(block)
+                if isinstance(block, tuple):
+                    block, rate = block
                     if rate != RATE:
-                        divisor = math.gcd(rate,RATE)
-                        block = resample_poly(block,RATE//divisor,rate//divisor).astype(np.float32)
-                block = np.asarray(block,dtype=np.float32)
-                original.writeframesraw((np.clip(block,-1,1)*32767).astype('<i2').tobytes())
+                        divisor = math.gcd(rate, RATE)
+                        block = resample_poly(block, RATE // divisor, rate // divisor).astype(
+                            np.float32
+                        )
+                block = np.asarray(block, dtype=np.float32)
+                original.writeframesraw((np.clip(block, -1, 1) * 32767).astype("<i2").tobytes())
                 original._file.flush()
-                if reducer:block=reducer.process(block)
-                if not len(block):continue
+                if reducer:
+                    block = reducer.process(block)
+                if not len(block):
+                    continue
                 if self.raw:
-                    self.raw.writeframesraw((np.clip(block,-1,1)*32767).astype("<i2").tobytes())
+                    self.raw.writeframesraw((np.clip(block, -1, 1) * 32767).astype("<i2").tobytes())
                     self.raw_sink.flush()
                 total += len(block)
                 vad.accept_waveform(block)
                 collect()
                 speech = bool(vad.is_speech_detected)
                 with self.lock:
-                    self.metrics.update(rms=float(np.sqrt(np.mean(block**2))) if len(block) else 0,speech=speech,captured_seconds=(total-pause_padding)/RATE)
+                    self.metrics.update(
+                        rms=float(np.sqrt(np.mean(block**2))) if len(block) else 0,
+                        speech=speech,
+                        captured_seconds=(total - pause_padding) / RATE,
+                    )
                 if speech:
-                    current = np.asarray(vad.current_segment.samples,dtype=np.float32)
+                    current = np.asarray(vad.current_segment.samples, dtype=np.float32)
                     # Bound full-window work to six seconds, while continuing
                     # previews through the whole window. Pending previews coalesce.
                     minimum = 1
-                    interval = self.config['partial_interval']
-                    if len(current) >= RATE*minimum and len(current)-last_partial >= RATE*(minimum if last_partial == 0 else interval):
+                    interval = self.config["partial_interval"]
+                    if len(current) >= RATE * minimum and len(current) - last_partial >= RATE * (
+                        minimum if last_partial == 0 else interval
+                    ):
                         last_partial = len(current)
                         start = int(vad.current_segment.start)
-                        self._submit(owners.owner(start),current,False,start/RATE)
+                        self._submit(owners.owner(start), current, False, start / RATE)
             if reducer:
-                tail=reducer.flush()
+                tail = reducer.flush()
                 if len(tail):
                     if self.raw:
-                        self.raw.writeframesraw((np.clip(tail,-1,1)*32767).astype('<i2').tobytes());self.raw_sink.flush()
-                    total+=len(tail);vad.accept_waveform(tail)
-            vad.flush(); collect()
-            with self.lock:self.metrics['captured_seconds']=(total-pause_padding)/RATE
-            with self.lock: self.phase = "stopping"
-            self.log("capture_drained", audio_seconds=total/RATE)
+                        self.raw.writeframesraw(
+                            (np.clip(tail, -1, 1) * 32767).astype("<i2").tobytes()
+                        )
+                        self.raw_sink.flush()
+                    total += len(tail)
+                    vad.accept_waveform(tail)
+            vad.flush()
+            collect()
+            with self.lock:
+                self.metrics["captured_seconds"] = (total - pause_padding) / RATE
+            with self.lock:
+                self.phase = "stopping"
+            self.log("capture_drained", audio_seconds=total / RATE)
         except Exception as error:
-            self.log("vad_error", message=str(error)); self.stop_event.set()
+            self.log("vad_error", message=str(error))
+            self.stop_event.set()
         finally:
-            if original:original.close()
-            with self.condition: self.vad_done = True; self.condition.notify_all()
+            if original:
+                original.close()
+            with self.condition:
+                self.vad_done = True
+                self.condition.notify_all()
 
     def _run(self, samples):
         decoder = None
         capture = None
         vad_thread = None
-        reviewer = ThreadPoolExecutor(max_workers=1,thread_name_prefix="asr-review")
+        reviewer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="asr-review")
         reviews = []
         try:
             name = self.config["model"]
             directory = speech_model_dir(name)
             began = time.perf_counter()
-            decoder = self.decoder(name,self.config['threads'])
-            ready={item['name'] for item in models() if item['ready']}
-            preview_name=next((model for model in ('base','tiny') if model in ready),name) if name in ('small','small.en') else name
-            preview_decoder=self.decoder(preview_name,self.config['threads'],purpose='preview') if preview_name!=name else decoder
-            with self.lock:self.config['preview_model']=preview_name
-            self.log("model_ready", model=name,load_seconds=round(time.perf_counter()-began,3))
-            if self.stop_event.is_set(): return
-            self.raw_sink = (self.session_dir/"audio.wav").open("w+b")
-            self.raw = wave.open(self.raw_sink,"wb")
-            self.raw.setnchannels(1); self.raw.setsampwidth(2); self.raw.setframerate(RATE)
-            with self.lock: self.phase = "recording"
-            vad_thread = threading.Thread(target=self._vad,args=(directory,),daemon=True)
-            capture = threading.Thread(target=self._capture,args=(samples,),daemon=True)
-            vad_thread.start(); capture.start()
+            decoder = self.decoder(name, self.config["threads"])
+            ready = {item["name"] for item in models() if item["ready"]}
+            preview_name = (
+                next((model for model in ("base", "tiny") if model in ready), name)
+                if name in ("small", "small.en")
+                else name
+            )
+            preview_decoder = (
+                self.decoder(preview_name, self.config["threads"], purpose="preview")
+                if preview_name != name
+                else decoder
+            )
+            with self.lock:
+                self.config["preview_model"] = preview_name
+            self.log("model_ready", model=name, load_seconds=round(time.perf_counter() - began, 3))
+            if self.stop_event.is_set():
+                return
+            self.raw_sink = (self.session_dir / "audio.wav").open("w+b")
+            self.raw = wave.open(self.raw_sink, "wb")
+            self.raw.setnchannels(1)
+            self.raw.setsampwidth(2)
+            self.raw.setframerate(RATE)
+            with self.lock:
+                self.phase = "recording"
+            vad_thread = threading.Thread(target=self._vad, args=(directory,), daemon=True)
+            capture = threading.Thread(target=self._capture, args=(samples,), daemon=True)
+            vad_thread.start()
+            capture.start()
             processed_ends = {}
             last_final = None
             while True:
                 with self.condition:
-                    while not self.finals and not self.partials and not self.vad_done: self.condition.wait(.1)
-                    if self.finals: job = self.finals.popleft()
+                    while not self.finals and not self.partials and not self.vad_done:
+                        self.condition.wait(0.1)
+                    if self.finals:
+                        job = self.finals.popleft()
                     elif self.partials:
                         key = min(self.partials)
                         job = self.partials.pop(key)
-                    else: break
-                identifier,audio,final,start,queued = job
+                    else:
+                        break
+                identifier, audio, final, start, queued = job
                 with self.lock:
-                    prior_hypothesis = self.ledger.entries[identifier].best if identifier in self.ledger.entries else ''
-                endpoint = round(start*RATE)+len(audio)
+                    prior_hypothesis = (
+                        self.ledger.entries[identifier].best
+                        if identifier in self.ledger.entries
+                        else ""
+                    )
+                endpoint = round(start * RATE) + len(audio)
                 # Silero triggers after speech onset, especially for quiet
                 # consonants. Restore captured pre-roll without crossing the
                 # preceding finalized window or changing this window's owner.
-                onset=round(start*RATE)
-                floor=last_final[2] if last_final is not None and last_final[0]!=identifier else 0
-                pre_start=decode_window_start(onset,floor if last_final is not None and last_final[0]!=identifier else None,RATE)
-                if pre_start<onset:
-                    with (self.session_dir/'audio.wav').open('rb') as source:
-                        source.seek(44+pre_start*2)
-                        pre=np.frombuffer(source.read((onset-pre_start)*2),dtype='<i2').astype(np.float32)/32768
-                    audio=np.concatenate((pre,audio))
-                previous_end,previous_final = processed_ends.get(identifier,(-1,False))
-                if not final and (endpoint < previous_end or (endpoint == previous_end and previous_final)):
-                    self.log("stale_decode_skipped",utterance=identifier,final=final)
+                onset = round(start * RATE)
+                floor = (
+                    last_final[2] if last_final is not None and last_final[0] != identifier else 0
+                )
+                pre_start = decode_window_start(
+                    onset,
+                    floor if last_final is not None and last_final[0] != identifier else None,
+                    RATE,
+                )
+                if pre_start < onset:
+                    with (self.session_dir / "audio.wav").open("rb") as source:
+                        source.seek(44 + pre_start * 2)
+                        pre = (
+                            np.frombuffer(source.read((onset - pre_start) * 2), dtype="<i2").astype(
+                                np.float32
+                            )
+                            / 32768
+                        )
+                    audio = np.concatenate((pre, audio))
+                previous_end, previous_final = processed_ends.get(identifier, (-1, False))
+                if not final and (
+                    endpoint < previous_end or (endpoint == previous_end and previous_final)
+                ):
+                    self.log("stale_decode_skipped", utterance=identifier, final=final)
                     continue
-                with self.lock: self.metrics["in_flight"] = True
-                with self.lock: self.metrics["stage"] = "decode"
+                with self.lock:
+                    self.metrics["in_flight"] = True
+                with self.lock:
+                    self.metrics["stage"] = "decode"
                 rms = float(np.sqrt(np.mean(audio**2)))
                 text, raw_text, elapsed = "", "", 0.0
                 # These windows have already passed Silero speech detection.
                 # Whole-window RMS includes pauses and must not veto quiet speech.
-                if rms >= .0002:
+                if rms >= 0.0002:
                     t = time.perf_counter()
                     decode_audio = audio
                     # Whisper normalizes log-mel features itself. Whole-window
                     # amplification can suppress quiet phrases beside louder words.
-                    active_decoder=decoder if final else preview_decoder
-                    stream = active_decoder.create_stream(); stream.accept_waveform(RATE,decode_audio); active_decoder.decode_stream(stream)
+                    active_decoder = decoder if final else preview_decoder
+                    stream = active_decoder.create_stream()
+                    stream.accept_waveform(RATE, decode_audio)
+                    active_decoder.decode_stream(stream)
                     raw_text = stream.result.text
-                    elapsed = time.perf_counter()-t
+                    elapsed = time.perf_counter() - t
                     text = accepted_english(raw_text)
                 with self.lock:
-                    self.ledger.update(identifier,text,final,start,revision=True,full_window=True)
+                    self.ledger.update(
+                        identifier, text, final, start, revision=True, full_window=True
+                    )
                     if final:
                         self.finalized_ids.add(identifier)
-                    self.ledger.entries[identifier].annotation_suppressed=bool(raw_text.strip() and not strip_annotations(raw_text))
-                    processed_ends[identifier] = (endpoint,final)
-                    self.metrics.update(in_flight=False,decode_seconds=round(elapsed,3),rtf=round(elapsed/max(.001,len(audio)/RATE),3))
+                    self.ledger.entries[identifier].annotation_suppressed = bool(
+                        raw_text.strip() and not strip_annotations(raw_text)
+                    )
+                    processed_ends[identifier] = (endpoint, final)
+                    self.metrics.update(
+                        in_flight=False,
+                        decode_seconds=round(elapsed, 3),
+                        rtf=round(elapsed / max(0.001, len(audio) / RATE), 3),
+                    )
                     snapshot = self.ledger.text()
                 # Publish the first decode to the ledger before optional review:
                 # polling UI can render it while the suspect audio is re-read.
-                reason = review_reason(prior_hypothesis, text) if final else ''
-                if raw_text.strip() and not strip_annotations(raw_text):reason=''
+                reason = review_reason(prior_hypothesis, text) if final else ""
+                if raw_text.strip() and not strip_annotations(raw_text):
+                    reason = ""
                 # Lexical repair now uses text context in LiveLanguage. Raw-audio
                 # review remains useful only for truncated/empty ASR snapshots.
                 if reason:
                     reviews = [future for future in reviews if not future.done()]
-                    if len(reviews)<2:
+                    if len(reviews) < 2:
                         with self.lock:
-                            current=self.ledger.entries[identifier]
-                            expected=current.best
-                            context=' '.join(entry.best for key,entry in sorted(self.ledger.entries.items()) if key<identifier)
-                            context=' '.join(context.split()[-48:])
-                            current.review_status='checking'
-                        reviews.append(reviewer.submit(self._review_audio,identifier,prior_hypothesis,expected,pre_start,endpoint,start,reason,context))
+                            current = self.ledger.entries[identifier]
+                            expected = current.best
+                            context = " ".join(
+                                entry.best
+                                for key, entry in sorted(self.ledger.entries.items())
+                                if key < identifier
+                            )
+                            context = " ".join(context.split()[-48:])
+                            current.review_status = "checking"
+                        reviews.append(
+                            reviewer.submit(
+                                self._review_audio,
+                                identifier,
+                                prior_hypothesis,
+                                expected,
+                                pre_start,
+                                endpoint,
+                                start,
+                                reason,
+                                context,
+                            )
+                        )
                     else:
-                        with self.lock:self.ledger.entries[identifier].review_status='deferred'
-                        self.log('audio_review_deferred',utterance=identifier,reason=reason,action='retain live text; review queue bounded')
+                        with self.lock:
+                            self.ledger.entries[identifier].review_status = "deferred"
+                        self.log(
+                            "audio_review_deferred",
+                            utterance=identifier,
+                            reason=reason,
+                            action="retain live text; review queue bounded",
+                        )
                 if final:
                     try:
                         if last_final is not None:
-                            prior_id,prior_audio,prior_end = last_final
-                            gap = round(start*RATE)-prior_end
+                            prior_id, prior_audio, prior_end = last_final
+                            gap = round(start * RATE) - prior_end
                             with self.lock:
-                                previous_text=self.ledger.entries[prior_id].best
-                                current_text=self.ledger.entries[identifier].best
+                                previous_text = self.ledger.entries[prior_id].best
+                                current_text = self.ledger.entries[identifier].best
                             import re
-                            complete_boundary=bool(re.search(r'[.!?][\"\']?$',previous_text) and re.match(r'^[A-Z]',current_text))
-                            if prior_id != identifier and not complete_boundary and 0 <= gap <= int(1.8*RATE):
+
+                            complete_boundary = bool(
+                                re.search(r"[.!?][\"\']?$", previous_text)
+                                and re.match(r"^[A-Z]", current_text)
+                            )
+                            if (
+                                prior_id != identifier
+                                and not complete_boundary
+                                and 0 <= gap <= int(1.8 * RATE)
+                            ):
                                 # VAD gaps may contain quiet words. Recover the
                                 # original continuous PCM, never manufacture silence.
-                                boundary_start = max(0,prior_end-min(len(prior_audio),3*RATE))
-                                boundary_end = round(start*RATE)+min(len(audio),3*RATE)
-                                with (self.session_dir/"audio.wav").open("rb") as capture_file:
+                                boundary_start = max(0, prior_end - min(len(prior_audio), 3 * RATE))
+                                boundary_end = round(start * RATE) + min(len(audio), 3 * RATE)
+                                with (self.session_dir / "audio.wav").open("rb") as capture_file:
                                     # This writer emits a standard mono PCM16 RIFF
                                     # header (44 bytes); its length is updated on close.
-                                    capture_file.seek(44+boundary_start*2)
-                                    pcm = capture_file.read((boundary_end-boundary_start)*2)
-                                boundary_audio = np.frombuffer(pcm,dtype="<i2").astype(np.float32)/32768
+                                    capture_file.seek(44 + boundary_start * 2)
+                                    pcm = capture_file.read((boundary_end - boundary_start) * 2)
+                                boundary_audio = (
+                                    np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768
+                                )
                                 boundary_stream = decoder.create_stream()
-                                boundary_stream.accept_waveform(RATE,boundary_audio)
-                                with self.lock: self.metrics.update(in_flight=True,stage="boundary")
+                                boundary_stream.accept_waveform(RATE, boundary_audio)
+                                with self.lock:
+                                    self.metrics.update(in_flight=True, stage="boundary")
                                 repair_began = time.perf_counter()
                                 decoder.decode_stream(boundary_stream)
                                 bridge = accepted_english(boundary_stream.result.text)
                                 with self.lock:
                                     previous = self.ledger.entries[prior_id].best
                                     current = self.ledger.entries[identifier].best
-                                    repaired = reconcile_boundary(previous,current,bridge)
+                                    repaired = reconcile_boundary(previous, current, bridge)
                                     if repaired:
-                                            self.ledger.update(prior_id,repaired[0],True,revision=True,full_window=True,allow_trim=True)
-                                            self.ledger.update(identifier,repaired[1],True,revision=True,full_window=True,allow_trim=True)
-                                self.log("boundary_redecode",left=prior_id,right=identifier,applied=bool(repaired),raw=bridge,
-                                         decode_seconds=round(time.perf_counter()-repair_began,3))
+                                        self.ledger.update(
+                                            prior_id,
+                                            repaired[0],
+                                            True,
+                                            revision=True,
+                                            full_window=True,
+                                            allow_trim=True,
+                                        )
+                                        self.ledger.update(
+                                            identifier,
+                                            repaired[1],
+                                            True,
+                                            revision=True,
+                                            full_window=True,
+                                            allow_trim=True,
+                                        )
+                                self.log(
+                                    "boundary_redecode",
+                                    left=prior_id,
+                                    right=identifier,
+                                    applied=bool(repaired),
+                                    raw=bridge,
+                                    decode_seconds=round(time.perf_counter() - repair_began, 3),
+                                )
                     except Exception as repair_error:
-                        self.log("boundary_redecode_error", message=str(repair_error), action="original transcripts retained")
-                    last_final = (identifier,audio,endpoint)
-                with self.lock: snapshot = self.ledger.text()
-                with self.lock: self.metrics.update(in_flight=False,stage="idle")
-                self.log("decode", utterance=identifier,final=final,audio_start=start,audio_end=endpoint/RATE,audio_seconds=round(len(audio)/RATE,3),decode_seconds=round(elapsed,3),
-                         queue_seconds=round(time.perf_counter()-queued-elapsed,3),decoder_model=name if final else preview_name,rms=round(rms,5),raw=raw_text,accepted=text,retained_chars=len(snapshot))
+                        self.log(
+                            "boundary_redecode_error",
+                            message=str(repair_error),
+                            action="original transcripts retained",
+                        )
+                    last_final = (identifier, audio, endpoint)
+                with self.lock:
+                    snapshot = self.ledger.text()
+                with self.lock:
+                    self.metrics.update(in_flight=False, stage="idle")
+                self.log(
+                    "decode",
+                    utterance=identifier,
+                    final=final,
+                    audio_start=start,
+                    audio_end=endpoint / RATE,
+                    audio_seconds=round(len(audio) / RATE, 3),
+                    decode_seconds=round(elapsed, 3),
+                    queue_seconds=round(time.perf_counter() - queued - elapsed, 3),
+                    decoder_model=name if final else preview_name,
+                    rms=round(rms, 5),
+                    raw=raw_text,
+                    accepted=text,
+                    retained_chars=len(snapshot),
+                )
                 self._save()
-                if final and text: SPEAKERS.submit(identifier,audio,text)
+                if final and text:
+                    SPEAKERS.submit(identifier, audio, text)
                 LANGUAGE.submit(self.ledger.snapshot()[0])
         except Exception as error:
-            self.log("worker_error", message=str(error)); self.stop_event.set()
+            self.log("worker_error", message=str(error))
+            self.stop_event.set()
         finally:
             self.stop_event.set()
-            if capture: capture.join(timeout=5)
-            if vad_thread: vad_thread.join(timeout=5)
+            if capture:
+                capture.join(timeout=5)
+            if vad_thread:
+                vad_thread.join(timeout=5)
             reviewer.shutdown(wait=True)
-            if self.raw: self.raw.close(); self.raw=None
-            if self.raw_sink: self.raw_sink.close(); self.raw_sink=None
+            if self.raw:
+                self.raw.close()
+                self.raw = None
+            if self.raw_sink:
+                self.raw_sink.close()
+                self.raw_sink = None
             with self.lock:
                 self.ledger.finalize_all()
-                self.metrics.update(in_flight=False,speech=False,stage="idle")
+                self.metrics.update(in_flight=False, speech=False, stage="idle")
                 self.phase = "error" if self.failure else "done"
-            self.log("session_complete", text_chars=len(self.ledger.text()),success=self.failure is None)
+            self.log(
+                "session_complete", text_chars=len(self.ledger.text()), success=self.failure is None
+            )
             self._save()
-            LANGUAGE.submit(self.ledger.snapshot()[0],flush=True)
+            LANGUAGE.submit(self.ledger.snapshot()[0], flush=True)
             if not self.failure:
                 # Repair the ambiguous lines first so the summary reads the revised text.
                 self._start_postprocessing()
@@ -486,333 +802,611 @@ class Lab:
         # Background work outlives this session. Never read mutable Lab state
         # from its delayed callback after another recording has started.
         with self.lock:
-            directory=self.session_dir
-            state=self.state()
-            key,url=LANGUAGE.key,LANGUAGE.url
+            directory = self.session_dir
+            state = self.state()
+            key, url = LANGUAGE.key, LANGUAGE.url
         from classroom_summary import summary_text
-        if not summary_text(state,state.get('language_rows',{})).strip():
-            return
-        start_revision(directory,
-            on_done=lambda:start_summary(directory,state,key,url))
 
-    def _review_audio(self, identifier, previous, primary, begin, end, start, reason, context=''):
+        if not summary_text(state, state.get("language_rows", {})).strip():
+            return
+        start_summary(directory, state, key, url)
+
+    def _review_audio(self, identifier, previous, primary, begin, end, start, reason, context=""):
         try:
-            proposal=primary
-            if reason=='semantic':
-                proposal,status=CORRECTOR.correct(primary,context,LANGUAGE.key,LANGUAGE.url,
-                                                  self.config.get('course_terms',()),semantic=True)
-                if proposal==primary:
+            proposal = primary
+            if reason == "semantic":
+                proposal, status = CORRECTOR.correct(
+                    primary,
+                    context,
+                    LANGUAGE.key,
+                    LANGUAGE.url,
+                    self.config.get("course_terms", ()),
+                    semantic=True,
+                )
+                if proposal == primary:
                     with self.lock:
-                        item=self.ledger.entries.get(identifier)
-                        if item and item.best==primary:item.review_status='unavailable' if status in ('unconfigured','quota_unavailable') else 'unchanged'
-                    self.log('semantic_review',utterance=identifier,status=status,changed=False)
+                        item = self.ledger.entries.get(identifier)
+                        if item and item.best == primary:
+                            item.review_status = (
+                                "unavailable"
+                                if status in ("unconfigured", "quota_unavailable")
+                                else "unchanged"
+                            )
+                    self.log("semantic_review", utterance=identifier, status=status, changed=False)
                     return
-            dry_path = self.session_dir / 'original.wav'
-            if not dry_path.exists(): raise ValueError('Original audio unavailable for review')
-            with dry_path.open('rb') as source:
-                source.seek(44+begin*2)
-                dry = np.frombuffer(source.read((end-begin)*2),dtype='<i2').astype(np.float32)/32768
-            if len(dry)!=end-begin or not len(dry): raise ValueError('Original audio incomplete for review')
+            dry_path = self.session_dir / "original.wav"
+            if not dry_path.exists():
+                raise ValueError("Original audio unavailable for review")
+            with dry_path.open("rb") as source:
+                source.seek(44 + begin * 2)
+                dry = (
+                    np.frombuffer(source.read((end - begin) * 2), dtype="<i2").astype(np.float32)
+                    / 32768
+                )
+            if len(dry) != end - begin or not len(dry):
+                raise ValueError("Original audio incomplete for review")
             # A separate recognizer avoids concurrent access to live inference.
-            decoder = self.decoder(self.config['model'],1,purpose='review')
-            stream = decoder.create_stream();stream.accept_waveform(RATE,dry)
-            began=time.perf_counter();decoder.decode_stream(stream)
-            alternative=accepted_english(stream.result.text)
-            selected=select_audio_revision(previous,primary,alternative)
-            supported=False
-            if reason=='semantic':
-                supported=audio_supports_proposal(primary,proposal,alternative)
-                selected=proposal if supported else primary
-            applied=False
+            decoder = self.decoder(self.config["model"], 1, purpose="review")
+            stream = decoder.create_stream()
+            stream.accept_waveform(RATE, dry)
+            began = time.perf_counter()
+            decoder.decode_stream(stream)
+            alternative = accepted_english(stream.result.text)
+            selected = select_audio_revision(previous, primary, alternative)
+            supported = False
+            if reason == "semantic":
+                supported = audio_supports_proposal(primary, proposal, alternative)
+                selected = proposal if supported else primary
+            applied = False
             with self.lock:
-                item=self.ledger.entries.get(identifier)
+                item = self.ledger.entries.get(identifier)
                 # Boundary repairs/newer revisions outrank a stale review.
-                if item and item.final and item.best in (primary,previous) and selected!=item.best:
-                    self.ledger.update(identifier,selected,True,start,revision=True,full_window=True)
+                if (
+                    item
+                    and item.final
+                    and item.best in (primary, previous)
+                    and selected != item.best
+                ):
+                    self.ledger.update(
+                        identifier, selected, True, start, revision=True, full_window=True
+                    )
                     LANGUAGE.submit(self.ledger.snapshot()[0])
-                    applied=True
-                if item and item.best in (primary,selected):
-                    item.review_status='verified' if applied else 'unverified' if reason=='semantic' else 'unchanged'
-            self.log('audio_review',utterance=identifier,reason=reason,primary=primary,alternative=alternative,
-                     proposal=proposal,selected=selected,applied=applied,audio_supported=supported,
-                     seconds=round(time.perf_counter()-began,3))
+                    applied = True
+                if item and item.best in (primary, selected):
+                    item.review_status = (
+                        "verified"
+                        if applied
+                        else "unverified"
+                        if reason == "semantic"
+                        else "unchanged"
+                    )
+            self.log(
+                "audio_review",
+                utterance=identifier,
+                reason=reason,
+                primary=primary,
+                alternative=alternative,
+                proposal=proposal,
+                selected=selected,
+                applied=applied,
+                audio_supported=supported,
+                seconds=round(time.perf_counter() - began, 3),
+            )
         except Exception as error:
             with self.lock:
-                item=self.ledger.entries.get(identifier)
-                if item and item.best==primary:item.review_status='unavailable'
-            self.log('audio_review_error',utterance=identifier,message=str(error))
+                item = self.ledger.entries.get(identifier)
+                if item and item.best == primary:
+                    item.review_status = "unavailable"
+            self.log("audio_review_error", utterance=identifier, message=str(error))
 
     def _save(self):
-        if not self.session_dir: return
-        with self.save_lock:
+        if not self.session_dir:
+            return
+        try:
+            with self.save_lock:
+                with self.lock:
+                    state = self.state()
+                    text = self.ledger.text()
+                # Save the structured record first. Text export can be regenerated from it.
+                atomic_write_json(self.session_dir / "result.json", state)
+                temporary = self.session_dir / "transcript.txt.tmp"
+                temporary.write_text(text, encoding="utf-8")
+                temporary.replace(self.session_dir / "transcript.txt")
+        except OSError as error:
             with self.lock:
-                state = self.state()
-                text = self.ledger.text()
-            for filename, content in (('transcript.txt',text),('result.json',json.dumps(state,ensure_ascii=False,indent=2))):
-                temporary = self.session_dir/(filename+'.tmp')
-                temporary.write_text(content,encoding='utf-8')
-                temporary.replace(self.session_dir/filename)
+                self.failure = classify_error(error).message
+                self.phase = "error"
+                self.stop_event.set()
+            LOGGER.error("recording_save_failed kind=%s", type(error).__name__)
 
 
-from classroom_summary import start_summary, read_summary
-from classroom_revision import start_revision, read_revision
+from classroom_revision import cancel_revision, start_revision
+from classroom_summary import read_summary, start_summary
 
-LAB = Lab()
+# Compatibility aliases keep saved scripts and test fixtures working.
+Lab = TranscriptionSession
+LAB = TranscriptionSession()
 TOKEN = secrets.token_urlsafe(24)
 
 
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self,*args): pass
-    def reply(self,data,status=200,content_type="application/json; charset=utf-8"):
-        if isinstance(data,(dict,list)): data=json.dumps(data,ensure_ascii=False).encode()
-        elif isinstance(data,str): data=data.encode()
-        self.send_response(status); self.send_header("Content-Type",content_type); self.send_header("Content-Length",str(len(data)))
-        self.send_header("Cache-Control","no-store"); self.send_header("X-Content-Type-Options","nosniff"); self.end_headers(); self.wfile.write(data)
+class DesktopRequestHandler(BaseHTTPRequestHandler):
+    """Loopback API boundary with bounded reads and actionable error responses."""
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(15)
+        self.request_id = secrets.token_hex(6)
+
+    @staticmethod
+    def json_body(body):
+        value = json.loads(body)
+        if not isinstance(value, dict):
+            raise AppError("INVALID_ARGUMENT", "请求必须是 JSON 对象。")
+        return value
+
+    def fail(self, error):
+        status, payload = error_response(error, getattr(self, "request_id", None))
+        self.reply(payload, status)
+
+    def log_message(self, *args):
+        pass
+
+    def reply(self, data, status=200, content_type="application/json; charset=utf-8"):
+        if isinstance(data, (dict, list)):
+            data = json.dumps(data, ensure_ascii=False).encode()
+        elif isinstance(data, str):
+            data = data.encode()
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Request-ID", getattr(self, "request_id", ""))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
-        path=urlparse(self.path).path
-        if path == '/api/events':
+        try:
+            self.handle_get()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        except Exception as error:
+            self.fail(error)
+
+    def handle_get(self):
+        path = urlparse(self.path).path
+        if path == "/api/events":
             self.send_response(200)
-            self.send_header('Content-Type','text/event-stream; charset=utf-8')
-            self.send_header('Cache-Control','no-cache')
-            self.send_header('X-Content-Type-Options','nosniff')
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             previous = None
             heartbeat = time.monotonic()
             try:
-                while not getattr(self.server,'closing',False):
-                    payload=json.dumps(LAB.state(include_logs=False),ensure_ascii=False,separators=(',',':'))
+                while not getattr(self.server, "closing", False):
+                    payload = json.dumps(
+                        LAB.state(include_logs=False), ensure_ascii=False, separators=(",", ":")
+                    )
                     if payload != previous:
-                        self.wfile.write(('data: '+payload+'\n\n').encode('utf-8'))
+                        self.wfile.write(("data: " + payload + "\n\n").encode("utf-8"))
                         self.wfile.flush()
-                        previous=payload
-                        heartbeat=time.monotonic()
-                    elif time.monotonic()-heartbeat>5:
-                        self.wfile.write(b': heartbeat\n\n');self.wfile.flush();heartbeat=time.monotonic()
-                    time.sleep(.12)
-            except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError,OSError):
+                        previous = payload
+                        heartbeat = time.monotonic()
+                    elif time.monotonic() - heartbeat > 5:
+                        self.wfile.write(b": heartbeat\n\n")
+                        self.wfile.flush()
+                        heartbeat = time.monotonic()
+                    time.sleep(0.12)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
                 pass
             return
-        if path == "/api/library": return self.reply(STORE.library())
+        if path == "/api/library":
+            return self.reply(STORE.library())
         if path.startswith("/api/records/"):
-            try: return self.reply(STORE.record(path.rsplit('/',1)[-1]))
-            except (ValueError,OSError) as error: return self.reply({'error':str(error)},404)
+            try:
+                return self.reply(STORE.record(path.rsplit("/", 1)[-1]))
+            except (ValueError, FileNotFoundError):
+                return self.fail(AppError("NOT_FOUND", "课堂记录不存在，请刷新后重试。", 404))
         web_root = WEB_ROOT
-        if path in ("/","/overlay") and (web_root / "index.html").is_file():
-            return self.reply((web_root / "index.html").read_text(encoding="utf-8"),content_type="text/html; charset=utf-8")
-        if path == "/lab": return self.reply((ROOT/"asr_lab.html").read_text(encoding="utf-8").replace("__TOKEN__",TOKEN),content_type="text/html; charset=utf-8")
-        if path == "/app-icon.png" and (web_root / 'app-icon.png').is_file():
-            return self.reply((web_root / 'app-icon.png').read_bytes(),content_type='image/png')
+        if path in ("/", "/overlay") and (web_root / "index.html").is_file():
+            return self.reply(
+                (web_root / "index.html").read_text(encoding="utf-8"),
+                content_type="text/html; charset=utf-8",
+            )
+        if path == "/lab":
+            return self.reply(
+                (ROOT / "asr_lab.html").read_text(encoding="utf-8").replace("__TOKEN__", TOKEN),
+                content_type="text/html; charset=utf-8",
+            )
+        if path == "/app-icon.png" and (web_root / "app-icon.png").is_file():
+            return self.reply((web_root / "app-icon.png").read_bytes(), content_type="image/png")
         if path.startswith("/assets/"):
             asset = (web_root / path.lstrip("/")).resolve()
             if asset.is_relative_to(web_root.resolve()) and asset.is_file():
-                return self.reply(asset.read_bytes(),content_type=mimetypes.guess_type(asset.name)[0] or "application/octet-stream")
-        if path == "/api/state": return self.reply(LAB.state())
-        if path == '/api/model-downloads':return self.reply({'downloads':DOWNLOADS.snapshot(),'models':models()})
+                return self.reply(
+                    asset.read_bytes(),
+                    content_type=mimetypes.guess_type(asset.name)[0] or "application/octet-stream",
+                )
+        if path == "/api/state":
+            return self.reply(LAB.state())
+        if path == "/api/model-downloads":
+            return self.reply({"downloads": DOWNLOADS.snapshot(), "models": models()})
         if path == "/api/config":
             try:
-                default=sd.default.device[0]
-                devices=[{"id":i,"name":d["name"],"default":i==default} for i,d in enumerate(sd.query_devices()) if d["max_input_channels"]>0]
-            except Exception: devices=[]
-            return self.reply({"version":BUILD_VERSION,"devices":devices,"models":models(),"session_token":TOKEN,
-                               "settings":STORE.settings(),"translation_configured":bool(LANGUAGE.key),
-                               "revision_configured":bool(secrets_store.provider_key('mimo')),
-                               "grammar_automatic":True,"translation_automatic":True})
+                default = sd.default.device[0]
+                devices = [
+                    {"id": i, "name": d["name"], "default": i == default}
+                    for i, d in enumerate(sd.query_devices())
+                    if d["max_input_channels"] > 0
+                ]
+            except Exception:
+                devices = []
+            return self.reply(
+                {
+                    "version": BUILD_VERSION,
+                    "devices": devices,
+                    "models": models(),
+                    "session_token": TOKEN,
+                    "settings": STORE.settings(),
+                    "translation_configured": bool(LANGUAGE.key),
+                    "revision_configured": bool(secrets_store.provider_key("mimo")),
+                    "revision_automatic": False,
+                    "grammar_automatic": True,
+                    "translation_automatic": True,
+                }
+            )
         if path == "/api/export":
             result = LAB.state()
             with LAB.lock:
-                logfile = LAB.session_dir/"events.jsonl" if LAB.session_dir else None
-                result["logs"] = [json.loads(line) for line in logfile.read_text(encoding="utf-8").splitlines()] if logfile and logfile.exists() else list(LAB.logs)
+                logfile = LAB.session_dir / "events.jsonl" if LAB.session_dir else None
+                result["logs"] = (
+                    [json.loads(line) for line in logfile.read_text(encoding="utf-8").splitlines()]
+                    if logfile and logfile.exists()
+                    else list(LAB.logs)
+                )
             return self.reply(result)
-        self.reply({"error":"not found"},404)
+        self.fail(AppError("NOT_FOUND", "请求的资源不存在。", 404))
+
     def do_POST(self):
-        if self.headers.get("X-Lingo-Token") != TOKEN: return self.reply({"error":"invalid session token"},403)
+        if self.headers.get("X-Lingo-Token") != TOKEN:
+            return self.fail(AppError("SESSION_EXPIRED", "会话已更新，请刷新页面后重试。", 403))
         try:
-            size=int(self.headers.get("Content-Length",0))
-            if size > 150*1024*1024: raise ValueError("文件最大 150 MB；请用 PCM WAV")
-            body=self.rfile.read(size)
-            path=urlparse(self.path).path
+            size = int(self.headers.get("Content-Length", 0))
+            if size < 0:
+                self.close_connection = True
+                raise AppError("INVALID_ARGUMENT", "请求长度无效。")
+            if size > 150 * 1024 * 1024:
+                self.close_connection = True
+                raise AppError("PAYLOAD_TOO_LARGE", "文件最大 150 MB；请用 PCM WAV。", 413)
+            if urlparse(self.path).path != "/api/file" and size > 1024 * 1024:
+                self.close_connection = True
+                raise AppError("PAYLOAD_TOO_LARGE", "请求内容过大，请缩小操作范围。", 413)
+            body = self.rfile.read(size)
+            if len(body) != size:
+                raise AppError("INVALID_ARGUMENT", "请求数据不完整，请重试。")
+            path = urlparse(self.path).path
             if path == "/api/courses":
-                return self.reply(STORE.create_course(json.loads(body)))
-            elif path in ('/api/edit-course','/api/delete-course'):
-                value=json.loads(body)
-                if LAB.phase in ('loading','recording','paused','stopping'): raise ValueError('请先结束并保存当前课堂')
-                return self.reply(STORE.edit_course(value['id'],value) if path=='/api/edit-course' else STORE.delete_course(value['id']))
-            elif path == '/api/rename-record':
-                value=json.loads(body);return self.reply(STORE.rename_record(value['id'],value['title']))
-            elif path == '/api/edit-content':
-                value=json.loads(body);return self.reply(STORE.edit_content(value['id'],value['row_id'],value))
-            elif path == '/api/summarize-record':
-                value=json.loads(body);identifier=value['id']
+                return self.reply(STORE.create_course(self.json_body(body)))
+            elif path in ("/api/edit-course", "/api/delete-course"):
+                value = self.json_body(body)
+                if LAB.phase in ("loading", "recording", "paused", "stopping"):
+                    raise ValueError("请先结束并保存当前课堂")
+                return self.reply(
+                    STORE.edit_course(value["id"], value)
+                    if path == "/api/edit-course"
+                    else STORE.delete_course(value["id"])
+                )
+            elif path == "/api/rename-record":
+                value = self.json_body(body)
+                return self.reply(STORE.rename_record(value["id"], value["title"]))
+            elif path == "/api/edit-content":
+                value = self.json_body(body)
+                return self.reply(STORE.edit_content(value["id"], value["row_id"], value))
+            elif path == "/api/summarize-record":
+                value = self.json_body(body)
+                identifier = value["id"]
                 with STORE.lock:
-                    record=STORE.record(identifier);directory=STORE.record_path(identifier)
-                    summary=read_summary(directory)
-                    if not summary or summary.get('status') not in ('pending','generating'):
-                        if not LANGUAGE.key:raise ValueError('请先配置 API Key')
-                        start_summary(directory,record,LANGUAGE.key,LANGUAGE.url,wait_for_language=False)
+                    record = STORE.record(identifier)
+                    directory = STORE.record_path(identifier)
+                    summary = read_summary(directory)
+                    if not summary or summary.get("status") not in ("pending", "generating"):
+                        if not LANGUAGE.key:
+                            raise ValueError("请先配置 API Key")
+                        started = start_summary(
+                            directory, record, LANGUAGE.key, LANGUAGE.url, wait_for_language=False
+                        )
+                        if not started:
+                            raise AppError("EMPTY_CLASSROOM", "这场录音没有可总结的课堂内容。", 409)
                 return self.reply(STORE.record(identifier))
-            elif path == '/api/revise-record':
-                value=json.loads(body);identifier=value['id']
+            elif path in ("/api/revise-record", "/api/cancel-revision"):
+                value = self.json_body(body)
+                identifier = value["id"]
                 with STORE.lock:
-                    record=STORE.record(identifier);directory=STORE.record_path(identifier)
-                    start_revision(directory,wait_for_language=False,full=True,
-                        on_done=lambda:start_summary(directory,record,LANGUAGE.key,LANGUAGE.url,wait_for_language=False))
+                    record = STORE.record(identifier)
+                    directory = STORE.record_path(identifier)
+                    if (
+                        LAB.phase in ("loading", "recording", "paused", "stopping")
+                        and LAB.session_dir == directory
+                    ):
+                        raise AppError("FAILED_PRECONDITION", "请先结束录音，再处理这场课堂。", 409)
+                    if path == "/api/cancel-revision":
+                        cancel_revision(directory)
+                        return self.reply(STORE.record(identifier))
+                    start_revision(
+                        directory,
+                        wait_for_language=False,
+                        full=True,
+                        on_done=lambda: start_summary(
+                            directory, record, LANGUAGE.key, LANGUAGE.url, wait_for_language=False
+                        ),
+                    )
                 return self.reply(STORE.record(identifier))
-            elif path == '/api/edit-classroom':
-                value=json.loads(body);return self.reply(STORE.edit_classroom(value['id'],value['rows'],value['speaker_names']))
-            elif path == '/api/download-model':
-                return self.reply(DOWNLOADS.start(json.loads(body)['model']))
-            elif path == '/api/export-text':
-                value=json.loads(body);text=value.get('text','')
-                if not text.strip():raise ValueError('没有可导出的内容')
-                format=value.get('format','txt')
-                if format not in ('txt','docx'):raise ValueError('导出格式无效')
+            elif path == "/api/edit-classroom":
+                value = self.json_body(body)
+                return self.reply(
+                    STORE.edit_classroom(value["id"], value["rows"], value["speaker_names"])
+                )
+            elif path == "/api/download-model":
+                return self.reply(DOWNLOADS.start(self.json_body(body)["model"]))
+            elif path == "/api/export-text":
+                value = self.json_body(body)
+                text = value.get("text", "")
+                if not text.strip():
+                    raise ValueError("没有可导出的内容")
+                format = value.get("format", "txt")
+                if format not in ("txt", "docx"):
+                    raise ValueError("导出格式无效")
                 import sys
-                webview=sys.modules.get('webview')
+
+                webview = sys.modules.get("webview")
                 if webview and webview.windows:
-                    stem=Path(str(value.get('filename','课堂录音'))).stem.strip() or '课堂录音'
-                    filename=stem+'.'+format
+                    stem = Path(str(value.get("filename", "课堂录音"))).stem.strip() or "课堂录音"
+                    filename = stem + "." + format
                     from export_dialog import choose_export
-                    try:destination=choose_export(webview.windows[0],webview,filename,format)
-                    except ValueError as error:return self.reply({'native':True,'saved':False,'error':str(error)})
-                    if destination is None:return self.reply({'native':True,'saved':False})
-                    if format=='docx':
+
+                    try:
+                        destination = choose_export(webview.windows[0], webview, filename, format)
+                    except ValueError as error:
+                        return self.reply({"native": True, "saved": False, "error": str(error)})
+                    if destination is None:
+                        return self.reply({"native": True, "saved": False})
+                    if format == "docx":
                         from word_export import word_document
-                        destination.write_bytes(word_document(text,stem))
-                    else:destination.write_text(text,encoding='utf-8-sig')
-                    return self.reply({'native':True,'saved':True,'path':str(destination)})
-                return self.reply({'native':False})
-            elif path == '/api/export-word':
-                from word_export import word_document,MIME
-                value=json.loads(body)
-                return self.reply(word_document(value.get('text',''),Path(value.get('filename','课堂记录')).stem),content_type=MIME)
-            elif path == '/api/close-overlay':
+
+                        destination.write_bytes(word_document(text, stem))
+                    else:
+                        destination.write_text(text, encoding="utf-8-sig")
+                    return self.reply({"native": True, "saved": True, "path": str(destination)})
+                return self.reply({"native": False})
+            elif path == "/api/export-word":
+                from word_export import MIME, word_document
+
+                value = self.json_body(body)
+                return self.reply(
+                    word_document(
+                        value.get("text", ""), Path(value.get("filename", "课堂记录")).stem
+                    ),
+                    content_type=MIME,
+                )
+            elif path == "/api/close-overlay":
                 import sys
-                webview=sys.modules.get('webview')
+
+                webview = sys.modules.get("webview")
                 if webview:
                     for window in webview.windows[:]:
-                        if window.title=='LingoClass 字幕':window.destroy()
-                return self.reply({'ok':True})
+                        if window.title == "LingoClass 字幕":
+                            window.destroy()
+                return self.reply({"ok": True})
             elif path == "/api/preferences":
-                return self.reply(STORE.update_settings(json.loads(body)))
+                return self.reply(STORE.update_settings(self.json_body(body)))
             elif path == "/api/subtitle-window":
                 import sys
-                webview=sys.modules.get('webview')
+
+                webview = sys.modules.get("webview")
                 if webview and webview.windows:
-                    existing=next((w for w in webview.windows if w.title=='LingoClass 字幕'),None)
-                    if existing: existing.show()
+                    existing = next(
+                        (w for w in webview.windows if w.title == "LingoClass 字幕"), None
+                    )
+                    if existing:
+                        existing.show()
                     else:
-                        window=webview.create_window('LingoClass 字幕',f'http://127.0.0.1:{self.server.server_port}/overlay',width=760,height=210,min_size=(420,140),on_top=True,frameless=True,easy_drag=True,transparent=True,background_color='#202124')
+                        window = webview.create_window(
+                            "LingoClass 字幕",
+                            f"http://127.0.0.1:{self.server.server_port}/overlay",
+                            width=760,
+                            height=210,
+                            min_size=(420, 140),
+                            on_top=True,
+                            frameless=True,
+                            easy_drag=True,
+                            transparent=True,
+                            background_color="#202124",
+                        )
                         window.events.shown += lambda: apply_overlay_material(window)
                         window.events.loaded += lambda: apply_overlay_material(window)
-                    return self.reply({'native':True})
-                return self.reply({'native':False})
+                    return self.reply({"native": True})
+                return self.reply({"native": False})
             elif path == "/api/translation-settings":
-                settings=json.loads(body)
-                endpoint=settings.get('endpoint',LANGUAGE.url).rstrip('/')
+                settings = self.json_body(body)
+                endpoint = settings.get("endpoint", LANGUAGE.url).rstrip("/")
                 from urllib.parse import urlsplit
-                host=urlsplit(endpoint).hostname or ''
+
+                host = urlsplit(endpoint).hostname or ""
                 # Only first-party endpoints: a third-party relay would see the key
                 # and the classroom text, which is exactly what we are avoiding.
-                allowed=('dashscope.aliyuncs.com','maas.qianwenaiapi.com','open.bigmodel.cn')
-                if not endpoint.startswith('https://') or host not in allowed:
-                    raise ValueError('请使用智谱或阿里云官方 HTTPS 接口地址')
-                key=settings.get('key','').strip()
+                allowed = ("dashscope.aliyuncs.com", "maas.qianwenaiapi.com", "open.bigmodel.cn")
+                if not endpoint.startswith("https://") or host not in allowed:
+                    raise ValueError("请使用智谱或阿里云官方 HTTPS 接口地址")
+                key = settings.get("key", "").strip()
                 with LANGUAGE.lock:
-                    LANGUAGE.key=key or LANGUAGE.key
-                    LANGUAGE.url=endpoint
+                    LANGUAGE.key = key or LANGUAGE.key
+                    LANGUAGE.url = endpoint
                     # Retry queued errors without changing already completed pairs.
-                    for identifier,row in LANGUAGE.results.items():
-                        if row['status']=='error':
-                            LANGUAGE.pending[identifier]=(LANGUAGE.generation,row['original'])
-                persisted=False
+                    for identifier, row in LANGUAGE.results.items():
+                        if row["status"] == "error":
+                            LANGUAGE.pending[identifier] = (LANGUAGE.generation, row["original"])
+                persisted = False
                 if key:
-                    provider='bigmodel' if 'bigmodel.cn' in host else 'qwen'
-                    persisted=secrets_store.persist_to_keyring(provider,LANGUAGE.key)
-                STORE.update_settings({'translation_endpoint':endpoint})
-                return self.reply({'ok':True,'configured':bool(LANGUAGE.key),'persisted':persisted})
+                    provider = "bigmodel" if "bigmodel.cn" in host else "qwen"
+                    persisted = secrets_store.persist_to_keyring(provider, LANGUAGE.key)
+                STORE.update_settings({"translation_endpoint": endpoint})
+                return self.reply(
+                    {"ok": True, "configured": bool(LANGUAGE.key), "persisted": persisted}
+                )
             elif path == "/api/revision-settings":
-                settings=json.loads(body)
-                key=settings.get('key','').strip()
-                persisted=False
+                settings = self.json_body(body)
+                key = settings.get("key", "").strip()
+                persisted = False
                 if key:
-                    persisted=secrets_store.persist_to_keyring('mimo',key)
-                return self.reply({'ok':True,'configured':bool(key),'persisted':persisted})
+                    persisted = secrets_store.persist_to_keyring("mimo", key)
+                return self.reply({"ok": True, "configured": bool(key), "persisted": persisted})
             elif path == "/api/grammar":
                 from grammar_model import GRAMMAR
+
                 with LAB.lock:
-                    if LAB.phase in ('loading', 'recording', 'stopping'):
-                        raise ValueError('请先停止并完成转写，再运行语法校对')
+                    if LAB.phase in ("loading", "recording", "paused", "stopping"):
+                        raise ValueError("请先停止并完成转写，再运行语法校对")
                     original = LAB.ledger.text()
                     directory = LAB.session_dir
-                if not original.strip(): raise ValueError('还没有可校对的英文')
-                result = {'model':'vennify/t5-base-grammar-correction','original':original,'rows':GRAMMAR.correct(original)}
+                if not original.strip():
+                    raise ValueError("还没有可校对的英文")
+                result = {
+                    "model": "vennify/t5-base-grammar-correction",
+                    "original": original,
+                    "rows": GRAMMAR.correct(original),
+                }
                 if directory:
-                    (directory/'grammar.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+                    (directory / "grammar.json").write_text(
+                        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
                 return self.reply(result)
-            elif path == "/api/stop": LAB.stop()
-            elif path == "/api/pause": LAB.pause()
-            elif path == "/api/resume": LAB.resume()
-            elif path == "/api/start": LAB.start(json.loads(body))
+            elif path == "/api/stop":
+                LAB.stop()
+            elif path == "/api/pause":
+                LAB.pause()
+            elif path == "/api/resume":
+                LAB.resume()
+            elif path == "/api/start":
+                LAB.start(self.json_body(body))
             elif path == "/api/file":
-                config=json.loads(self.headers.get("X-Lingo-Config","{}"))
-                LAB.start(config,read_wav(body))
-            else: return self.reply({"error":"not found"},404)
-            self.reply({"ok":True})
-        except Exception as error: self.reply({"error":str(error)},400)
+                config = json.loads(self.headers.get("X-Lingo-Config", "{}"))
+                LAB.start(config, read_wav(body))
+            else:
+                return self.fail(AppError("NOT_FOUND", "请求的操作不存在。", 404))
+            self.reply({"ok": True})
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        except Exception as error:
+            self.fail(error)
+
+
+# Legacy imports use Handler; the production name describes its responsibility.
+Handler = DesktopRequestHandler
 
 
 def apply_overlay_material(window):
     import sys
-    if sys.platform!='win32':return
+
+    if sys.platform != "win32":
+        return
     import ctypes
+
     class Accent(ctypes.Structure):
-        _fields_=[('state',ctypes.c_int),('flags',ctypes.c_int),('color',ctypes.c_uint),('animation',ctypes.c_int)]
+        _fields_ = [
+            ("state", ctypes.c_int),
+            ("flags", ctypes.c_int),
+            ("color", ctypes.c_uint),
+            ("animation", ctypes.c_int),
+        ]
+
     class Data(ctypes.Structure):
-        _fields_=[('attribute',ctypes.c_int),('data',ctypes.c_void_p),('size',ctypes.c_size_t)]
-    hwnd=int(window.native.Handle.ToInt64())
-    accent=Accent(4,0,0x99251f1c,0)
-    data=Data(19,ctypes.addressof(accent),ctypes.sizeof(accent))
-    ctypes.windll.user32.SetWindowCompositionAttribute(ctypes.c_void_p(hwnd),ctypes.byref(data))
-    corner=ctypes.c_int(2)
-    ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd),33,ctypes.byref(corner),4)
-    border=ctypes.c_uint(0xfffffffe) # DWMWA_COLOR_NONE: no native outline.
-    ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd),34,ctypes.byref(border),4)
+        _fields_ = [
+            ("attribute", ctypes.c_int),
+            ("data", ctypes.c_void_p),
+            ("size", ctypes.c_size_t),
+        ]
+
+    hwnd = int(window.native.Handle.ToInt64())
+    accent = Accent(4, 0, 0x99251F1C, 0)
+    data = Data(19, ctypes.addressof(accent), ctypes.sizeof(accent))
+    ctypes.windll.user32.SetWindowCompositionAttribute(ctypes.c_void_p(hwnd), ctypes.byref(data))
+    corner = ctypes.c_int(2)
+    ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), 33, ctypes.byref(corner), 4)
+    border = ctypes.c_uint(0xFFFFFFFE)  # DWMWA_COLOR_NONE: no native outline.
+    ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), 34, ctypes.byref(border), 4)
+
 
 def main():
-    parser=argparse.ArgumentParser(); parser.add_argument("--port",type=int,default=8785); parser.add_argument("--open-browser",action="store_true"); parser.add_argument("--desktop",action="store_true"); args=parser.parse_args()
-    server=ThreadingHTTPServer(("127.0.0.1",args.port),Handler)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8785)
+    parser.add_argument("--open-browser", action="store_true")
+    parser.add_argument("--desktop", action="store_true")
+    args = parser.parse_args()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+
     def warmup():
-        try: LAB.decoder('small',4)
-        except Exception as error: LAB.log('warmup_error',message=str(error))
+        try:
+            LAB.decoder("small", 4)
+        except Exception as error:
+            LAB.log("warmup_error", message=str(error))
+
     # Model construction must finish before Python tears down native libraries.
-    threading.Thread(target=warmup,daemon=False).start()
-    print(f"LingoClass ASR MVP: http://127.0.0.1:{args.port}",flush=True)
+    threading.Thread(target=warmup, daemon=False).start()
+    print(f"LingoClass desktop: http://127.0.0.1:{args.port}", flush=True)
     if args.desktop:
-        def serve(): server.serve_forever()
-        threading.Thread(target=serve,daemon=True).start()
-        import webview
+
+        def serve():
+            server.serve_forever()
+
+        threading.Thread(target=serve, daemon=True).start()
         import sys
-        main_window=webview.create_window("LingoClass",f"http://127.0.0.1:{args.port}",width=1000,height=650,min_size=(800,550),background_color="#ffffff",vibrancy=sys.platform=='darwin',text_select=True)
+
+        import webview
+
+        main_window = webview.create_window(
+            "LingoClass",
+            f"http://127.0.0.1:{args.port}",
+            width=1000,
+            height=650,
+            min_size=(800, 550),
+            background_color="#ffffff",
+            vibrancy=sys.platform == "darwin",
+            text_select=True,
+        )
         from windows_identity import apply_to_window
+
         main_window.events.shown += lambda: apply_to_window(main_window)
-        icon_path=ICON_PATH
-        try: webview.start(icon=str(icon_path) if icon_path.is_file() else None)
+        icon_path = ICON_PATH
+        try:
+            webview.start(icon=str(icon_path) if icon_path.is_file() else None)
         finally:
             LAB.stop()
-            if LAB.worker: LAB.worker.join(timeout=60)
-            SPEAKERS.close();LANGUAGE.close()
-            server.shutdown(); server.server_close()
+            if LAB.worker:
+                LAB.worker.join(timeout=60)
+            SPEAKERS.close()
+            LANGUAGE.close()
+            server.closing = True
+            server.shutdown()
+            server.server_close()
         return
     if args.open_browser:
         import webbrowser
-        threading.Timer(.5, lambda: webbrowser.open(f"http://127.0.0.1:{args.port}/")).start()
-    try: server.serve_forever()
-    except KeyboardInterrupt: pass
+
+        threading.Timer(0.5, lambda: webbrowser.open(f"http://127.0.0.1:{args.port}/")).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
     finally:
         LAB.stop()
-        if LAB.worker: LAB.worker.join()
-        SPEAKERS.close();LANGUAGE.close()
+        if LAB.worker:
+            LAB.worker.join()
+        SPEAKERS.close()
+        LANGUAGE.close()
+        server.closing = True
         server.server_close()
 
 
-if __name__=="__main__": main()
+if __name__ == "__main__":
+    main()

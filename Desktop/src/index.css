@@ -1,1 +1,7 @@
-html{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}::selection{background:#007aff33}
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+::selection {
+  background: #007aff33;
+}

@@ -10,7 +10,11 @@ from app_paths import BUNDLE_ROOT, FROZEN
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parents[1]
-SPEAKER_MODEL = (BUNDLE_ROOT/'models'/'speaker'/'campplus_zh_en_advanced.onnx') if FROZEN else REPO / "Tools" / "speaker" / "models" / "campplus_zh_en_advanced.onnx"
+SPEAKER_MODEL = (
+    (BUNDLE_ROOT / "models" / "speaker" / "campplus_zh_en_advanced.onnx")
+    if FROZEN
+    else REPO / "Tools" / "speaker" / "models" / "campplus_zh_en_advanced.onnx"
+)
 sys.path.insert(0, str(REPO / "Tools" / "speaker"))
 from role_classifier import RoleClassifier  # noqa: E402
 
@@ -31,8 +35,16 @@ class RevisableRoleState:
     def update(self, teacher_probability: float) -> bool:
         """Apply hysteresis while allowing sustained contrary evidence to relabel."""
         teacher_probability = min(max(teacher_probability, 0.0), 1.0)
-        candidate = "teacher" if teacher_probability >= 0.85 else "student" if teacher_probability <= 0.25 else None
-        candidate_score = teacher_probability if candidate == "teacher" else 1.0 - teacher_probability
+        candidate = (
+            "teacher"
+            if teacher_probability >= 0.85
+            else "student"
+            if teacher_probability <= 0.25
+            else None
+        )
+        candidate_score = (
+            teacher_probability if candidate == "teacher" else 1.0 - teacher_probability
+        )
         if candidate is None:
             self.opposing_label = None
             self.opposing_count = 0
@@ -59,24 +71,46 @@ class RevisableRoleState:
 
 
 TEACHER_CUES = (
-    "learning intention", "today we", "we are going", "let's look", "please open",
-    "remember to", "make sure", "the answer is", "for example", "our objective",
-    "who can tell me", "what do you think", "does anyone", "can you tell me", "could you tell me",
+    "learning intention",
+    "today we",
+    "we are going",
+    "let's look",
+    "please open",
+    "remember to",
+    "make sure",
+    "the answer is",
+    "for example",
+    "our objective",
+    "who can tell me",
+    "what do you think",
+    "does anyone",
+    "can you tell me",
+    "could you tell me",
 )
 STUDENT_CUES = (
-    "i think", "i don't know", "i do not know", "my answer is", "i'm not sure", "is it",
+    "i think",
+    "i don't know",
+    "i do not know",
+    "my answer is",
+    "i'm not sure",
+    "is it",
 )
 STRONG_STUDENT_CUES = (
-    "professor, i have a question", "professor i have a question", "i have a question",
-    "i don't understand", "i do not understand", "can you explain", "could you explain",
+    "professor, i have a question",
+    "professor i have a question",
+    "i have a question",
+    "i don't understand",
+    "i do not understand",
+    "can you explain",
+    "could you explain",
 )
 
 
 def correct_role_with_cues(text: str, label: str, score: float) -> tuple[str, float]:
     """Correct MiniLM's known weak student-short-answer cases conservatively."""
     lowered = text.lower()
-    teacher_hits = sum(cue in lowered for cue in TEACHER_CUES)
-    student_hits = sum(cue in lowered for cue in STUDENT_CUES)
+    sum(cue in lowered for cue in TEACHER_CUES)
+    sum(cue in lowered for cue in STUDENT_CUES)
     strong_student_hits = sum(cue in lowered for cue in STRONG_STUDENT_CUES)
     if strong_student_hits:
         return "student", max(score if label == "student" else 0.85, 0.85)
@@ -112,8 +146,10 @@ class OnlineSpeakerClusterer:
             self.last_speaker = 0
             return 0, None
 
-        similarities = [max(float(np.dot(unit, centroid)), float(np.dot(unit, anchor)))
-                        for centroid, anchor in zip(self.centroids, self.anchors)]
+        similarities = [
+            max(float(np.dot(unit, centroid)), float(np.dot(unit, anchor)))
+            for centroid, anchor in zip(self.centroids, self.anchors)
+        ]
         best = int(np.argmax(similarities))
         if similarities[best] >= self.merge_floor:
             alpha = 0.30 if similarities[best] >= self.threshold else 0.08
@@ -125,7 +161,11 @@ class OnlineSpeakerClusterer:
             return best, None
 
         if len(self.centroids) < self.max_speakers:
-            if self.pending is not None and item_index == self.pending[1] + 1 and float(np.dot(self.pending[0], unit)) >= self.threshold:
+            if (
+                self.pending is not None
+                and item_index == self.pending[1] + 1
+                and float(np.dot(self.pending[0], unit)) >= self.threshold
+            ):
                 centroid = normalize((self.pending[0] + unit) * 0.5)
                 self.centroids.append(centroid if centroid is not None else unit)
                 self.anchors.append(self.centroids[-1].copy())
@@ -142,10 +182,12 @@ class OnlineSpeakerClusterer:
 
 class SpeakerRoleAnalyzer:
     def __init__(self, threshold: float = 0.60, max_speakers: int = 4):
-        config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(SPEAKER_MODEL), num_threads=1)
+        config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+            model=str(SPEAKER_MODEL), num_threads=1
+        )
         self.extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
         self.clusterer = OnlineSpeakerClusterer(threshold, max_speakers)
-        self.role_classifier = RoleClassifier(BUNDLE_ROOT/'models'/'role' if FROZEN else None)
+        self.role_classifier = RoleClassifier(BUNDLE_ROOT / "models" / "role" if FROZEN else None)
         self.roles: dict[int, tuple[str, float]] = {}
         self.role_states: dict[int, RevisableRoleState] = {}
         self.role_text_snapshots: dict[int, str] = {}
@@ -197,7 +239,7 @@ class SpeakerRoleAnalyzer:
     def names(self, speaker_ids: set[int]) -> dict[int, str]:
         groups: dict[str, list[int]] = {"teacher": [], "student": [], "speaker": []}
         for speaker_id in sorted(speaker_ids):
-            role = self.roles.get(speaker_id, ("speaker", .5))[0]
+            role = self.roles.get(speaker_id, ("speaker", 0.5))[0]
             groups[role if role in ("teacher", "student") else "speaker"].append(speaker_id)
         names: dict[int, str] = {}
         labels = {"teacher": "老师", "student": "学生", "speaker": "说话人"}

@@ -24,4 +24,5 @@ if grep -rqE 'sk-[A-Za-z0-9]{16,}' "$app/Contents/MacOS" --include='*.json' --in
   exit 1
 fi
 # Installer copies the complete self-contained bundle to Applications.
-pkgbuild --component "$app" --install-location /Applications --identifier com.lingoclass.desktop --version 2026.10.16 "$root/Releases/macOS/LingoClass-Setup.pkg"
+version="$(python3 -c 'from app_version import VERSION; print(VERSION)')"
+pkgbuild --component "$app" --install-location /Applications --identifier com.lingoclass.desktop --version "$version" "$root/Releases/macOS/LingoClass-Setup.pkg"
